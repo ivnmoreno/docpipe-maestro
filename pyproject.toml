@@ -1,0 +1,158 @@
+[build-system]
+requires = ["hatchling>=1.25.0", "hatch-vcs>=0.4.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "docpipe-maestro"
+dynamic = ["version"]
+description = "A minimal, provider-agnostic, structure-aware RAG pipeline library."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "ivnmoreno", email = "ivnmoreno@gmail.com" },
+]
+keywords = ["rag", "embeddings", "chromadb", "chunking", "llm", "nlp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Operating System :: OS Independent",
+    "Typing :: Typed",
+]
+dependencies = [
+    "chromadb>=0.5.0",
+    "litellm>=1.55.0",
+    "langchain-text-splitters>=0.3.0",
+    "tomli>=2.0.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+pdf = ["pypdf>=4.0.0"]
+docx = ["python-docx>=1.1.0"]
+html = ["beautifulsoup4>=4.12.0"]
+# Semantic alias retained for backwards compatibility (litellm is included in core dependencies)
+generation = ["litellm>=1.55.0"]
+all = [
+    "docpipe-maestro[pdf]",
+    "docpipe-maestro[docx]",
+    "docpipe-maestro[html]",
+    "docpipe-maestro[generation]",
+]
+
+[project.scripts]
+docpipe = "docpipe_maestro.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ivnmoreno/docpipe-maestro"
+Repository = "https://github.com/ivnmoreno/docpipe-maestro"
+Issues = "https://github.com/ivnmoreno/docpipe-maestro/issues"
+Changelog = "https://github.com/ivnmoreno/docpipe-maestro/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/ivnmoreno/docpipe-maestro/blob/main/Product.md"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.8.0",
+    "mypy>=1.11.0",
+    "commitizen>=3.30.0",
+    "pre-commit>=3.8.0",
+    "build>=1.2.0",
+    "twine>=5.1.0",
+]
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+fallback_version = "0.1.0.dev0"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/docpipe_maestro"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/",
+    "tests/",
+    "Product.md",
+    ".specify/memory/constitution.md",
+    "docs/future-features.md",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["docpipe_maestro", "tests"]
+known-third-party = ["chromadb", "litellm", "langchain_text_splitters"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+mypy_path = "src"
+explicit_package_bases = true
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = [
+    "chromadb.*",
+    "litellm.*",
+    "langchain_text_splitters.*",
+    "pypdf.*",
+    "docx.*",
+    "bs4.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra -q --strict-markers"
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "slow: marks slow tests",
+    "integration: full pipeline tests",
+    "reverse: exception-preservation release gate",
+]
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["src/docpipe_maestro"]
+branch = true
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+fail_under = 80
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "v$version"
+changelog_file = "CHANGELOG.md"
+annotated_tag = true
+update_changelog_on_bump = false

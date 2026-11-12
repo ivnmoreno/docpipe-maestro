@@ -1,0 +1,5 @@
+Equipment Policy
+
+Section 1: Laptops
+1.1 Company laptops must remain encrypted with full-disk encryption enabled at all times.
+1.2 Lost or stolen devices must be reported to IT Security within 24 hours.
