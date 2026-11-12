@@ -176,7 +176,8 @@ def ingest(
 
         if manifest.embed_model is None:
             manifest.embed_model = embed_model
-            manifest.embed_dim = dim if dim > 0 else manifest.embed_dim
+        if manifest.embed_dim is None and dim > 0:
+            manifest.embed_dim = dim
 
         manifest.sources[source_key] = SourceRecord(
             source=source_key,
@@ -284,7 +285,8 @@ def sync(
 
         if manifest.embed_model is None:
             manifest.embed_model = embed_model
-            manifest.embed_dim = dim if dim > 0 else manifest.embed_dim
+        if manifest.embed_dim is None and dim > 0:
+            manifest.embed_dim = dim
 
         manifest.sources[source_key] = SourceRecord(
             source=source_key,

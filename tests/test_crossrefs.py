@@ -47,3 +47,36 @@ def test_unresolved_crossref_logs_warning(
 
     assert "Article 99" in caplog.text
     assert len(resolved.sections) == 1
+
+
+def test_crossref_resolves_dotted_headings_and_avoids_numeric_false_positives(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    md = tmp_path / "spec.md"
+    md.write_text(
+        "### 7.5 Public API\n\n"
+        "Expose ingest, sync, and retrieve functions.\n\n"
+        "### 20.2: Compliance Rules\n\n"
+        "Verify Section 7.5 signatures; also check Article 2026 and §3.5.\n\n"
+        "### 20.3 Self Reference\n\n"
+        "Under §20.3 and Section 20.2, audit logs remain immutable.\n\n"
+        "### 2026 Roadmap\n\n"
+        "Future plans only.\n\n"
+        "### 3.5mm Audio Hardware\n\n"
+        "Analog jack specs.\n",
+        encoding="utf-8",
+    )
+    doc = clean_document(parse_file(md, source_key="spec.md"))
+    with caplog.at_level(logging.WARNING):
+        resolved = resolve_crossrefs(doc)
+
+    sec_20_2 = resolved.sections[1].raw_text
+    sec_20_3 = resolved.sections[2].raw_text
+    assert "[Crossref Section 7.5: 7.5 Public API: Expose ingest" in sec_20_2
+    assert "[Crossref Article 2026:" not in sec_20_2
+    assert "[Crossref §3.5:" not in sec_20_2
+    assert "[Crossref Section 20.2: 20.2: Compliance Rules:" in sec_20_3
+    assert "[Crossref §20.3:" not in sec_20_3
+    assert "Article 2026" in caplog.text
+    assert "§3.5" in caplog.text

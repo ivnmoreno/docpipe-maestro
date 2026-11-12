@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from docpipe_maestro.types import DocpipeError, MissingCredentialError
+
+
+def _item_field(item: Any, key: str) -> Any:
+    return item[key] if isinstance(item, Mapping) else getattr(item, key)
 
 
 def _is_auth_error(exc: Exception) -> bool:
@@ -54,9 +58,9 @@ def embed_texts(
             ) from exc
 
         data = response["data"] if isinstance(response, dict) else response.data
-        sorted_items = sorted(data, key=lambda item: int(item["index"]))
+        sorted_items = sorted(data, key=lambda item: int(_item_field(item, "index")))
         for item in sorted_items:
-            vec = [float(x) for x in item["embedding"]]
+            vec = [float(x) for x in _item_field(item, "embedding")]
             if not vec:
                 raise DocpipeError(f"Empty embedding vector returned by {model!r}")
             if expected_dim is None:

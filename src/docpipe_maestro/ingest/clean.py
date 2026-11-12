@@ -7,7 +7,13 @@ from collections import Counter
 
 from docpipe_maestro.ingest.intake import ParsedDocument, ParsedSection
 
-_TAG_RE = re.compile(r"<[^>]+>")
+_TAG_RE = re.compile(
+    r"</?(?:a|abbr|article|aside|b|blockquote|body|br|caption|code|dd|del|details|div|dl|dt|"
+    r"em|figcaption|figure|footer|h[1-6]|head|header|hr|html|i|img|ins|li|main|mark|meta|nav|"
+    r"noscript|ol|p|pre|script|section|small|span|strong|style|sub|summary|sup|table|tbody|"
+    r"td|tfoot|th|thead|title|tr|u|ul)\b[^>]*>|<!--.*?-->",
+    re.IGNORECASE | re.DOTALL,
+)
 _MULTI_SPACE_RE = re.compile(r"[ \t\f\v]+")
 _MULTI_NL_RE = re.compile(r"\n{3,}")
 

@@ -16,10 +16,20 @@ _CROSSREF_RE = re.compile(
 )
 
 _SECTION_NUM_RE = re.compile(
-    r"(?:\b(?:Section|Article|Clause)\s+([0-9]+(?:\.[0-9]+)*)\b|^([0-9]+)\.\s+)",
+    r"(?:\b(?:Section|Article|Clause)\s+([0-9]+(?:\.[0-9]+)*)\b"
+    r"|^([0-9]+(?:\.[0-9]+)+)(?=\.?(?:\s|$|[:\-—]))"
+    r"|^([0-9]+)\.(?=\s|$))",
     re.IGNORECASE,
 )
 _CLAUSE_LINE_RE = re.compile(r"^([0-9]+(?:\.[0-9]+)+)\s+(.+)$", re.MULTILINE)
+
+
+def _extract_section_num(label: str) -> str | None:
+    """Extract normalized section identifier from a heading label, if present."""
+    match = _SECTION_NUM_RE.search(label)
+    if not match:
+        return None
+    return next((group for group in match.groups() if group is not None), None)
 
 
 def _truncate_excerpt(text: str, max_chars: int = 400) -> str:
@@ -37,10 +47,8 @@ def _build_target_index(doc: ParsedDocument) -> dict[str, str]:
     """Index section numbers and clause numbers within a single document."""
     targets: dict[str, str] = {}
     for sec in doc.sections:
-        sec_match = _SECTION_NUM_RE.search(sec.section_label)
-        if sec_match:
-            num = sec_match.group(1) or sec_match.group(2)
-            assert num is not None
+        num = _extract_section_num(sec.section_label)
+        if num is not None:
             targets.setdefault(num, f"{sec.section_label}: {sec.raw_text}")
             targets.setdefault(f"section {num}".lower(), f"{sec.section_label}: {sec.raw_text}")
         for c_match in _CLAUSE_LINE_RE.finditer(sec.raw_text):
@@ -58,10 +66,8 @@ def resolve_crossrefs(doc: ParsedDocument) -> ParsedDocument:
 
     for sec in doc.sections:
         self_keys: set[str] = set()
-        sec_match = _SECTION_NUM_RE.search(sec.section_label)
-        if sec_match:
-            self_num = sec_match.group(1) or sec_match.group(2)
-            assert self_num is not None
+        self_num = _extract_section_num(sec.section_label)
+        if self_num is not None:
             self_keys.add(self_num)
             self_keys.add(f"section {self_num}".lower())
 
