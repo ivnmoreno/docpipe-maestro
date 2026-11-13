@@ -47,7 +47,7 @@ all = [
 ]
 
 [project.scripts]
-docpipe = "docpipe_maestro.cli:main"
+docpipe-maestro = "docpipe_maestro.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/ivnmoreno/docpipe-maestro"

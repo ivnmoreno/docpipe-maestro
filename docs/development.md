@@ -71,10 +71,10 @@ When Ollama is running locally (zero cloud credentials or outbound internet requ
 ollama pull nomic-embed-text
 ollama pull qwen2.5:1.5b-instruct   # or default: ollama pull llama3.2
 
-uv run docpipe ingest ./tests/fixtures/policy_corpus --profile POLICY --collection live_demo
-uv run docpipe status --collection live_demo
-uv run docpipe query "annual leave probationary period" --collection live_demo
-uv run docpipe ask "How many days of annual leave do employees get, and what is the exception?" \
+uv run docpipe-maestro ingest ./tests/fixtures/policy_corpus --profile POLICY --collection live_demo
+uv run docpipe-maestro status --collection live_demo
+uv run docpipe-maestro query "annual leave probationary period" --collection live_demo
+uv run docpipe-maestro ask "How many days of annual leave do employees get, and what is the exception?" \
   --model ollama/qwen2.5:1.5b-instruct --collection live_demo
 ```
 
@@ -84,7 +84,7 @@ uv run docpipe ask "How many days of annual leave do employees get, and what is 
 
 Before adding features, verify compliance with [`.specify/memory/constitution.md`](../.specify/memory/constitution.md):
 
-1. **Scope Discipline**: Every core feature must be reachable via the minimal public API or `docpipe` CLI — no HTTP server, auth middleware, session memory, or UI code inside `docpipe_maestro`.
+1. **Scope Discipline**: Every core feature must be reachable via the minimal public API or `docpipe-maestro` CLI — no HTTP server, auth middleware, session memory, or UI code inside `docpipe_maestro`.
 2. **Two-Phase Separation**: Keep Phase 1 write logic inside `src/docpipe_maestro/ingest/` and read-only Phase 2 logic inside `src/docpipe_maestro/query/`.
 3. **Library Purity**: Never read config files inside library modules (TOML loading belongs solely in `cli.py`). Never add a hardcoded provider registry; delegate `provider/model` resolution directly to `litellm`.
 4. **Schema Single Source**: Add or modify shared dataclasses/types only in `src/docpipe_maestro/types.py`.

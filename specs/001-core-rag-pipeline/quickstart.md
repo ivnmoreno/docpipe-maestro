@@ -53,27 +53,27 @@ See [cli.md](contracts/cli.md) for full flag documentation.
 
 ### Scenario A: Multi-Format Ingestion & Retrieval-Only Search (US-1)
 ```bash
-docpipe ingest ./sample_docs --profile POLICY --collection handbook
-docpipe status --collection handbook
-docpipe query "How many days of annual leave do employees receive?" --collection handbook
-docpipe query "annual leave" --no-expand-parent --collection handbook
+docpipe-maestro ingest ./sample_docs --profile POLICY --collection handbook
+docpipe-maestro status --collection handbook
+docpipe-maestro query "How many days of annual leave do employees receive?" --collection handbook
+docpipe-maestro query "annual leave" --no-expand-parent --collection handbook
 ```
 **Expected Outcome**:
 - PDF, DOCX, HTML, Markdown, and TXT documents index with zero errors.
-- `docpipe query` returns deduplicated parent sections ordered by `max(score)` descending, carrying `source`, `section`, `clause`, and `page` metadata (`SC-004`, `SC-007`).
+- `docpipe-maestro query` returns deduplicated parent sections ordered by `max(score)` descending, carrying `source`, `section`, `clause`, and `page` metadata (`SC-004`, `SC-007`).
 - `--no-expand-parent` returns individual child chunks with `[Source: ... | Section: ...]` context headers.
 
 ### Scenario B: Grounded Local & Cloud Generation (US-3)
 ```bash
 # Local-first default (zero cloud credentials or external network)
-docpipe ask "How many days of leave does a new hire get?" --collection handbook
+docpipe-maestro ask "How many days of leave does a new hire get?" --collection handbook
 
 # Out-of-domain threshold short-circuit (zero LLM call)
-docpipe ask "What is the recipe for chocolate cake?" --threshold 0.85 --collection handbook
+docpipe-maestro ask "What is the recipe for chocolate cake?" --threshold 0.85 --collection handbook
 
 # Cloud provider override via env var (zero code changes)
 export OPENAI_API_KEY="sk-..."
-docpipe ask "Summarize the leave policy." --model openai/gpt-4o-mini --collection handbook
+docpipe-maestro ask "Summarize the leave policy." --model openai/gpt-4o-mini --collection handbook
 ```
 **Expected Outcome**:
 - Local run cites the general rule *and* new-hire exception.
@@ -83,19 +83,19 @@ docpipe ask "Summarize the leave policy." --model openai/gpt-4o-mini --collectio
 ### Scenario C: Incremental Sync, Shrinking File & Model Migration (US-4)
 ```bash
 # 1. Modify a file (delete a clause), touch an unchanged file, and delete another file
-docpipe sync ./sample_docs --profile POLICY --collection handbook
+docpipe-maestro sync ./sample_docs --profile POLICY --collection handbook
 
 # 2. Verify model lock refuses mismatched query model
-docpipe query "annual leave" --embed-model openai/text-embedding-3-small --collection handbook
+docpipe-maestro query "annual leave" --embed-model openai/text-embedding-3-small --collection handbook
 
 # 3. Explicitly migrate embeddings across the collection
-docpipe reindex --model openai/text-embedding-3-small --collection handbook
+docpipe-maestro reindex --model openai/text-embedding-3-small --collection handbook
 ```
 **Expected Outcome**:
 - Touched unchanged file is skipped (0 embeddings recomputed).
 - Shrinking file removes 100% of deleted clause records (zero orphans, `SC-002`).
 - Deleted file is purged from store and manifest.
-- Mismatched embedding model is refused until `docpipe reindex` updates the manifest lock.
+- Mismatched embedding model is refused until `docpipe-maestro reindex` updates the manifest lock.
 
 ---
 

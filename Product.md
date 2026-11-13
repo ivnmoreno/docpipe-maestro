@@ -6,7 +6,7 @@
 |---|---|
 | Product name | `docpipe-maestro` |
 | Import name | `docpipe_maestro` |
-| CLI command | `docpipe` |
+| CLI command | `docpipe-maestro` |
 | Version under description | 0.1.0 |
 | Document status | Description complete; specification pending |
 | Intended consumer | AI specification skill (SpecKit `/specify`) |
@@ -259,13 +259,13 @@ The system shall provide a CLI aligned with the two-phase model, offering ingest
 
 | Command | Phase | Purpose |
 |---|---|---|
-| `docpipe ingest <path>` | Phase 1 | Ingest a file or directory into the vector database |
-| `docpipe sync <directory>` | Phase 1 | Reconcile a directory against the manifest (add new, update changed, remove deleted) |
-| `docpipe status` | Phase 1 / 2 | Inspect the manifest: indexed files, hashes, embedding model, and record counts |
-| `docpipe remove <path>` | Phase 1 | Delete all records and manifest entry for a specific source document |
-| `docpipe reindex --model <m>` | Phase 1 | Re-embed and re-ingest all tracked corpus sources under a new embedding model |
-| `docpipe query "<question>"` | Phase 2 (retrieval only) | Return relevant sections without generating an answer |
-| `docpipe ask "<question>"` | Phase 2 (full RAG) | Generate an answer using retrieved sections |
+| `docpipe-maestro ingest <path>` | Phase 1 | Ingest a file or directory into the vector database |
+| `docpipe-maestro sync <directory>` | Phase 1 | Reconcile a directory against the manifest (add new, update changed, remove deleted) |
+| `docpipe-maestro status` | Phase 1 / 2 | Inspect the manifest: indexed files, hashes, embedding model, and record counts |
+| `docpipe-maestro remove <path>` | Phase 1 | Delete all records and manifest entry for a specific source document |
+| `docpipe-maestro reindex --model <m>` | Phase 1 | Re-embed and re-ingest all tracked corpus sources under a new embedding model |
+| `docpipe-maestro query "<question>"` | Phase 2 (retrieval only) | Return relevant sections without generating an answer |
+| `docpipe-maestro ask "<question>"` | Phase 2 (full RAG) | Generate an answer using retrieved sections |
 
 - `ingest` and `sync` shall accept a `--profile` flag selecting a chunking profile.
 - All commands shall accept a `--collection` flag selecting the target collection.
@@ -484,7 +484,7 @@ A release shall not be published if any of these checks fail.
 |---|---|
 | Distribution name | `docpipe-maestro` |
 | Import name | `docpipe_maestro` |
-| CLI command | `docpipe` |
+| CLI command | `docpipe-maestro` |
 | License | MIT or Apache-2.0 (to be finalized) |
 | Minimum Python | 3.10 |
 
@@ -597,7 +597,7 @@ The v0.1 release shall be accepted when all of the following hold.
 9. `build_prompt` is a pure function with no network calls.
 
 **Generation**
-10. With Ollama running locally, `docpipe ask "<question>"` returns a grounded answer with no cloud credentials configured.
+10. With Ollama running locally, `docpipe-maestro ask "<question>"` returns a grounded answer with no cloud credentials configured.
 11. Switching `--model` to a cloud provider string works without any code change.
 12. No credential appears in any log or error message.
 
@@ -611,7 +611,7 @@ The v0.1 release shall be accepted when all of the following hold.
 
 **Packaging**
 17. The package installs from TestPyPI in a clean virtual environment.
-18. The CLI is available as `docpipe` after installation.
+18. The CLI is available as `docpipe-maestro` after installation.
 19. The optional generation extra installs and enables `answer` without affecting the core install.
 
 ---

@@ -7,7 +7,7 @@
 
 > **"docpipe-maestro is a minimal RAG pipeline: it ingests any document, chunks it correctly, embeds it, stores it, retrieves the right sections, and optionally generates a grounded answer. It is the engine — not the app, not the framework."**
 
-`docpipe-maestro` is a provider-agnostic, structure-aware Python RAG (Retrieval-Augmented Generation) pipeline library and `docpipe` CLI. It solves the data-preparation and retrieval failure modes common in standard fixed-size chunkers: preserving document hierarchy, refusing to split legal or policy clauses mid-sentence, resolving intra-document cross-references, and guaranteeing that policy exceptions always stay attached to their rules.
+`docpipe-maestro` is a provider-agnostic, structure-aware Python RAG (Retrieval-Augmented Generation) pipeline library and `docpipe-maestro` CLI. It solves the data-preparation and retrieval failure modes common in standard fixed-size chunkers: preserving document hierarchy, refusing to split legal or policy clauses mid-sentence, resolving intra-document cross-references, and guaranteeing that policy exceptions always stay attached to their rules.
 
 ---
 
@@ -28,13 +28,13 @@
   - [4. CLI Configuration File (`docpipe.toml`)](#4-cli-configuration-file-docpipetoml)
   - [5. Chunking Profiles (`DEFAULT`, `POLICY`, and Custom Profiles)](#5-chunking-profiles-default-policy-and-custom-profiles)
 - [Quickstart: CLI Usage Guide](#quickstart-cli-usage-guide)
-  - [1. Ingest Documents (`docpipe ingest`)](#1-ingest-documents-docpipe-ingest)
-  - [2. Keep Collections in Sync (`docpipe sync`)](#2-keep-collections-in-sync-docpipe-sync)
-  - [3. Inspect Collection Status (`docpipe status`)](#3-inspect-collection-status-docpipe-status)
-  - [4. Remove a Source Document (`docpipe remove`)](#4-remove-a-source-document-docpipe-remove)
-  - [5. Migrate Embedding Models (`docpipe reindex`)](#5-migrate-embedding-models-docpipe-reindex)
-  - [6. Semantic Search Without an LLM (`docpipe query`)](#6-semantic-search-without-an-llm-docpipe-query)
-  - [7. Grounded Question Answering (`docpipe ask`)](#7-grounded-question-answering-docpipe-ask)
+  - [1. Ingest Documents (`docpipe-maestro ingest`)](#1-ingest-documents-docpipe-maestro-ingest)
+  - [2. Keep Collections in Sync (`docpipe-maestro sync`)](#2-keep-collections-in-sync-docpipe-maestro-sync)
+  - [3. Inspect Collection Status (`docpipe-maestro status`)](#3-inspect-collection-status-docpipe-maestro-status)
+  - [4. Remove a Source Document (`docpipe-maestro remove`)](#4-remove-a-source-document-docpipe-maestro-remove)
+  - [5. Migrate Embedding Models (`docpipe-maestro reindex`)](#5-migrate-embedding-models-docpipe-maestro-reindex)
+  - [6. Semantic Search Without an LLM (`docpipe-maestro query`)](#6-semantic-search-without-an-llm-docpipe-maestro-query)
+  - [7. Grounded Question Answering (`docpipe-maestro ask`)](#7-grounded-question-answering-docpipe-maestro-ask)
 - [Python Library API Guide](#python-library-api-guide)
   - [Phase 1: Ingestion & Lifecycle Workflow](#phase-1-ingestion--lifecycle-workflow)
   - [Phase 2: Semantic Retrieval & Grounded RAG Workflow](#phase-2-semantic-retrieval--grounded-rag-workflow)
@@ -73,11 +73,11 @@ ollama pull nomic-embed-text
 ollama pull llama3.2
 
 # 3. Ingest a folder of policies and ask a grounded question
-docpipe ingest ./policies --profile POLICY --collection handbook
-docpipe ask "When are employees not entitled to overtime?" --collection handbook --threshold 0.35
+docpipe-maestro ingest ./policies --profile POLICY --collection handbook
+docpipe-maestro ask "When are employees not entitled to overtime?" --collection handbook --threshold 0.35
 ```
 
-*(Running from a cloned source repository? Prefix CLI commands with `uv run docpipe ...`.)*
+*(Running from a cloned source repository? Prefix CLI commands with `uv run docpipe-maestro ...` or `uv run python -m docpipe_maestro ...`.)*
 
 ---
 
@@ -201,7 +201,7 @@ pre-commit install --hook-type commit-msg
 
 ## Configuration Guide
 
-`docpipe-maestro` enforces strict **Library Purity**: **no library module reads external configuration files**. Configuration is passed explicitly via function arguments or provider environment variables. Only the `docpipe` CLI optionally reads a `--config` TOML file.
+`docpipe-maestro` enforces strict **Library Purity**: **no library module reads external configuration files**. Configuration is passed explicitly via function arguments or provider environment variables. Only the `docpipe-maestro` CLI optionally reads a `--config` TOML file.
 
 ### 1. Local Execution (Default: Zero Cloud Accounts Required)
 
@@ -270,7 +270,7 @@ threshold = 0.4
 
 Pass it to any CLI command using `--config`:
 ```bash
-docpipe query "What is the probation period?" --config docpipe.toml
+docpipe-maestro query "What is the probation period?" --config docpipe.toml
 ```
 
 ### 5. Chunking Profiles (`DEFAULT`, `POLICY`, and Custom Profiles)
@@ -292,49 +292,49 @@ In Python, you can also pass a custom [`ChunkingProfile`](docs/api-reference.md)
 
 ## Quickstart: CLI Usage Guide
 
-Run `docpipe --help` to see all available subcommands (global flags `--config`, `--collection`, and `--persist-dir` work either **before or after** any subcommand):
+Run `docpipe-maestro --help` to see all available subcommands (global flags `--config`, `--collection`, and `--persist-dir` work either **before or after** any subcommand):
 
 ```text
-usage: docpipe [-h] [--version] [--config CONFIG] [--collection COLLECTION]
-               [--persist-dir PERSIST_DIR]
-               {ingest,sync,status,remove,reindex,query,ask} ...
+usage: docpipe-maestro [-h] [--version] [--config CONFIG]
+                       [--collection COLLECTION] [--persist-dir PERSIST_DIR]
+                       {ingest,sync,status,remove,reindex,query,ask} ...
 ```
 
 See the full [CLI Reference](docs/cli-reference.md) for all flags, TOML keys, exit codes, and output schemas.
 
-### 1. Ingest Documents (`docpipe ingest`)
+### 1. Ingest Documents (`docpipe-maestro ingest`)
 
 Ingest a single file or an entire directory tree atomically (if any file fails validation, no records are committed):
 
 ```bash
 # Ingest with default profile
-docpipe ingest ./docs --collection knowledge_base
+docpipe-maestro ingest ./docs --collection knowledge_base
 
 # Ingest policy documents with clause-preservation and cross-reference resolution
-docpipe ingest ./company_policies --profile POLICY --collection hr_policy
+docpipe-maestro ingest ./company_policies --profile POLICY --collection hr_policy
 
 # Force re-ingestion even if files have not changed on disk
-docpipe ingest ./docs --force --collection knowledge_base
+docpipe-maestro ingest ./docs --force --collection knowledge_base
 ```
 
-### 2. Keep Collections in Sync (`docpipe sync`)
+### 2. Keep Collections in Sync (`docpipe-maestro sync`)
 
 Reconcile a target directory against the manifest (adds new files, skips unchanged files via `mtime`/`sha256`, updates modified files, and purges deleted files):
 
 ```bash
-docpipe sync ./company_policies --profile POLICY --collection hr_policy
+docpipe-maestro sync ./company_policies --profile POLICY --collection hr_policy
 ```
 **Example output**:
 ```text
 Synced 'hr_policy': added=1, updated=2, skipped=10, removed=1.
 ```
 
-### 3. Inspect Collection Status (`docpipe status`)
+### 3. Inspect Collection Status (`docpipe-maestro status`)
 
 View indexed files, active `doc_version` hashes, chunk counts, and locked embedding model:
 
 ```bash
-docpipe status --collection hr_policy
+docpipe-maestro status --collection hr_policy
 ```
 **Example output**:
 ```text
@@ -345,40 +345,40 @@ Collection: hr_policy | Model: ollama/nomic-embed-text (dim=768) | Sources: 2 | 
 
 Use `--json` for machine-readable output:
 ```bash
-docpipe status --collection hr_policy --json
+docpipe-maestro status --collection hr_policy --json
 ```
 
-### 4. Remove a Source Document (`docpipe remove`)
+### 4. Remove a Source Document (`docpipe-maestro remove`)
 
 Purge all child chunks, parent sections, and manifest entries for a specific file:
 
 ```bash
-docpipe remove hr_leave_policy.md --collection hr_policy
+docpipe-maestro remove hr_leave_policy.md --collection hr_policy
 ```
 
-### 5. Migrate Embedding Models (`docpipe reindex`)
+### 5. Migrate Embedding Models (`docpipe-maestro reindex`)
 
 Re-embed all existing child chunks stored in the database under a new embedding model, update parent vector dimensions, and re-lock the collection:
 
 ```bash
 # Migrate collection to OpenAI embeddings
 export OPENAI_API_KEY="sk-..."
-docpipe reindex --model openai/text-embedding-3-small --collection hr_policy
+docpipe-maestro reindex --model openai/text-embedding-3-small --collection hr_policy
 ```
 
-### 6. Semantic Search Without an LLM (`docpipe query`)
+### 6. Semantic Search Without an LLM (`docpipe-maestro query`)
 
 Perform Phase 2 semantic retrieval to inspect scored passages and provenance without invoking a language model:
 
 ```bash
 # Basic semantic query
-docpipe query "How many vacation days do full-time employees accrue?" --collection hr_policy
+docpipe-maestro query "How many vacation days do full-time employees accrue?" --collection hr_policy
 
 # Restrict to top 3 sections with a minimum similarity threshold (0.0 to 1.0)
-docpipe query "What is the flight reimbursement policy?" --top-k 3 --threshold 0.5 --collection hr_policy
+docpipe-maestro query "What is the flight reimbursement policy?" --top-k 3 --threshold 0.5 --collection hr_policy
 
 # Return raw child chunks instead of expanded parent sections
-docpipe query "annual leave" --no-expand-parent --collection hr_policy
+docpipe-maestro query "annual leave" --no-expand-parent --collection hr_policy
 ```
 
 **Example output**:
@@ -389,22 +389,22 @@ docpipe query "annual leave" --no-expand-parent --collection hr_policy
 ------------------------------------------------------------
 ```
 
-### 7. Grounded Question Answering (`docpipe ask`)
+### 7. Grounded Question Answering (`docpipe-maestro ask`)
 
 Retrieve relevant context, build a grounded prompt, and generate a citation-backed answer:
 
 ```bash
 # Using local Ollama (default)
-docpipe ask "How many days of leave does a first-year employee get?" --collection hr_policy
+docpipe-maestro ask "How many days of leave does a first-year employee get?" --collection hr_policy
 
 # Using a custom Ollama tag or cloud model / OpenAI-compatible base URL
-docpipe ask "Summarize travel meal limits." --model ollama/qwen2.5:1.5b-instruct --collection hr_policy
+docpipe-maestro ask "Summarize travel meal limits." --model ollama/qwen2.5:1.5b-instruct --collection hr_policy
 export OPENAI_API_KEY="sk-..."
-docpipe ask "Summarize travel meal allowance limits." --model openai/gpt-4o-mini --collection hr_policy
-docpipe ask "Summarize travel policy." --model openai/my-local-model --api-base http://localhost:8000/v1 --collection hr_policy
+docpipe-maestro ask "Summarize travel meal allowance limits." --model openai/gpt-4o-mini --collection hr_policy
+docpipe-maestro ask "Summarize travel policy." --model openai/my-local-model --api-base http://localhost:8000/v1 --collection hr_policy
 
 # Safe thresholding: if no retrieved content matches threshold, short-circuits with a refusal
-docpipe ask "What is the recipe for lasagna?" --threshold 0.7 --collection hr_policy
+docpipe-maestro ask "What is the recipe for lasagna?" --threshold 0.7 --collection hr_policy
 ```
 
 ---
@@ -510,9 +510,9 @@ Exported from `docpipe_maestro` (`docpipe_maestro.types`):
 
 ## Security, Privacy & Grounding Notes
 
-- **Trusted local corpus assumption**: Like most local ingestion tools, `docpipe ingest` processes files inside the target directory you specify. Only ingest trusted documents and avoid pointing `ingest`/`sync` at directories containing symlinks to sensitive files or untrusted HTML/PDF inputs.
+- **Trusted local corpus assumption**: Like most local ingestion tools, `docpipe-maestro ingest` processes files inside the target directory you specify. Only ingest trusted documents and avoid pointing `ingest`/`sync` at directories containing symlinks to sensitive files or untrusted HTML/PDF inputs.
 - **Credentials belong in environment variables**: API keys are never accepted in `docpipe.toml`, and `MissingCredentialError` scrubs auth error chains (`from None`) so secrets are not leaked in messages.
-- **Reduce hallucinations with `--threshold`**: Set a similarity `--threshold` (e.g. `0.35`–`0.6` depending on embedding model) on `retrieve()` / `docpipe ask` so off-topic questions return zero matches and short-circuit deterministically (`"Not found in the provided context."`).
+- **Reduce hallucinations with `--threshold`**: Set a similarity `--threshold` (e.g. `0.35`–`0.6` depending on embedding model) on `retrieve()` / `docpipe-maestro ask` so off-topic questions return zero matches and short-circuit deterministically (`"Not found in the provided context."`).
 - **Protect your `.docpipe/` store on shared hosts**: Embedded ChromaDB files store plaintext document sections; keep `persist_dir` on owner-restricted paths (`chmod 700`) and excluded from version control.
 
 ---
@@ -547,7 +547,8 @@ uv run pytest -m integration -v
 docpipe-maestro/
 ├── src/docpipe_maestro/
 │   ├── __init__.py          # Public API exports & lazy generation import
-│   ├── cli.py               # `docpipe` CLI + TOML config loader
+│   ├── __main__.py          # Enables `python -m docpipe_maestro` CLI execution
+│   ├── cli.py               # `docpipe-maestro` CLI + TOML config loader
 │   ├── config.py            # Default constants & immutable chunking profiles
 │   ├── embedder.py          # Batched LiteLLM embedding adapter
 │   ├── manifest.py          # Atomic sha256/mtime JSON manifest & model lock
@@ -581,7 +582,7 @@ See the [Development & Testing Guide](docs/development.md) for offline test doub
 - **[Documentation Index](docs/README.md)** — Full guide overview
 - **[Architecture & Internals](docs/architecture.md)** — Two-phase pipeline flow, intake, crossref resolution, chunking, and transactional staging
 - **[Python API Reference](docs/api-reference.md)** — Signatures, profiles, data shapes, and error handling
-- **[CLI Reference](docs/cli-reference.md)** — `docpipe` commands, TOML config, outputs, and troubleshooting
+- **[CLI Reference](docs/cli-reference.md)** — `docpipe-maestro` commands, TOML config, outputs, and troubleshooting
 - **[Development & Testing Guide](docs/development.md)** — Setup, quality gates, offline test doubles, and Ollama live runs
 - **[Future Features Backlog](docs/future-features.md)** — Post-v0.1 roadmap
 - **[Changelog](CHANGELOG.md)** — Release history

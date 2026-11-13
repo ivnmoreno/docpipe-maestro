@@ -43,7 +43,7 @@ def test_manifest_atomic_roundtrip_and_model_lock(tmp_persist_dir: Path) -> None
     assert reloaded.sources["a.md"].chunk_ids == ["c1"]
 
     check_model_lock(reloaded, "ollama/nomic-embed-text")
-    with pytest.raises(ModelMismatchError, match="docpipe reindex"):
+    with pytest.raises(ModelMismatchError, match="docpipe-maestro reindex"):
         check_model_lock(reloaded, "openai/text-embedding-3-small")
 
 

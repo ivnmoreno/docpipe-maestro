@@ -19,7 +19,7 @@
 **Purpose**: Establish package structure, packaging metadata, tools, and shared testing fixtures per `plan.md`.
 
 - [X] T001 Initialize package structure and PEP 561 marker in `src/docpipe_maestro/py.typed` and directories `src/docpipe_maestro/ingest/`, `src/docpipe_maestro/query/`, and `tests/fixtures/`
-- [X] T002 [P] Create `pyproject.toml` with `hatchling` + `hatch-vcs` build backend, core dependencies (`chromadb`, `litellm`, `langchain-text-splitters`), optional extras (`pdf`, `docx`, `html`, `generation`, `all`), `docpipe` CLI script entry point, and PEP 735 dev groups (`pytest`, `ruff`, `mypy`)
+- [X] T002 [P] Create `pyproject.toml` with `hatchling` + `hatch-vcs` build backend, core dependencies (`chromadb`, `litellm`, `langchain-text-splitters`), optional extras (`pdf`, `docx`, `html`, `generation`, `all`), `docpipe-maestro` CLI script entry point, and PEP 735 dev groups (`pytest`, `ruff`, `mypy`)
 - [X] T003 [P] Create root `README.md` and `LICENSE` (MIT) aligned with `Product.md` and `plan.md`
 - [X] T004 [P] Create test configuration and deterministic offline test doubles (dummy vector embedder and stubbed LLM client) in `tests/conftest.py`
 
@@ -46,7 +46,7 @@
 
 **Goal**: Ingest multi-format documents (PDF, DOCX, HTML, Markdown, TXT) with structure-aware chunking and retrieve deduplicated parent sections using normalized cosine similarity scores without calling an LLM.
 
-**Independent Test**: Ingest a corpus containing diverse formats; run `docpipe query "<question>"` and verify deduplicated parent sections with exact source citations (`source`, `section`, `clause`, `page`) are returned offline.
+**Independent Test**: Ingest a corpus containing diverse formats; run `docpipe-maestro query "<question>"` and verify deduplicated parent sections with exact source citations (`source`, `section`, `clause`, `page`) are returned offline.
 
 ### Tests for User Story 1
 - [X] T011 [P] [US1] Create sample multi-format fixture documents in `tests/fixtures/docs/` (`sample.md`, `sample.txt`, `sample.html`, `sample.docx`, `sample.pdf`)
@@ -61,7 +61,7 @@
 - [X] T018 [US1] Implement Phase 1 single-document ingestion pipeline in `src/docpipe_maestro/ingest/pipeline.py` (orchestrate intake → clean → chunk → embed child chunks → initial ChromaDB write and manifest registration)
 - [X] T019 [US1] Implement Phase 2 semantic retriever in `src/docpipe_maestro/query/retriever.py` (embed question, verify model lock, execute child search `where={"type": "child"}`, convert cosine distance to `score = 1.0 - distance`, filter `score >= threshold`, expand parent sections by ID, deduplicate parents with `max(score)`, and sort descending per FR-012, FR-013, FR-014)
 - [X] T020 [US1] Implement public `ingest` and `retrieve` functions in `src/docpipe_maestro/__init__.py` matching contracts in `specs/001-core-rag-pipeline/contracts/python-api.md`
-- [X] T021 [US1] Implement CLI commands `docpipe ingest <path>` and `docpipe query "<question>"` in `src/docpipe_maestro/cli.py` with flags `--profile`, `--collection`, `--persist-dir`, `--embed-model`, `--force`, `--top-k`, `--threshold`, `--expand-parent`/`--no-expand-parent`, and global `--version`
+- [X] T021 [US1] Implement CLI commands `docpipe-maestro ingest <path>` and `docpipe-maestro query "<question>"` in `src/docpipe_maestro/cli.py` with flags `--profile`, `--collection`, `--persist-dir`, `--embed-model`, `--force`, `--top-k`, `--threshold`, `--expand-parent`/`--no-expand-parent`, and global `--version`
 
 **Checkpoint**: User Story 1 complete and independently testable as a standalone semantic search engine (MVP).
 
@@ -100,7 +100,7 @@
 - [X] T029 [US3] Implement pure prompt builder in `src/docpipe_maestro/query/prompts.py` (format retrieved sections with `[Source: ... | Section: ... | Clause: ... | Page: ...]`, embed strict grounding instructions, assert no side effects or network calls per FR-015)
 - [X] T030 [US3] Implement optional answer generation in `src/docpipe_maestro/query/answer.py` (short-circuit when `has_context=False` or empty sections; delegate `provider/model` to `litellm.completion`; read credentials strictly from environment variables; raise `MissingCredentialError` without leaking values per FR-016, FR-017)
 - [X] T031 [US3] Expose `build_prompt` and lazy optional `answer` in `src/docpipe_maestro/__init__.py` (deferring import of `query.answer` until accessed and raising `MissingExtraError` with `[generation]` install instructions if generation dependencies are unavailable)
-- [X] T032 [US3] Implement CLI command `docpipe ask "<question>"` in `src/docpipe_maestro/cli.py` with flags `--model`, `--top-k`, `--threshold`, `--embed-model`, and `--api-base`
+- [X] T032 [US3] Implement CLI command `docpipe-maestro ask "<question>"` in `src/docpipe_maestro/cli.py` with flags `--model`, `--top-k`, `--threshold`, `--embed-model`, and `--api-base`
 
 **Checkpoint**: Full RAG pipeline operational with both retrieval-only and grounded generation workflows.
 
@@ -110,7 +110,7 @@
 
 **Goal**: Support three-way directory reconciliation (`sync`), fast-path hash skipping, source deletion (`remove`), manifest inspection (`status`), model migration (`reindex`), and crash-safe transactional staging so shrinking files leave zero orphaned clauses.
 
-**Independent Test**: Ingest a corpus; shrink a document by deleting a clause, touch an unchanged document, delete a third document, and run `docpipe sync`. Verify unchanged file is skipped, deleted file is purged, shrinking document has zero orphaned records (SC-002), and model mismatch is refused until `reindex` is run.
+**Independent Test**: Ingest a corpus; shrink a document by deleting a clause, touch an unchanged document, delete a third document, and run `docpipe-maestro sync`. Verify unchanged file is skipped, deleted file is purged, shrinking document has zero orphaned records (SC-002), and model mismatch is refused until `reindex` is run.
 
 ### Tests for User Story 4
 - [X] T033 [P] [US4] Create synchronization and lifecycle tests in `tests/test_sync_lifecycle.py` (verifying `sync` three-way reconciliation `added`/`updated`/`skipped`/`removed`, shrinking file orphan elimination, mid-update crash rollback preserving prior version, `remove` single-file deletion, `status` reporting, and `reindex` re-embedding stored chunks under a new model lock)
@@ -120,7 +120,7 @@
 - [X] T035 [US4] Implement directory reconciliation (`sync`) in `src/docpipe_maestro/ingest/pipeline.py` (scan directory against manifest keys: ingest `NEW`, verify `mtime`/`sha256` for `UNCHANGED`, stage re-ingest for `CHANGED`, and delete records for `REMOVED` per FR-010, FR-011)
 - [X] T036 [US4] Implement `remove`, `status`, and `reindex` operations in `src/docpipe_maestro/ingest/pipeline.py` (`reindex` re-embeds stored child chunk texts directly from ChromaDB under new `embed_model`, updates parent zero-vector dimensions, updates record metadata, and re-locks manifest)
 - [X] T037 [US4] Expose `sync`, `remove`, `status`, and `reindex` in public Python API `src/docpipe_maestro/__init__.py`
-- [X] T038 [US4] Implement CLI commands `docpipe sync <directory>`, `docpipe status`, `docpipe remove <source>`, and `docpipe reindex --model <m>` in `src/docpipe_maestro/cli.py`
+- [X] T038 [US4] Implement CLI commands `docpipe-maestro sync <directory>`, `docpipe-maestro status`, `docpipe-maestro remove <source>`, and `docpipe-maestro reindex --model <m>` in `src/docpipe_maestro/cli.py`
 
 **Checkpoint**: All user stories functional. Corpus lifecycle and synchronization complete.
 
@@ -200,7 +200,7 @@ T033 (test_sync_lifecycle.py)
 
 ## Implementation Strategy & MVP Scope
 
-1. **MVP (Phases 1, 2, 3)**: Setup, foundational state, multi-format intake, structure-aware chunking, vector storage, and `retrieve` / `docpipe query`. This delivers a fully functional, offline semantic search engine.
+1. **MVP (Phases 1, 2, 3)**: Setup, foundational state, multi-format intake, structure-aware chunking, vector storage, and `retrieve` / `docpipe-maestro query`. This delivers a fully functional, offline semantic search engine.
 2. **Safety Release Gate (Phase 4)**: Implement intra-document crossrefs, clause preservation, and pass 100% of the reverse safety test suite (`tests/test_reverse_safety.py`).
 3. **End-to-End RAG (Phase 5)**: Add pure prompt building and local/cloud generation with threshold short-circuiting.
 4. **Lifecycle & Sync (Phase 6)**: Add 3-way directory reconciliation, staging/version flip, model locks, and reindexing.

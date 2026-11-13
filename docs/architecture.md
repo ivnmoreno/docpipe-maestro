@@ -50,7 +50,7 @@ Every file's execution role is visible from the package layout under `src/docpip
 | [`query/retriever.py`](../src/docpipe_maestro/query/retriever.py) | Phase 2 | Read-only child similarity search, `doc_version` guard, threshold filter, parent expansion & dedup |
 | [`query/prompts.py`](../src/docpipe_maestro/query/prompts.py) | Phase 2 | Pure zero-I/O prompt constructor preserving citation metadata (`Source`, `Section`, `Clause`, `Page`) |
 | [`query/answer.py`](../src/docpipe_maestro/query/answer.py) | Phase 2 | Optional grounded completion via `litellm.completion` with deterministic empty-context refusal |
-| [`cli.py`](../src/docpipe_maestro/cli.py) | Both | `docpipe` CLI entry point and **sole** module permitted to read user TOML config files (`--config`) |
+| [`cli.py`](../src/docpipe_maestro/cli.py) | Both | `docpipe-maestro` CLI entry point and **sole** module permitted to read user TOML config files (`--config`) |
 
 ---
 

@@ -89,7 +89,7 @@ This document aggregates all architectural suggestions, deferred backlog items, 
 ### 4.4 Structured Metadata Pre-Filtering
 - **Problem**: Users may want to restrict retrieval to specific files, document versions, dates, or custom tags.
 - **Proposed Upgrade**:
-  - Expose structured metadata filters through `retrieve(where={...})` and the CLI (`docpipe query --filter 'source == "hr_policy.md"'`).
+  - Expose structured metadata filters through `retrieve(where={...})` and the CLI (`docpipe-maestro query --filter 'source == "hr_policy.md"'`).
   - Pass filter predicates directly to ChromaDB's `where` query engine.
 
 ---
@@ -119,7 +119,7 @@ This document aggregates all architectural suggestions, deferred backlog items, 
 - **Problem**: Generation waiting for completion blocks the caller until the full answer is generated.
 - **Proposed Upgrade**:
   - Add streaming support to `answer()` yielding text chunks (`Iterator[str]`).
-  - Add `--stream` flag to `docpipe ask` for real-time terminal output.
+  - Add `--stream` flag to `docpipe-maestro ask` for real-time terminal output.
 
 ### 6.2 Citation Extraction & Verification
 - **Problem**: LLMs can misattribute which retrieved section supported which claim in the generated text.
@@ -152,7 +152,7 @@ This document aggregates all architectural suggestions, deferred backlog items, 
 ### 8.1 Dry-Run Mode for `sync` and `reindex`
 - **Problem**: Users running `sync` or `reindex` on large corpora want to know what changes will occur before mutating the database or incurring embedding API costs.
 - **Proposed Upgrade**:
-  - Add `--dry-run` flag to `docpipe sync` and `docpipe reindex`.
+  - Add `--dry-run` flag to `docpipe-maestro sync` and `docpipe-maestro reindex`.
   - Output summary report: number of new files, modified files, deleted files, estimated tokens, and estimated cost without making database or API changes.
 
 ### 8.2 Progress Hooks & OpenTelemetry Tracing
@@ -171,7 +171,7 @@ This document aggregates all architectural suggestions, deferred backlog items, 
 | **`LEGAL` Profile** | Chunking | Post-v0.1 | High (Domain Safety) | Medium |
 | **Chunk-Level Differential Re-Embedding** | Ingestion | Post-v0.1 | High (Cost / Speed) | Medium |
 | **Hybrid Search (BM25 + Dense)** | Retrieval | Post-v0.1 | High (Recall) | Medium |
-| **Streaming Output (`docpipe ask`)** | Generation | Post-v0.1 | High (UX) | Low |
+| **Streaming Output (`docpipe-maestro ask`)** | Generation | Post-v0.1 | High (UX) | Low |
 | **`--dry-run` for `sync`/`reindex`** | CLI / Ops | Post-v0.1 | Medium (Safety) | Low |
 | **Inter-Document Crossrefs** | Ingestion | Post-v0.1 | Medium (Completeness) | High |
 | **Pluggable Reranker** | Retrieval | Post-v0.1 | High (Precision) | Low |

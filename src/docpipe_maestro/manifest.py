@@ -152,6 +152,6 @@ def check_model_lock(manifest: Manifest, embed_model: str) -> None:
         raise ModelMismatchError(
             f"Collection {manifest.collection!r} is locked to embedding model "
             f"{manifest.embed_model!r}, but {embed_model!r} was requested. "
-            f"Run 'docpipe reindex --model {embed_model} --collection {manifest.collection}' "
-            "to migrate the collection."
+            f"Run 'docpipe-maestro reindex --model {embed_model} "
+            f"--collection {manifest.collection}' to migrate the collection."
         )

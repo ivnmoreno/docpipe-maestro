@@ -82,7 +82,7 @@ def _cfg_opt_float(cfg: dict[str, Any], key: str) -> float | None:
 
 
 def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentParser:
-    """Construct the ``docpipe`` CLI parser with shared global options.
+    """Construct the ``docpipe-maestro`` CLI parser with shared global options.
 
     Uses a hidden ``common`` parent parser on every subcommand so ``--config``,
     ``--collection``, and ``--persist-dir`` are accepted either before or after
@@ -98,7 +98,7 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     default_threshold = _cfg_opt_float(cfg, "threshold")
 
     parser = argparse.ArgumentParser(
-        prog="docpipe",
+        prog="docpipe-maestro",
         description="Minimal, structure-aware RAG pipeline CLI.",
     )
     parser.add_argument("--version", action="version", version=f"docpipe-maestro {__version__}")
@@ -183,7 +183,7 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the ``docpipe`` CLI entry point and return a process exit code.
+    """Run the ``docpipe-maestro`` CLI entry point and return a process exit code.
 
     Catches ``DocpipeError`` and ``ValueError`` exceptions, prints a clean
     single-line message to ``stderr``, and exits with status ``1`` instead of

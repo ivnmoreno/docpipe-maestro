@@ -13,7 +13,7 @@ Welcome to the documentation for **`docpipe-maestro`** — a minimal, provider-a
 | **[README](../README.md)** | Everyone | Quickstart, installation extras, provider setup, and high-level workflow examples |
 | **[Architecture & Internals](architecture.md)** | Engineers & Architects | Two-phase pipeline data flow, format parsing heuristics, crossref resolution, structure-aware chunking, single-collection storage, and crash-safe staging |
 | **[Python API Reference](api-reference.md)** | Application Developers | Exact signatures, defaults, data models, configuration constants, exception hierarchy, and library integration patterns |
-| **[CLI Reference (`docpipe`)](cli-reference.md)** | CLI Users & Ops | Global flags, `docpipe.toml` schema, all 7 subcommands, exact output formats, exit codes, and troubleshooting |
+| **[CLI Reference (`docpipe-maestro`)](cli-reference.md)** | CLI Users & Ops | Global flags, `docpipe.toml` schema, all 7 subcommands, exact output formats, exit codes, and troubleshooting |
 | **[Development & Testing Guide](development.md)** | Contributors | Dev setup, `ruff`/`mypy --strict`/`pytest` quality gates, mandatory reverse safety gate, live Ollama testing, and extension guidelines |
 | **[Future Features Backlog](future-features.md)** | Maintainers & Roadmap | Deferred post-v0.1 enhancements aligned with scope discipline (`LEGAL` profile, differential re-embedding, hybrid search, storage adapters) |
 

@@ -1,15 +1,15 @@
-# CLI Reference (`docpipe`)
+# CLI Reference (`docpipe-maestro`)
 
-The `docpipe` CLI (`docpipe_maestro.cli:main`) provides subcommands mirroring the two-phase pipeline. It is the **only** component in `docpipe-maestro` permitted to read an optional user configuration file (`--config`).
+The `docpipe-maestro` CLI (`docpipe_maestro.cli:main`, also invocable as `python -m docpipe_maestro`) provides subcommands mirroring the two-phase pipeline. It is the **only** component in `docpipe-maestro` permitted to read an optional user configuration file (`--config`).
 
 ---
 
 ## 1. Global Options & Flag Placement
 
 ```text
-usage: docpipe [-h] [--version] [--config CONFIG] [--collection COLLECTION]
-               [--persist-dir PERSIST_DIR]
-               {ingest,sync,status,remove,reindex,query,ask} ...
+usage: docpipe-maestro [-h] [--version] [--config CONFIG]
+                       [--collection COLLECTION] [--persist-dir PERSIST_DIR]
+                       {ingest,sync,status,remove,reindex,query,ask} ...
 ```
 
 | Flag | Default | Description |
@@ -22,8 +22,8 @@ usage: docpipe [-h] [--version] [--config CONFIG] [--collection COLLECTION]
 All global options (`--config`, `--collection`, `--persist-dir`) are attached via a shared parent parser so they work identically **before or after** any subcommand:
 
 ```bash
-docpipe --collection hr status --json
-docpipe status --json --collection hr
+docpipe-maestro --collection hr status --json
+docpipe-maestro status --json --collection hr
 ```
 
 ---
@@ -36,7 +36,7 @@ Supported keys in `docpipe.toml` correspond 1-to-1 with CLI option names in `src
 collection = "hr_policy"
 persist_dir = "./.docpipe"
 embed_model = "ollama/nomic-embed-text"
-model = "ollama/llama3.2"          # Generation model for `docpipe ask`
+model = "ollama/llama3.2"          # Generation model for `docpipe-maestro ask`
 profile = "POLICY"                 # "DEFAULT" or "POLICY"
 top_k = 5                          # Default candidate child count
 threshold = 0.35                   # Optional cosine similarity floor [0.0, 1.0]
@@ -50,13 +50,14 @@ threshold = 0.35                   # Optional cosine similarity floor [0.0, 1.0]
 
 ## 3. Phase 1 Subcommands (Offline Ingestion & Lifecycle)
 
-### `docpipe ingest <path>`
+### `docpipe-maestro ingest <path>`
 
 Ingest a single file or recursively scan a directory atomically.
 
 ```text
-docpipe ingest [--config CONFIG] [--collection COLLECTION] [--persist-dir PERSIST_DIR]
-               [--profile PROFILE] [--embed-model EMBED_MODEL] [--force] path
+docpipe-maestro ingest [--config CONFIG] [--collection COLLECTION]
+                       [--persist-dir PERSIST_DIR] [--profile PROFILE]
+                       [--embed-model EMBED_MODEL] [--force] path
 ```
 
 - `--profile`: `"DEFAULT"` or `"POLICY"` (case-insensitive; default: `"DEFAULT"` or TOML `profile`).
@@ -69,13 +70,14 @@ docpipe ingest [--config CONFIG] [--collection COLLECTION] [--persist-dir PERSIS
 
 ---
 
-### `docpipe sync <directory>`
+### `docpipe-maestro sync <directory>`
 
 Three-way reconcile `<directory>` against the stored manifest (adds new files, skips unchanged files, replaces changed files via staged delete-then-reinsert, deletes missing files).
 
 ```text
-docpipe sync [--config CONFIG] [--collection COLLECTION] [--persist-dir PERSIST_DIR]
-             [--profile PROFILE] [--embed-model EMBED_MODEL] directory
+docpipe-maestro sync [--config CONFIG] [--collection COLLECTION]
+                     [--persist-dir PERSIST_DIR] [--profile PROFILE]
+                     [--embed-model EMBED_MODEL] directory
 ```
 
 - **Example output**:
@@ -85,12 +87,13 @@ docpipe sync [--config CONFIG] [--collection COLLECTION] [--persist-dir PERSIST_
 
 ---
 
-### `docpipe status`
+### `docpipe-maestro status`
 
 Inspect the collection manifest without reading source documents or calling an embedding provider.
 
 ```text
-docpipe status [--config CONFIG] [--collection COLLECTION] [--persist-dir PERSIST_DIR] [--json]
+docpipe-maestro status [--config CONFIG] [--collection COLLECTION]
+                       [--persist-dir PERSIST_DIR] [--json]
 ```
 
 - **Example text output**:
@@ -127,25 +130,27 @@ docpipe status [--config CONFIG] [--collection COLLECTION] [--persist-dir PERSIS
 
 ---
 
-### `docpipe remove <source>`
+### `docpipe-maestro remove <source>`
 
 Delete all child chunks, parent sections, and manifest tracking for a single source key.
 
 ```text
-docpipe remove [--config CONFIG] [--collection COLLECTION] [--persist-dir PERSIST_DIR] source
+docpipe-maestro remove [--config CONFIG] [--collection COLLECTION]
+                       [--persist-dir PERSIST_DIR] source
 ```
 
-- Uses the relative POSIX key shown by `docpipe status` (e.g., `guides/setup.md` or `policy.md`).
+- Uses the relative POSIX key shown by `docpipe-maestro status` (e.g., `guides/setup.md` or `policy.md`).
 - **Exit code**: `0` when removed (`Removed 'guides/setup.md' from collection 'hr_policy'.`); `1` if not found in manifest (`Source not found in collection 'hr_policy': guides/setup.md`).
 
 ---
 
-### `docpipe reindex --model <provider/model>`
+### `docpipe-maestro reindex --model <provider/model>`
 
 Re-embed all existing child chunks stored in ChromaDB under a new embedding model, update parent zero-vector dimensions, rebuild the vector index cleanly, and re-lock the manifest.
 
 ```text
-docpipe reindex [--config CONFIG] [--collection COLLECTION] [--persist-dir PERSIST_DIR] --model MODEL
+docpipe-maestro reindex [--config CONFIG] [--collection COLLECTION]
+                        [--persist-dir PERSIST_DIR] --model MODEL
 ```
 
 - **Note**: `reindex` uses `--model` (required) rather than `--embed-model`.
@@ -158,14 +163,15 @@ docpipe reindex [--config CONFIG] [--collection COLLECTION] [--persist-dir PERSI
 
 ## 4. Phase 2 Subcommands (Online Read-Only Retrieval & QA)
 
-### `docpipe query "<question>"`
+### `docpipe-maestro query "<question>"`
 
 Run semantic search without invoking an LLM.
 
 ```text
-docpipe query [--config CONFIG] [--collection COLLECTION] [--persist-dir PERSIST_DIR]
-              [--top-k TOP_K] [--threshold THRESHOLD] [--embed-model EMBED_MODEL]
-              [--expand-parent | --no-expand-parent] question
+docpipe-maestro query [--config CONFIG] [--collection COLLECTION]
+                      [--persist-dir PERSIST_DIR] [--top-k TOP_K]
+                      [--threshold THRESHOLD] [--embed-model EMBED_MODEL]
+                      [--expand-parent | --no-expand-parent] question
 ```
 
 - `--top-k`: Maximum child chunk hits prior to parent deduplication (default: `5`).
@@ -183,17 +189,18 @@ docpipe query [--config CONFIG] [--collection COLLECTION] [--persist-dir PERSIST
 
 ---
 
-### `docpipe ask "<question>"`
+### `docpipe-maestro ask "<question>"`
 
 Retrieve deduplicated parent sections, construct a grounded prompt via `build_prompt()`, and generate an answer via `answer()`.
 
 ```text
-docpipe ask [--config CONFIG] [--collection COLLECTION] [--persist-dir PERSIST_DIR]
-            [--top-k TOP_K] [--threshold THRESHOLD] [--model MODEL]
-            [--embed-model EMBED_MODEL] [--api-base API_BASE] question
+docpipe-maestro ask [--config CONFIG] [--collection COLLECTION]
+                    [--persist-dir PERSIST_DIR] [--top-k TOP_K]
+                    [--threshold THRESHOLD] [--model MODEL]
+                    [--embed-model EMBED_MODEL] [--api-base API_BASE] question
 ```
 
-- `--top-k`, `--threshold`, `--embed-model`: Same semantics as `docpipe query` (`expand_parent` is always `True`).
+- `--top-k`, `--threshold`, `--embed-model`: Same semantics as `docpipe-maestro query` (`expand_parent` is always `True`).
 - `--model`: LLM generation model string (default: `"ollama/llama3.2"` or TOML `model`).
 - `--api-base`: Optional custom OpenAI-compatible server base URL (e.g., `http://localhost:8000/v1`).
 - If zero sections satisfy `--threshold` (or the collection is empty), prints `Not found in the provided context.` without invoking the LLM.
@@ -205,12 +212,12 @@ docpipe ask [--config CONFIG] [--collection COLLECTION] [--persist-dir PERSIST_D
 | Condition | Exit Code | Output Channel & Message |
 |---|---|---|
 | Success (`remove` absent excluded) | `0` | Normal output on `stdout` |
-| `docpipe remove` source missing | `1` | `Source not found in collection '<name>': <source>` on `stdout` |
+| `docpipe-maestro remove` source missing | `1` | `Source not found in collection '<name>': <source>` on `stdout` |
 | Missing/unknown CLI arguments | `2` | Standard `argparse` usage error on `stderr` |
 | Any `DocpipeError` or `ValueError` | `1` | Single-line `Error: <message>` on `stderr` (never prints stack traces or API keys) |
 
 Common runtime fixes:
-- **`ModelMismatchError`**: Your `--embed-model` differs from the locked model shown by `docpipe status`. Query with the locked model or migrate via `docpipe reindex --model <new_model>`.
+- **`ModelMismatchError`**: Your `--embed-model` differs from the locked model shown by `docpipe-maestro status`. Query with the locked model or migrate via `docpipe-maestro reindex --model <new_model>`.
 - **`MissingExtraError`**: Install the missing format parser extra: `pip install "docpipe-maestro[pdf]"` (or `docx`, `html`, `all`).
 - **`Invalid or unusable collection`**: ChromaDB collection names must be at least 3 characters long and contain only `[a-zA-Z0-9._-]`.
 - **`Error: Config file not found`**: Check the relative or absolute path passed to `--config`.

@@ -6,7 +6,7 @@
 
 ## Summary
 
-Implement `docpipe-maestro` v0.1, a minimal, provider-agnostic two-phase RAG pipeline Python library and `docpipe` CLI. Phase 1 (`ingest`, `sync`, `remove`, `status`, `reindex`) performs atomic multi-format document intake, structure-aware hierarchical parent-child chunking (preserving clauses and resolving intra-document cross-references), batched embeddings via `litellm`, and crash-safe delete-then-reinsert persistence into embedded ChromaDB paired with a database-collocated `sha256` manifest. Phase 2 (`retrieve`, `build_prompt`, optional `answer`) treats the store and manifest as read-only, queries child chunks via `where={"type": "child"}` on normalized cosine similarity, expands deduplicated parent sections ordered by `max(score)`, constructs citation-grounded prompts purely offline, and optionally invokes local (Ollama default) or cloud LLMs via `provider/model` strings.
+Implement `docpipe-maestro` v0.1, a minimal, provider-agnostic two-phase RAG pipeline Python library and `docpipe-maestro` CLI. Phase 1 (`ingest`, `sync`, `remove`, `status`, `reindex`) performs atomic multi-format document intake, structure-aware hierarchical parent-child chunking (preserving clauses and resolving intra-document cross-references), batched embeddings via `litellm`, and crash-safe delete-then-reinsert persistence into embedded ChromaDB paired with a database-collocated `sha256` manifest. Phase 2 (`retrieve`, `build_prompt`, optional `answer`) treats the store and manifest as read-only, queries child chunks via `where={"type": "child"}` on normalized cosine similarity, expands deduplicated parent sections ordered by `max(score)`, constructs citation-grounded prompts purely offline, and optionally invokes local (Ollama default) or cloud LLMs via `provider/model` strings.
 
 ## Technical Context
 
@@ -15,7 +15,7 @@ Implement `docpipe-maestro` v0.1, a minimal, provider-agnostic two-phase RAG pip
 **Storage**: Embedded `chromadb.PersistentClient` (`hnsw:space: cosine`) + database-collocated JSON manifest (`<persist_dir>/manifests/<collection>.json`)
 **Testing**: `pytest>=8.0.0`, `pytest-cov`, deterministic offline fixture reverse safety suite (`tests/test_reverse_safety.py`), `ruff` (lint/format), `mypy --strict`
 **Target Platform**: Cross-platform local workstations/servers (Linux/macOS/Windows), 16 GB RAM without GPU requirement for default local models
-**Project Type**: Python library + `docpipe` CLI (`src/` layout via `hatchling` + `hatch-vcs`)
+**Project Type**: Python library + `docpipe-maestro` CLI (`src/` layout via `hatchling` + `hatch-vcs`)
 **Performance Goals**: Pure sub-millisecond `build_prompt`; `mtime`/`size` fast-path skip for unchanged files during `ingest`/`sync`; batched Phase 1 embeddings
 **Constraints**: Zero outbound network calls under local Ollama configuration (offline-safe token estimator without runtime BPE downloads); no user config file reads inside library modules (`cli.py` only); credentials via env vars only; MIT-compatible dependency licensing
 **Scale/Scope**: Single ChromaDB collection per corpus (`v0.1`); personal to mid-size document collections (hundreds to low tens of thousands of sections)
@@ -49,7 +49,7 @@ specs/001-core-rag-pipeline/
 ├── quickstart.md        # End-to-end validation & safety gate guide
 ├── contracts/
 │   ├── python-api.md    # Public library functions, types & exceptions
-│   └── cli.md           # docpipe CLI commands & flags
+│   └── cli.md           # docpipe-maestro CLI commands & flags
 └── tasks.md             # Phase 2 breakdown (/speckit-tasks)
 ```
 
@@ -68,7 +68,7 @@ src/
     ├── embedder.py          # Shared unified embedding client (litellm.embedding batching)
     ├── store.py             # Shared ChromaDB PersistentClient adapter (cosine space, where={"type": "child"}, staging cleanup)
     ├── manifest.py          # Shared DB-collocated manifest (sha256, mtime fast-path, atomic swap, embed_model lock)
-    ├── cli.py               # Entry point (`docpipe`); sole module permitted to read optional user config file
+    ├── cli.py               # Entry point (`docpipe-maestro`); sole module permitted to read optional user config file
     ├── ingest/              # Phase 1 (Offline batch ingestion & corpus lifecycle)
     │   ├── __init__.py
     │   ├── intake.py        # Multi-format parser (.md, .txt built-in; .pdf, .docx, .html extras) + magic-byte fallback

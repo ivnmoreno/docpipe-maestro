@@ -1,14 +1,16 @@
-"""Integration tests for all 7 docpipe CLI commands and --config isolation."""
+"""Integration tests for all 7 docpipe-maestro CLI commands and --config isolation."""
 
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from docpipe_maestro.cli import main
+from docpipe_maestro.cli import build_parser, main
 
 
 def test_cli_full_workflow_and_toml_config(
@@ -131,3 +133,17 @@ def test_cli_global_flags_after_subcommand(
     )
     assert rc_bad_col == 1
     assert "Invalid or unusable collection" in capsys.readouterr().err
+
+
+def test_cli_prog_name_and_module_entrypoint() -> None:
+    parser = build_parser()
+    assert parser.prog == "docpipe-maestro"
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "docpipe_maestro", "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout.strip().startswith("docpipe-maestro ")
