@@ -1,22 +1,13 @@
-# Changelog
+## Unreleased
 
-All notable changes to `docpipe-maestro` will be documented in this file.
+### Feat
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
-and [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
+- **pipeline**: implement v0.1 core RAG pipeline, CLI, and quality gates
 
-## [Unreleased]
+### Fix
 
-### Added
-- Phase 1 offline ingestion pipeline (`ingest`, `sync`, `remove`, `status`, `reindex`) with multi-format support (Markdown, TXT, HTML, DOCX, PDF) and extensionless magic-byte detection.
-- Structure-aware chunking (`DEFAULT` and `POLICY` profiles) with clause preservation, scoped overlap, and intra-document cross-reference resolution.
-- Database-collocated atomic manifest (`sha256` content hashing, `mtime` fast-path, staged `doc_version` delete-then-reinsert updates, and collection `embed_model` lock).
-- Phase 2 online retrieval and optional RAG (`retrieve`, `build_prompt`, `answer`) with parent-child expansion (`where={"type": "child"}`) and deterministic empty-context refusal.
-- `docpipe-maestro` CLI (also invocable via `python -m docpipe_maestro`) supporting `ingest`, `sync`, `status`, `remove`, `reindex`, `query`, and `ask` subcommands plus `--config` TOML loading.
-- Mandatory Reverse Safety Test Gate (`tests/test_reverse_safety.py`) enforcing 100% exception-clause preservation.
-- Extended complex integration test suite (`tests/test_extended_complex.py`) covering multi-batch embedding, multi-page PDF boilerplate stripping, complex DOCX/HTML tables, crossrefs, and atomic staging.
-- Complete documentation suite (`docs/README.md`, `docs/architecture.md`, `docs/api-reference.md`, `docs/cli-reference.md`, `docs/development.md`) and Google-style module/API docstrings across `src/docpipe_maestro/`.
+- **security**: harden pipeline, add CI workflow, and update gitignore
 
-### Fixed
-- Corrected `IngestResult`, `CollectionStatus`, and CLI output examples in `README.md` to match the implemented Python API and CLI formatting.
+### Refactor
+
+- **cli**: rename CLI command to docpipe-maestro
