@@ -114,7 +114,34 @@ def ingest(
     embed_model: str = DEFAULT_EMBED_MODEL,
     force: bool = False,
 ) -> IngestResult:
-    """Ingest a file or directory atomically into the vector database."""
+    """Ingest a file or directory atomically into the vector database.
+
+    Validates, parses, cleans, chunks, and embeds all changed files in memory
+    *before* initializing or mutating ``VectorStore``. Each changed document is
+    written under a new ``doc_version``, committed atomically in the manifest,
+    and prior versions for that source are purged afterward so failed updates
+    leave the previous version intact and queryable.
+
+    Args:
+        path: Source file or directory tree to ingest recursively.
+        profile: Profile name (``"DEFAULT"`` / ``"POLICY"``) or ``ChunkingProfile``.
+        collection: Target ChromaDB collection and manifest name.
+        persist_dir: Local persistence directory for ChromaDB and manifests.
+        embed_model: LiteLLM ``provider/model`` identifier for child embeddings.
+        force: Re-ingest files even when ``mtime``/``size``/``sha256`` match.
+
+    Returns:
+        Summary of ingested/skipped source keys and written child/parent counts.
+
+    Raises:
+        UnsupportedFormatError: If ``path`` is missing, empty, or contains an
+            unsupported/corrupted file (aborts the entire batch before writes).
+        MissingExtraError: If a required format extra (``pdf``, ``docx``,
+            ``html``) is not installed.
+        ModelMismatchError: If ``collection`` is already locked to another model.
+        MissingCredentialError: If provider credentials are missing or invalid.
+        DocpipeError: If embedding or store initialization fails.
+    """
     target = Path(path)
     persist_path = Path(persist_dir)
     prof = resolve_profile(profile)
@@ -216,7 +243,32 @@ def sync(
     persist_dir: str | Path = DEFAULT_PERSIST_DIR,
     embed_model: str = DEFAULT_EMBED_MODEL,
 ) -> SyncResult:
-    """Three-way reconcile directory against the collection manifest."""
+    """Three-way reconcile ``directory`` against the collection manifest.
+
+    Adds new files, skips unchanged files (refreshing ``mtime``/``size`` when
+    only filesystem timestamps changed), replaces modified files via staged
+    delete-then-reinsert, and removes records/manifest entries for files
+    deleted from ``directory``.
+
+    Args:
+        directory: Directory path to synchronize with the manifest.
+        profile: Profile name (``"DEFAULT"`` / ``"POLICY"``) or ``ChunkingProfile``.
+        collection: Target ChromaDB collection and manifest name.
+        persist_dir: Local persistence directory for ChromaDB and manifests.
+        embed_model: LiteLLM ``provider/model`` identifier for child embeddings.
+
+    Returns:
+        ``SyncResult`` listing ``added``, ``updated``, ``skipped``, and
+        ``removed`` canonical source keys.
+
+    Raises:
+        UnsupportedFormatError: If ``directory`` is not a directory or contains
+            an unsupported/corrupted file.
+        MissingExtraError: If a required format parser extra is missing.
+        ModelMismatchError: If ``collection`` is locked to a different model.
+        MissingCredentialError: If embedding credentials are missing or invalid.
+        DocpipeError: If embedding or store operations fail.
+    """
     target = Path(directory)
     if not target.is_dir():
         raise UnsupportedFormatError(f"Sync target is not a directory: {target}")
@@ -332,7 +384,16 @@ def remove(
     collection: str = DEFAULT_COLLECTION,
     persist_dir: str | Path = DEFAULT_PERSIST_DIR,
 ) -> bool:
-    """Remove all records and manifest entry for a single source document."""
+    """Remove all vector records and the manifest entry for a single source.
+
+    Args:
+        source: Canonical source key tracked in the collection manifest.
+        collection: Target collection name.
+        persist_dir: Local persistence directory.
+
+    Returns:
+        ``True`` if the source existed and was purged, ``False`` otherwise.
+    """
     source_key = Path(source).as_posix()
     persist_path = Path(persist_dir)
     manifest = load_manifest(persist_path, collection)
@@ -351,7 +412,16 @@ def status(
     collection: str = DEFAULT_COLLECTION,
     persist_dir: str | Path = DEFAULT_PERSIST_DIR,
 ) -> CollectionStatus:
-    """Return a read-only summary of the collection's manifest state."""
+    """Return a read-only summary of the collection's manifest state.
+
+    Args:
+        collection: Target collection name.
+        persist_dir: Local persistence directory.
+
+    Returns:
+        ``CollectionStatus`` containing locked model metadata, aggregate child
+        and parent counts, and sorted per-source ``SourceRecord`` entries.
+    """
     manifest = load_manifest(Path(persist_dir), collection)
     sources = sorted(manifest.sources.values(), key=lambda s: s.source)
     total_children = sum(len(s.chunk_ids) for s in sources)
@@ -373,7 +443,24 @@ def reindex(
     collection: str = DEFAULT_COLLECTION,
     persist_dir: str | Path = DEFAULT_PERSIST_DIR,
 ) -> int:
-    """Re-embed all existing stored child chunks under a new embedding model."""
+    """Re-embed all existing stored child chunks under a new embedding model.
+
+    Computes all new child vectors in memory first, updates parent zero-vector
+    dimensions to match, rebuilds the ChromaDB collection cleanly, and updates
+    the manifest's model lock and vector dimensionality.
+
+    Args:
+        embed_model: New LiteLLM ``provider/model`` identifier for the collection.
+        collection: Target collection name.
+        persist_dir: Local persistence directory.
+
+    Returns:
+        Count of committed child chunks re-embedded.
+
+    Raises:
+        MissingCredentialError: If provider credentials for ``embed_model`` fail.
+        DocpipeError: If embedding or collection recreation fails.
+    """
     persist_path = Path(persist_dir)
     manifest = load_manifest(persist_path, collection)
     store = VectorStore(persist_path, collection)

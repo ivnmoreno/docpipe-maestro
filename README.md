@@ -37,6 +37,7 @@
   - [Phase 2: Semantic Retrieval & Grounded RAG Workflow](#phase-2-semantic-retrieval--grounded-rag-workflow)
   - [Core Data Shapes](#core-data-shapes)
 - [Safety & Verification](#safety--verification)
+- [Documentation](#documentation)
 - [License](#license)
 
 ---
@@ -84,8 +85,9 @@ Install additional document format parsers or cloud LLM generation features as n
 | `all` | Installs **all** optional format parsers (`pdf`, `docx`, `html`, `generation`) | `pypdf`, `python-docx`, `beautifulsoup4`, `litellm` |
 
 > **Note on Structure Extraction & Optional Generation**:
-> - **Structure-awareness across formats**: Markdown (`#`–`######`), HTML (`<h1>`–`<h6>`), and DOCX (`Heading 1`–`Heading 6` styles) provide native heading hierarchies. PDF parsing uses `pypdf` (permissive BSD-3-Clause license) with pattern heuristics (`Section X.Y`, `Article IV`, numbered headings, and per-page tracking).
-> - **Generation capability**: Because `litellm` powers both embeddings and completions, `answer()` is available in the base install as an optional capability to invoke; the `[generation]` extra is retained as a backwards-compatible alias.
+> - **Structure-awareness across formats**: Markdown (`.md`, `.markdown`), plain text (`.txt`), HTML (`.html`, `.htm`), DOCX (`.docx`), and PDF (`.pdf`) are supported, with content/magic-byte fallback for extensionless files (`%PDF-`, ZIP `word/document.xml`, HTML root tags, Markdown headings, and UTF-8 text).
+> - **Fenced blocks & tables**: Markdown preserves `#` comments inside code fences (` ``` ` / `~~~`); HTML and DOCX preserve tables as pipe-delimited rows (` | `); PDFs extract per-page heuristic headings and 1-based page numbers.
+> - **Generation capability**: Because `litellm` powers both embeddings and completions, `answer()` is available in the base install; the `[generation]` extra is retained as a backwards-compatible alias.
 
 Install specific extras:
 ```bash
@@ -183,6 +185,7 @@ You can create an optional TOML configuration file to store default CLI options 
 collection = "my_kb"
 persist_dir = "./data/docpipe_index"
 embed_model = "ollama/nomic-embed-text"
+model = "ollama/llama3.2"
 profile = "POLICY"
 top_k = 5
 threshold = 0.4
@@ -210,12 +213,15 @@ Profiles are immutable presets calibrated for specific document types:
 
 ## Quickstart: CLI Usage Guide
 
-Run `docpipe --help` to see all available subcommands:
+Run `docpipe --help` to see all available subcommands (global flags `--config`, `--collection`, and `--persist-dir` work either before or after any subcommand):
 
 ```text
-usage: docpipe [-h] [--collection NAME] [--persist-dir PATH] [--config PATH] [--version]
+usage: docpipe [-h] [--version] [--config CONFIG] [--collection COLLECTION]
+               [--persist-dir PERSIST_DIR]
                {ingest,sync,status,remove,reindex,query,ask} ...
 ```
+
+See the full [CLI Reference](docs/cli-reference.md) for all flags, TOML keys, exit codes, and output schemas.
 
 ### 1. Ingest Documents (`docpipe ingest`)
 
@@ -241,27 +247,21 @@ docpipe sync ./company_policies --profile POLICY --collection hr_policy
 ```
 **Example output**:
 ```text
-Collection 'hr_policy': added=1, updated=2, skipped=10, removed=1
+Synced 'hr_policy': added=1, updated=2, skipped=10, removed=1.
 ```
 
 ### 3. Inspect Collection Status (`docpipe status`)
 
-View indexed files, SHA-256 hashes, active document versions, chunk counts, and locked embedding model:
+View indexed files, version hashes, chunk counts, and locked embedding model:
 
 ```bash
 docpipe status --collection hr_policy
 ```
 **Example output**:
 ```text
-Collection: hr_policy
-Embed Model: ollama/nomic-embed-text (dim: 768)
-Total Sources: 2
-Total Child Chunks: 18
-Total Parent Sections: 6
-
-Sources:
-  - hr_leave_policy.md (sha256: 4f1a..., doc_version: 4f1a29b01c3d, chunks: 10, parents: 3)
-  - travel_expenses_policy.md (sha256: a8c2..., doc_version: a8c2194ef001, chunks: 8, parents: 3)
+Collection: hr_policy | Model: ollama/nomic-embed-text (dim=768) | Sources: 2 | Children: 18 | Parents: 6
+  - hr_leave_policy.md [4f1a29b01c3d] (10 children, 3 parents)
+  - travel_expenses_policy.md [a8c2194ef001] (8 children, 3 parents)
 ```
 
 Use `--json` for machine-readable output:
@@ -304,12 +304,10 @@ docpipe query "annual leave" --no-expand-parent --collection hr_policy
 
 **Example output**:
 ```text
-Match 1 [Score: 0.8421]
-  Source:  company_policies/leave_policy.md (Section: 3. Annual Leave, Clause: 3.1)
-  Text:
-    ## Section 3: Annual Leave
-    3.1 Full-time employees accrue 20 days of paid annual leave per calendar year.
-    3.2 Employees with less than one year of tenure accrue leave on a pro-rata basis.
+[1] score=0.8421 | Source: hr_leave_policy.md | Section: 3. Annual Leave
+3.1 Full-time employees accrue 20 days of paid annual leave per calendar year.
+3.2 Employees with less than one year of tenure accrue leave on a pro-rata basis.
+------------------------------------------------------------
 ```
 
 ### 7. Grounded Question Answering (`docpipe ask`)
@@ -320,9 +318,10 @@ Retrieve relevant context and generate a grounded answer:
 # Using local Ollama (default)
 docpipe ask "How many days of leave does a first-year employee get?" --collection hr_policy
 
-# Using a cloud model (e.g., OpenAI or Claude)
+# Using a cloud model or custom OpenAI-compatible base URL
 export OPENAI_API_KEY="sk-..."
 docpipe ask "Summarize travel meal allowance limits." --model openai/gpt-4o-mini --collection hr_policy
+docpipe ask "Summarize travel policy." --model openai/my-local-model --api-base http://localhost:8000/v1 --collection hr_policy
 
 # Safe thresholding: if no retrieved content matches threshold, short-circuits with a refusal
 docpipe ask "What is the recipe for lasagna?" --threshold 0.7 --collection hr_policy
@@ -331,6 +330,8 @@ docpipe ask "What is the recipe for lasagna?" --threshold 0.7 --collection hr_po
 ---
 
 ## Python Library API Guide
+
+See the complete [Python API Reference](docs/api-reference.md) for every signature, parameter default, config constant, and exception class.
 
 ### Phase 1: Ingestion & Lifecycle Workflow
 
@@ -341,12 +342,15 @@ from docpipe_maestro import ingest, sync, status, remove, reindex
 # 1. Ingest a document or directory
 result = ingest(
     Path("./policies"),
-    profile="POLICY",  # "DEFAULT" or "POLICY"
+    profile="POLICY",  # "DEFAULT", "POLICY", or custom ChunkingProfile
     collection="handbook",
     persist_dir=".docpipe",
     embed_model="ollama/nomic-embed-text",
 )
-print(f"Ingested {len(result.indexed_files)} files: {result.total_chunks} chunks.")
+print(
+    f"Ingested {len(result.ingested)} files "
+    f"({result.chunks_written} children, {result.parents_written} parents)."
+)
 
 # 2. Synchronize folder after changes (adds, edits, deletions)
 sync_result = sync(
@@ -355,18 +359,23 @@ sync_result = sync(
     collection="handbook",
 )
 print(
-    f"Added: {len(sync_result.added)}, Updated: {len(sync_result.updated)}, Removed: {len(sync_result.removed)}"
+    f"Added: {len(sync_result.added)}, Updated: {len(sync_result.updated)}, "
+    f"Skipped: {len(sync_result.skipped)}, Removed: {len(sync_result.removed)}"
 )
 
 # 3. Check collection metadata and tracked documents
 coll_status = status(collection="handbook")
-print(f"Locked embed model: {coll_status.embed_model}, Tracked files: {coll_status.source_count}")
+print(
+    f"Locked embed model: {coll_status.embed_model}, "
+    f"Tracked files: {coll_status.total_sources}, "
+    f"Children: {coll_status.total_children}"
+)
 
 # 4. Remove a document from the index
 removed = remove("outdated_policy.md", collection="handbook")
 
 # 5. Reindex collection with a new embedding model
-reindex_summary = reindex(
+reindexed_count = reindex(
     embed_model="openai/text-embedding-3-small",
     collection="handbook",
 )
@@ -389,15 +398,13 @@ retrieved_sections = retrieve(
 )
 
 for section in retrieved_sections:
-    print(
-        f"[{section.score:.2f}] {section.metadata.get('source')} - {section.metadata.get('section')}"
-    )
+    print(f"[{section.score:.2f}] {section.metadata['source']} - {section.metadata['section']}")
     print(section.text)
 
 # 2. Build a grounded prompt (Pure function, zero network calls)
 prompt = build_prompt(question=question, sections=retrieved_sections)
 
-# 3. Generate a grounded answer (requires 'generation' extra)
+# 3. Generate a grounded answer (uses local Ollama by default)
 response = answer(
     prompt=prompt,
     model="ollama/llama3.2",  # or "openai/gpt-4o-mini", "anthropic/claude-3-5-haiku", etc.
@@ -406,16 +413,18 @@ response = answer(
 print("Answer:\n", response)
 ```
 
-### Core Data Shapes
+### Core Data Shapes & Exceptions
 
-Exported from `docpipe_maestro.types`:
+Exported from `docpipe_maestro` (`docpipe_maestro.types`):
 
-- `Chunk`: Base unit (`id`, `text`, `parent_id`, `metadata`).
-- `EmbeddedChunk`: Chunk with embedding (`vector: list[float]`).
-- `RetrievedChunk`: Retrieved section/chunk (`score: float`, where `score` is normalized cosine similarity in `[0.0, 1.0]`).
-- `IngestResult`: Summary of files indexed, skipped, and chunk counts.
-- `SyncResult`: Lists of `added`, `updated`, `skipped`, and `removed` source keys.
-- `CollectionStatus`: Manifest overview with counts, hashes, timestamps, and model lock info.
+- `Chunk`: Base unit (`id`, `text`, `parent_id`, `metadata: ChunkMetadata`).
+- `EmbeddedChunk`: `Chunk` with dense embedding (`vector: list[float]`).
+- `RetrievedChunk`: `EmbeddedChunk` with normalized cosine similarity (`score: float` in `[0.0, 1.0]`).
+- `IngestResult`: Summary (`collection`, `embed_model`, `ingested`, `skipped`, `chunks_written`, `parents_written`).
+- `SyncResult`: Summary (`collection`, `embed_model`, `added`, `updated`, `skipped`, `removed`).
+- `CollectionStatus`: Manifest overview (`collection`, `embed_model`, `embed_dim`, `total_sources`, `total_children`, `total_parents`, `sources`).
+- `SourceRecord`: Per-file manifest tracking record (`source`, `content_hash`, `doc_version`, `size`, `mtime`, `ingested_at`, `embed_model`, `profile`, `chunk_ids`, `parent_ids`).
+- Exceptions: `DocpipeError` (base) with `UnsupportedFormatError`, `MissingExtraError`, `ModelMismatchError`, and `MissingCredentialError`.
 
 ---
 
@@ -433,12 +442,25 @@ uv run ruff format --check .
 # Run static type checking
 uv run mypy src tests
 
-# Run all unit and safety tests
-uv run pytest -v
+# Run all unit, integration, and safety tests with branch coverage
+uv run pytest -v --cov
 
-# Verify reverse safety gate specifically
-uv run pytest tests/test_reverse_safety.py -v
+# Verify reverse safety gate and extended complex integration tests individually
+uv run pytest -m reverse -v
+uv run pytest -m integration -v
 ```
+
+---
+
+## Documentation
+
+- **[Documentation Index](docs/README.md)** — Full guide overview
+- **[Architecture & Internals](docs/architecture.md)** — Two-phase pipeline flow, intake, crossref resolution, chunking, and transactional staging
+- **[Python API Reference](docs/api-reference.md)** — Signatures, profiles, data shapes, and error handling
+- **[CLI Reference](docs/cli-reference.md)** — `docpipe` commands, TOML config, outputs, and troubleshooting
+- **[Development & Testing Guide](docs/development.md)** — Setup, quality gates, offline test doubles, and Ollama live runs
+- **[Future Features Backlog](docs/future-features.md)** — Post-v0.1 roadmap
+- **[Changelog](CHANGELOG.md)** — Release history
 
 ---
 

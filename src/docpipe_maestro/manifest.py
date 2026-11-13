@@ -29,7 +29,11 @@ def load_manifest(persist_dir: Path, collection: str) -> Manifest:
 
 
 def save_manifest(persist_dir: Path, manifest: Manifest) -> None:
-    """Atomically write the manifest using a temporary file and os.replace."""
+    """Atomically write the manifest via temp file, ``fsync``, and ``os.replace``.
+
+    Crash-safe: an interrupted write either cleans up its temporary file or
+    leaves the prior committed JSON untouched.
+    """
     target = manifest_path(persist_dir, manifest.collection)
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(manifest.to_dict(), indent=2, sort_keys=True)
@@ -66,9 +70,21 @@ def classify_file(
     *,
     force: bool = False,
 ) -> tuple[ChangeStatus, str | None, int, float]:
-    """Classify a file using mtime/size fast-path followed by sha256 verification.
+    """Classify a file using an ``mtime``/``size`` fast-path and ``sha256`` check.
 
-    Returns (status, content_hash_or_None, size, mtime).
+    When ``force`` is ``False`` and both ``size`` and ``mtime`` match the
+    manifest, file hashing is skipped altogether. When filesystem metadata
+    differs (for example after ``touch``), the full ``sha256`` digest determines
+    whether content actually changed.
+
+    Args:
+        path: On-disk path to the candidate document.
+        source_key: Canonical manifest key for ``path``.
+        manifest: Loaded collection manifest.
+        force: Bypass fast-path and hash equality checks when ``True``.
+
+    Returns:
+        A 4-tuple ``(status, content_hash_or_None, size, mtime)``.
     """
     stat = path.stat()
     size = stat.st_size
@@ -89,7 +105,12 @@ def classify_file(
 
 
 def check_model_lock(manifest: Manifest, embed_model: str) -> None:
-    """Verify that the requested embedding model matches the collection's locked model."""
+    """Verify that ``embed_model`` matches the collection's locked model.
+
+    Raises:
+        ModelMismatchError: If the collection is already locked to a different
+            embedding model than ``embed_model``.
+    """
     if manifest.embed_model is not None and manifest.embed_model != embed_model:
         raise ModelMismatchError(
             f"Collection {manifest.collection!r} is locked to embedding model "

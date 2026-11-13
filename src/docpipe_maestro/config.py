@@ -1,4 +1,9 @@
-"""Static configuration constants and chunking profiles."""
+"""Static configuration constants and immutable chunking profiles.
+
+Per Library Purity rules, no library module reads external config files;
+profiles are defined strictly as immutable Python constants and resolved either
+by registered name or by passing a custom ``ChunkingProfile`` instance.
+"""
 
 from __future__ import annotations
 
@@ -35,7 +40,18 @@ PROFILES: dict[str, ChunkingProfile] = {
 
 
 def resolve_profile(profile: str | ChunkingProfile) -> ChunkingProfile:
-    """Resolve a profile name or ChunkingProfile instance."""
+    """Resolve a profile name or return a ``ChunkingProfile`` instance directly.
+
+    Args:
+        profile: Registered profile name (case-insensitive, e.g., ``"DEFAULT"``
+            or ``"POLICY"``) or a custom ``ChunkingProfile`` instance.
+
+    Returns:
+        The resolved ``ChunkingProfile`` configuration.
+
+    Raises:
+        DocpipeError: If a string name does not match any registered profile.
+    """
     if isinstance(profile, ChunkingProfile):
         return profile
     key = profile.strip().upper()

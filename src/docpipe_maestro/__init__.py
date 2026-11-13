@@ -1,4 +1,17 @@
-"""docpipe-maestro: a minimal, provider-agnostic, structure-aware RAG pipeline."""
+"""docpipe-maestro: a minimal, provider-agnostic, structure-aware RAG pipeline.
+
+Public surface organized around two separated execution phases:
+
+- Phase 1 (Offline Ingestion & Corpus Lifecycle): ``ingest``, ``sync``, ``remove``,
+  ``status``, and ``reindex``.
+- Phase 2 (Online Read-Only Retrieval & Optional Generation): ``retrieve``,
+  ``build_prompt``, and lazily loaded ``answer``.
+- Shared Data Shapes & Exceptions: ``Chunk``, ``EmbeddedChunk``, ``RetrievedChunk``,
+  ``SourceRecord``, ``IngestResult``, ``SyncResult``, ``CollectionStatus``, and
+  ``DocpipeError`` subclasses.
+
+Static chunking profiles (``DEFAULT``, ``POLICY``) live in ``docpipe_maestro.config``.
+"""
 
 from __future__ import annotations
 
@@ -57,6 +70,7 @@ __all__ = [
 
 
 def __getattr__(name: str) -> Any:
+    """Lazily expose optional generation helpers such as ``answer``."""
     if name == "answer":
         try:
             from docpipe_maestro.query.answer import answer as _answer

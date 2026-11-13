@@ -25,7 +25,13 @@ _CLAUSE_LINE_RE = re.compile(r"^([0-9]+(?:\.[0-9]+)+)\s+(.+)$", re.MULTILINE)
 
 
 def _extract_section_num(label: str) -> str | None:
-    """Extract normalized section identifier from a heading label, if present."""
+    """Extract normalized section identifier from a heading label, if present.
+
+    Prefixed forms (``Section 7``, ``Article 4``) and dotted decimal headings
+    (``7.5 Public API``, ``20.2: Rules``) match directly, whereas bare integer
+    headings require a trailing period (``1. Title``) to avoid false-positive
+    matches on years or measurements (``2026 Roadmap``, ``3.5mm``).
+    """
     match = _SECTION_NUM_RE.search(label)
     if not match:
         return None
@@ -60,7 +66,14 @@ def _build_target_index(doc: ParsedDocument) -> dict[str, str]:
 
 
 def resolve_crossrefs(doc: ParsedDocument) -> ParsedDocument:
-    """Resolve intra-document cross-references and log any unresolved targets."""
+    """Resolve intra-document cross-references cleanly and log unresolved targets.
+
+    Operates in a single non-recursive pass over ``_build_target_index(doc)``
+    while excluding the current section's own numbers (``self_keys``) to prevent
+    self-referential and cyclic expansions. Appends deduplicated ``[Crossref ...]``
+    excerpts (up to 400 characters) and emits ``WARNING`` logs for targets absent
+    from the current document.
+    """
     targets = _build_target_index(doc)
     resolved_sections: list[ParsedSection] = []
 

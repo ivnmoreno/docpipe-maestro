@@ -19,7 +19,12 @@ _MULTI_NL_RE = re.compile(r"\n{3,}")
 
 
 def clean_text(text: str) -> str:
-    """Clean raw extracted text while preserving line breaks and clause numbering."""
+    """Clean raw extracted text while preserving line breaks and clause numbering.
+
+    Only recognized HTML tags and comments (``_TAG_RE``) are removed so numeric
+    inequalities (``hours > 15 ... < 20``) and angle-bracket placeholders
+    (``<collection>.json``) remain intact.
+    """
     cleaned = _TAG_RE.sub(" ", text)
     cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
     lines = [_MULTI_SPACE_RE.sub(" ", line).strip() for line in cleaned.splitlines()]
@@ -29,7 +34,12 @@ def clean_text(text: str) -> str:
 
 
 def clean_document(doc: ParsedDocument) -> ParsedDocument:
-    """Clean all sections in a ParsedDocument and strip repeated multi-page boilerplate."""
+    """Clean all sections in a ``ParsedDocument`` and strip multi-page boilerplate.
+
+    Tracks the first and last non-empty normalized line per paginated page; any
+    edge line appearing on three or more distinct pages is treated as recurring
+    header/footer boilerplate and stripped before emitting cleaned sections.
+    """
     page_edges: dict[int, set[str]] = {}
     precleaned: list[tuple[ParsedSection, str]] = []
     for sec in doc.sections:

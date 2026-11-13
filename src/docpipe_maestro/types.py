@@ -1,4 +1,9 @@
-"""Shared data shapes, constants, and exception hierarchy for docpipe-maestro."""
+"""Shared data shapes, constants, and exception hierarchy for docpipe-maestro.
+
+All cross-module schemas (chunks, profiles, manifest state, operation summaries,
+and error types) are defined exclusively here to prevent drift between Phase 1
+(ingestion) and Phase 2 (query) modules.
+"""
 
 from __future__ import annotations
 
@@ -30,7 +35,18 @@ class MissingCredentialError(DocpipeError):
 
 
 class ChunkMetadata(TypedDict):
-    """Structured metadata attached to every child and parent chunk."""
+    """Structured metadata attached to every child and parent chunk.
+
+    Attributes:
+        type: Distinguishes searchable ``"child"`` chunks from ``"parent"`` sections.
+        source: Normalized source key (relative POSIX path or filename).
+        doc_version: 12-character ``sha256`` content hash prefix of the source file.
+        section: Section heading label containing this chunk.
+        clause: Detected clause label (e.g., ``"4.2"``), or ``None`` when absent.
+        page: 1-based page number for paginated documents (PDF), or ``None``.
+        chunk_index: 0-based ordinal position within the parent section (or section index).
+        embed_model: ``provider/model`` identifier used to embed the collection.
+    """
 
     type: ChunkType
     source: str
@@ -53,7 +69,12 @@ def make_chunk_id(
     text: str,
     parent_id: str | None = None,
 ) -> str:
-    """Compute a deterministic 16-character hex content-addressed chunk ID."""
+    """Compute a deterministic 16-character hex content-addressed chunk ID.
+
+    Including ``source``, ``doc_version``, ``parent_id``, structural location,
+    and text guarantees reproducible IDs for identical inputs while isolating
+    sequential versions during transactional updates.
+    """
     payload = (
         f"{source}|{doc_version}|{chunk_type}|{parent_id or ''}|"
         f"{section}|{clause or ''}|{chunk_index}|{text}"
@@ -63,7 +84,17 @@ def make_chunk_id(
 
 @dataclass(slots=True)
 class Chunk:
-    """Foundational text unit produced by chunking and shared across all modules."""
+    """Foundational text unit produced by chunking and shared across all modules.
+
+    Enforces parent-child structural invariants: ``"child"`` chunks must carry a
+    non-empty ``parent_id``, whereas ``"parent"`` sections must have ``parent_id=None``.
+
+    Attributes:
+        id: Deterministic content-addressed 16-character hex identifier.
+        text: Chunk content (children carry a prepended ``[Source: ...]`` header).
+        parent_id: Identifier of the enclosing parent section, or ``None`` for parents.
+        metadata: Typed structural and provenance metadata.
+    """
 
     id: str
     text: str
@@ -71,6 +102,7 @@ class Chunk:
     metadata: ChunkMetadata
 
     def __post_init__(self) -> None:
+        """Validate child/parent linkage invariants against ``metadata['type']``."""
         chunk_type = self.metadata["type"]
         if chunk_type not in ("child", "parent"):
             raise ValueError(f"Invalid chunk type: {chunk_type!r}")
@@ -82,21 +114,38 @@ class Chunk:
 
 @dataclass(slots=True)
 class EmbeddedChunk(Chunk):
-    """A Chunk augmented with a vector representation."""
+    """A Chunk augmented with a dense embedding vector (or zero vector for parents).
+
+    Attributes:
+        vector: Embedding coordinates for children; ``[0.0] * dim`` for parents.
+    """
 
     vector: list[float] = field(default_factory=list)
 
 
 @dataclass(slots=True)
 class RetrievedChunk(EmbeddedChunk):
-    """An EmbeddedChunk returned from retrieval with a normalized similarity score."""
+    """An EmbeddedChunk returned from retrieval with a normalized similarity score.
+
+    Attributes:
+        score: Normalized cosine similarity clamped to ``[0.0, 1.0]``.
+    """
 
     score: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
 class ChunkingProfile:
-    """Static configuration defining chunking limits and structural behavior."""
+    """Static configuration defining chunking limits and structural behavior.
+
+    Attributes:
+        name: Canonical uppercase profile identifier (e.g., ``"DEFAULT"``, ``"POLICY"``).
+        chunk_size: Target maximum child chunk budget in estimated tokens.
+        overlap: Trailing word-token overlap carried within the same parent section.
+        clause_preserving: If ``True``, numbered/labeled clauses are never split mid-clause.
+        parent_child: Whether parent sections are emitted alongside linked child chunks.
+        resolve_crossrefs: Whether intra-document cross-references are appended to sections.
+    """
 
     name: str
     chunk_size: int
@@ -108,7 +157,20 @@ class ChunkingProfile:
 
 @dataclass(slots=True)
 class SourceRecord:
-    """Per-document manifest entry stored alongside the vector database."""
+    """Per-document manifest entry stored alongside the vector database.
+
+    Attributes:
+        source: Canonical relative POSIX path or filename for the indexed document.
+        content_hash: Full ``"sha256:<hex>"`` digest of the raw file bytes.
+        doc_version: Active 12-character hex version prefix stored in chunk metadata.
+        size: Raw file size in bytes recorded at commit time.
+        mtime: Filesystem modification timestamp used strictly as a fast-path hint.
+        ingested_at: ISO-8601 UTC timestamp of the last commit or reindex.
+        embed_model: ``provider/model`` string used to embed the document's children.
+        profile: Name of the ``ChunkingProfile`` used when chunking the document.
+        chunk_ids: Committed child chunk IDs owned by this source.
+        parent_ids: Committed parent section IDs owned by this source.
+    """
 
     source: str
     content_hash: str
@@ -122,6 +184,7 @@ class SourceRecord:
     parent_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize this source record into a JSON-compatible dictionary."""
         return {
             "source": self.source,
             "content_hash": self.content_hash,
@@ -137,6 +200,7 @@ class SourceRecord:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SourceRecord:
+        """Deserialize a ``SourceRecord`` from parsed manifest JSON data."""
         return cls(
             source=str(data["source"]),
             content_hash=str(data["content_hash"]),
@@ -153,7 +217,14 @@ class SourceRecord:
 
 @dataclass(slots=True)
 class Manifest:
-    """Collection-level manifest tracking the locked embedding model and indexed sources."""
+    """Collection-level manifest tracking the locked embedding model and indexed sources.
+
+    Attributes:
+        collection: Target ChromaDB collection name.
+        embed_model: Collection-locked embedding model, or ``None`` before first write.
+        embed_dim: Vector dimensionality recorded on first non-empty write, or ``None``.
+        sources: Mapping from canonical source key to committed ``SourceRecord``.
+    """
 
     collection: str
     embed_model: str | None = None
@@ -161,6 +232,7 @@ class Manifest:
     sources: dict[str, SourceRecord] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the collection manifest into a JSON-compatible dictionary."""
         return {
             "collection": self.collection,
             "embed_model": self.embed_model,
@@ -170,6 +242,7 @@ class Manifest:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Manifest:
+        """Deserialize a ``Manifest`` from parsed JSON data."""
         raw_sources = data.get("sources", {})
         return cls(
             collection=str(data["collection"]),
@@ -181,7 +254,16 @@ class Manifest:
 
 @dataclass(frozen=True, slots=True)
 class IngestResult:
-    """Summary returned by ingest()."""
+    """Summary returned by ``ingest()``.
+
+    Attributes:
+        collection: Target collection name.
+        embed_model: Embedding ``provider/model`` string used for the run.
+        ingested: Source keys newly indexed or re-indexed during this call.
+        skipped: Unchanged source keys skipped via the manifest fast-path or hash check.
+        chunks_written: Number of child chunks written to the vector store.
+        parents_written: Number of parent sections written to the vector store.
+    """
 
     collection: str
     embed_model: str
@@ -193,7 +275,16 @@ class IngestResult:
 
 @dataclass(frozen=True, slots=True)
 class SyncResult:
-    """Summary returned by sync()."""
+    """Summary returned by ``sync()``.
+
+    Attributes:
+        collection: Target collection name.
+        embed_model: Embedding ``provider/model`` string used for the run.
+        added: New source keys added to the collection.
+        updated: Modified source keys replaced via staged delete-then-reinsert.
+        skipped: Unchanged source keys skipped during reconciliation.
+        removed: Missing source keys purged from both the vector store and manifest.
+    """
 
     collection: str
     embed_model: str
@@ -205,7 +296,17 @@ class SyncResult:
 
 @dataclass(frozen=True, slots=True)
 class CollectionStatus:
-    """Read-only status summary returned by status()."""
+    """Read-only status summary returned by ``status()``.
+
+    Attributes:
+        collection: Target collection name.
+        embed_model: Locked collection embedding model, or ``None`` if empty.
+        embed_dim: Vector dimensionality recorded for the collection, or ``None``.
+        total_sources: Count of tracked documents in the manifest.
+        total_children: Sum of committed child chunks across all tracked sources.
+        total_parents: Sum of committed parent sections across all tracked sources.
+        sources: Tracked ``SourceRecord`` entries sorted lexicographically by source key.
+    """
 
     collection: str
     embed_model: str | None

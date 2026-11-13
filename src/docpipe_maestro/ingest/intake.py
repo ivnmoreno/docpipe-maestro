@@ -51,7 +51,17 @@ class ParsedDocument:
 
 
 def detect_format(path: Path) -> str:
-    """Detect document format by extension, falling back to content/magic-byte inspection."""
+    """Detect document format by extension, falling back to content/magic bytes.
+
+    Extension mapping covers ``.md``/``.markdown``, ``.txt``, ``.html``/``.htm``,
+    ``.pdf``, and ``.docx``. Extensionless files inspect the first 4 KiB for
+    ``%PDF-``, DOCX ZIP payloads (``word/document.xml``), HTML root tags,
+    Markdown headings, or valid UTF-8 plain text.
+
+    Raises:
+        UnsupportedFormatError: If ``path`` is unreadable, uses an unknown
+            extension, or contains unrecognized binary bytes.
+    """
     if not path.is_file():
         raise UnsupportedFormatError(f"Path is not a readable file: {path}")
 
@@ -107,6 +117,18 @@ def _sections_from_lines_stateful(
     initial_label: str = "Introduction",
     initial_level: int = 1,
 ) -> tuple[list[ParsedSection], str, int]:
+    """Parse lines into ``ParsedSection`` blocks while carrying heading state forward.
+
+    In Markdown mode, fenced code blocks (```` ``` ```` / ``~~~``) suppress
+    heading detection so shell/Python ``# comment`` lines stay inside their
+    enclosing section. Empty container headings (e.g., ``## 7. Title`` directly
+    followed by ``### 7.1``) are omitted unless an entire block yields zero
+    sections, in which case non-empty text falls back to a single section.
+
+    Returns:
+        Tuple of ``(sections, last_active_label, last_active_level)`` so
+        multi-page formats (such as PDF) can carry active headings across pages.
+    """
     sections: list[ParsedSection] = []
     current_label = initial_label
     current_level = initial_level
@@ -115,6 +137,7 @@ def _sections_from_lines_stateful(
     fence_len = 0
 
     def flush() -> None:
+        """Emit accumulated section lines if non-empty and clear buffer."""
         body = "\n".join(buf).strip()
         if body:
             sections.append(
@@ -180,6 +203,7 @@ def _sections_from_lines(
     page: int | None,
     markdown_mode: bool,
 ) -> list[ParsedSection]:
+    """Split lines into sections using default initial heading state."""
     sections, _, _ = _sections_from_lines_stateful(
         lines,
         source=source,
@@ -190,6 +214,12 @@ def _sections_from_lines(
 
 
 def _parse_pdf(path: Path, source_key: str) -> ParsedDocument:
+    """Extract per-page text and heuristic section headings from a PDF via ``pypdf``.
+
+    Raises:
+        MissingExtraError: If ``pypdf`` (the ``pdf`` extra) is not installed.
+        UnsupportedFormatError: If PDF reading or page extraction fails.
+    """
     try:
         from pypdf import PdfReader
     except ImportError as exc:
@@ -222,6 +252,12 @@ def _parse_pdf(path: Path, source_key: str) -> ParsedDocument:
 
 
 def _parse_docx(path: Path, source_key: str) -> ParsedDocument:
+    """Extract styled headings, paragraphs, and pipe-formatted tables from DOCX.
+
+    Raises:
+        MissingExtraError: If ``python-docx`` (the ``docx`` extra) is not installed.
+        UnsupportedFormatError: If DOCX opening or XML traversal fails.
+    """
     try:
         from docx import Document
         from docx.table import Table
@@ -239,6 +275,7 @@ def _parse_docx(path: Path, source_key: str) -> ParsedDocument:
         buf: list[str] = []
 
         def flush() -> None:
+            """Emit buffered DOCX body paragraphs/table rows as a section."""
             body = "\n".join(buf).strip()
             if body:
                 sections.append(
@@ -298,6 +335,16 @@ _HTML_CONTAINER_TAGS = {
 
 
 def _parse_html(path: Path, source_key: str) -> ParsedDocument:
+    """Extract headings, prose, lists, and tables from HTML via BeautifulSoup.
+
+    Decomposes ``<script>``, ``<style>``, ``<nav>``, ``<footer>``, and
+    ``<noscript>`` before DOM traversal so navigation/styling noise never
+    pollutes sections.
+
+    Raises:
+        MissingExtraError: If ``beautifulsoup4`` (the ``html`` extra) is absent.
+        UnsupportedFormatError: If reading or HTML parsing fails.
+    """
     try:
         from bs4 import BeautifulSoup
         from bs4.element import Comment, NavigableString, Tag
@@ -318,6 +365,7 @@ def _parse_html(path: Path, source_key: str) -> ParsedDocument:
         buf: list[str] = []
 
         def flush() -> None:
+            """Emit buffered HTML section content and reset buffer."""
             body = "\n".join(buf).strip()
             if body:
                 sections.append(
@@ -332,6 +380,7 @@ def _parse_html(path: Path, source_key: str) -> ParsedDocument:
             buf.clear()
 
         def walk(node: Any) -> None:
+            """Recursively traverse HTML nodes in document order without duplication."""
             nonlocal current_label, current_level
             if isinstance(node, Comment):
                 return
@@ -423,7 +472,19 @@ def _parse_html(path: Path, source_key: str) -> ParsedDocument:
 
 
 def parse_file(path: Path, *, source_key: str) -> ParsedDocument:
-    """Parse a single supported file into a structured ParsedDocument."""
+    """Parse a single supported file into a structured ``ParsedDocument``.
+
+    Args:
+        path: On-disk path to the source document.
+        source_key: Canonical relative key recorded on every emitted section.
+
+    Returns:
+        Structured ``ParsedDocument`` containing extracted ``ParsedSection`` items.
+
+    Raises:
+        UnsupportedFormatError: If format detection or UTF-8/binary parsing fails.
+        MissingExtraError: If a required optional parser dependency is missing.
+    """
     fmt = detect_format(path)
     if fmt == "pdf":
         return _parse_pdf(path, source_key)

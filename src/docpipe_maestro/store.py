@@ -1,4 +1,9 @@
-"""Embedded ChromaDB vector store adapter for Phase 1 writes and Phase 2 reads."""
+"""Embedded ChromaDB vector store adapter for Phase 1 writes and Phase 2 reads.
+
+Stores both child chunks (with dense vectors) and parent sections (with
+zero-vector placeholders) inside a single cosine-indexed collection, while
+stripping and restoring ``None`` metadata fields to satisfy ChromaDB scalar rules.
+"""
 
 from __future__ import annotations
 
@@ -60,6 +65,15 @@ class VectorStore:
     """ChromaDB PersistentClient wrapper enforcing cosine space and child-only search."""
 
     def __init__(self, persist_dir: Path, collection_name: str) -> None:
+        """Open or create a cosine-space persistent ChromaDB collection.
+
+        Args:
+            persist_dir: Local directory backing ChromaDB's persistent storage.
+            collection_name: Target ChromaDB collection identifier.
+
+        Raises:
+            DocpipeError: If ChromaDB rejects the collection name or initialization fails.
+        """
         self._persist_dir = persist_dir
         self._collection_name = collection_name
         self._persist_dir.mkdir(parents=True, exist_ok=True)
@@ -96,11 +110,25 @@ class VectorStore:
         top_k: int = 5,
         active_versions: dict[str, str] | None = None,
     ) -> list[RetrievedChunk]:
-        """Search child chunks exclusively (where={"type": "child"}) and return RetrievedChunks."""
+        """Search child chunks exclusively (``where={"type": "child"}``).
+
+        Args:
+            query_vector: Query embedding vector matching collection dimensionality.
+            top_k: Maximum committed child chunks to return.
+            active_versions: Optional map of ``source -> committed doc_version``.
+                When provided, uncommitted staging records are filtered out and
+                search over-fetches by ``2x`` so filtering still yields up to ``top_k``.
+
+        Returns:
+            Matched ``RetrievedChunk`` items with cosine similarity normalized onto
+            ``[0.0, 1.0]``.
+        """
         count = self._collection.count()
         if count == 0:
             return []
 
+        # Over-fetch 2x when active_versions is supplied so uncommitted staging records
+        # filtered below do not starve top_k committed results.
         n_results = min(max(top_k * 2, top_k), count) if active_versions else min(top_k, count)
         results = self._collection.query(
             query_embeddings=cast(Any, [query_vector]),
@@ -219,6 +247,7 @@ class VectorStore:
 
     @staticmethod
     def _hydrate_get_results(results: Any) -> list[EmbeddedChunk]:
+        """Convert raw ChromaDB ``get()`` dictionaries into typed ``EmbeddedChunk`` objects."""
         ids = results.get("ids") or []
         docs = results.get("documents") or []
         metas = results.get("metadatas") or []

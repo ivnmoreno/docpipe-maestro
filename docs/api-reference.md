@@ -1,0 +1,315 @@
+# Python API Reference
+
+This document specifies the complete public Python API of **`docpipe_maestro`**. Per Library Purity rules, **no library function ever reads a configuration file** — all configuration is passed via explicit keyword arguments and environment variables (for provider API keys).
+
+```python
+import docpipe_maestro
+from docpipe_maestro import (
+    ingest,
+    sync,
+    remove,
+    status,
+    reindex,
+    retrieve,
+    build_prompt,
+    answer,
+    Chunk,
+    EmbeddedChunk,
+    RetrievedChunk,
+    SourceRecord,
+    IngestResult,
+    SyncResult,
+    CollectionStatus,
+    DocpipeError,
+    UnsupportedFormatError,
+    MissingExtraError,
+    ModelMismatchError,
+    MissingCredentialError,
+)
+```
+
+---
+
+## 1. Phase 1: Offline Ingestion & Corpus Lifecycle
+
+### `ingest(...) -> IngestResult`
+
+```python
+def ingest(
+    path: str | Path,
+    *,
+    profile: str | ChunkingProfile = "DEFAULT",
+    collection: str = "default",
+    persist_dir: str | Path = ".docpipe",
+    embed_model: str = "ollama/nomic-embed-text",
+    force: bool = False,
+) -> IngestResult
+```
+
+Atomically ingests a single file or directory tree (recursively sorted by relative POSIX path) into ChromaDB and updates the collocated manifest.
+
+- **Batch Atomicity**: Parses, cleans, chunks, and embeds all changed files in memory *before* creating or modifying `VectorStore`. Any unsupported file or missing parser extra aborts the entire run cleanly.
+- **Fast-Path & Hash Check**: Files with unchanged `(size, mtime)` skip disk hashing unless `force=True`; changed timestamps with identical `sha256` refresh manifest metadata without re-embedding.
+- **Self-Exclusion**: Any directory matching `persist_dir` nested under `path` is automatically skipped.
+- **Empty Directories**: Raises `UnsupportedFormatError` if `path` does not exist or yields zero files.
+
+**Raises**: `UnsupportedFormatError`, `MissingExtraError`, `ModelMismatchError`, `MissingCredentialError`, `DocpipeError`.
+
+---
+
+### `sync(...) -> SyncResult`
+
+```python
+def sync(
+    directory: str | Path,
+    *,
+    profile: str | ChunkingProfile = "DEFAULT",
+    collection: str = "default",
+    persist_dir: str | Path = ".docpipe",
+    embed_model: str = "ollama/nomic-embed-text",
+) -> SyncResult
+```
+
+Performs three-way reconciliation between `directory` and `<persist_dir>/manifests/<collection>.json`:
+
+1. **Added**: New files on disk are parsed, chunked, embedded, and inserted.
+2. **Updated**: Modified files (different `sha256`) undergo staged delete-then-reinsert under a new `doc_version`, preventing orphaned clauses if the file shrank.
+3. **Skipped**: Files matching manifest hashes (even after `touch`) are skipped.
+4. **Removed**: Source keys tracked in the manifest that no longer exist under `directory` are purged from both ChromaDB and the manifest. (An empty existing directory cleanly purges all tracked sources.)
+
+**Raises**: `UnsupportedFormatError` (if `directory` is not an existing directory or contains an invalid file), `MissingExtraError`, `ModelMismatchError`, `MissingCredentialError`, `DocpipeError`.
+
+---
+
+### `remove(...) -> bool`
+
+```python
+def remove(
+    source: str | Path,
+    *,
+    collection: str = "default",
+    persist_dir: str | Path = ".docpipe",
+) -> bool
+```
+
+Deletes all child chunks, parent sections, and the manifest entry matching `Path(source).as_posix()`.
+
+- **Returns**: `True` if the source was tracked and purged; `False` if not present in the collection manifest.
+
+---
+
+### `status(...) -> CollectionStatus`
+
+```python
+def status(
+    *,
+    collection: str = "default",
+    persist_dir: str | Path = ".docpipe",
+) -> CollectionStatus
+```
+
+Read-only inspection of the manifest for `collection`. Does not initialize embeddings or mutate storage.
+
+- **Returns**: `CollectionStatus` with `embed_model`, `embed_dim`, aggregate `total_sources`, `total_children`, `total_parents`, and sorted `sources: list[SourceRecord]`.
+
+---
+
+### `reindex(...) -> int`
+
+```python
+def reindex(
+    *,
+    embed_model: str,
+    collection: str = "default",
+    persist_dir: str | Path = ".docpipe",
+) -> int
+```
+
+Migrates an existing collection to a new embedding model without re-parsing source files from disk:
+
+1. Reads all committed child and parent chunks directly from ChromaDB.
+2. Embeds all child chunks in memory under the new `embed_model` (if the collection is empty, updates `manifest.embed_model`, sets `embed_dim=None`, and returns `0`).
+3. Rebuilds parent zero-vector placeholders matching the new vector dimension `len(new_vectors[0])`.
+4. Resets the ChromaDB collection, inserts rebuilt records, and updates the manifest lock, `embed_dim`, and timestamps.
+
+- **Returns**: Number of committed child chunks re-embedded.
+- **Raises**: `MissingCredentialError`, `DocpipeError`.
+
+---
+
+## 2. Phase 2: Online Retrieval, Prompting & Optional Generation
+
+### `retrieve(...) -> list[RetrievedChunk]`
+
+```python
+def retrieve(
+    question: str,
+    *,
+    collection: str = "default",
+    persist_dir: str | Path = ".docpipe",
+    embed_model: str = "ollama/nomic-embed-text",
+    top_k: int = 5,
+    threshold: float | None = None,
+    expand_parent: bool = True,
+) -> list[RetrievedChunk]
+```
+
+Read-only semantic retrieval enforcing the collection's embedding model lock:
+
+- Checks `manifest.embed_model` via `check_model_lock()`; raises `ModelMismatchError` if locked to a different model.
+- Returns `[]` immediately without calling the embedder if the collection is empty or `top_k <= 0`.
+- Queries child chunks exclusively (`where={"type": "child"}`), filtering out any uncommitted `doc_version` entries.
+- Applies optional similarity cutoff `score >= threshold` (`score` is normalized cosine similarity in `[0.0, 1.0]`).
+- When `expand_parent=True`, resolves unique `parent_id` values via `get_by_ids()`, assigns each parent `max(child.score)` across its matched children, and returns sections sorted descending by `score`.
+- When `expand_parent=False`, returns matched child chunks sorted descending by `score`.
+
+**Raises**: `ModelMismatchError`, `MissingCredentialError`, `DocpipeError`.
+
+---
+
+### `build_prompt(...) -> str`
+
+```python
+def build_prompt(
+    question: str,
+    sections: Sequence[RetrievedChunk],
+) -> str
+```
+
+Pure, deterministic function (zero disk I/O, zero network calls) constructing a grounded prompt:
+
+- Formats each retrieved section with `[1] Source: ... | Section: ...` plus `| Clause: ...` and `| Page: ...` when non-`None`.
+- Separates sections with `---`.
+- Instructs the LLM to answer *only* from provided context, cite source/section/page, and state explicitly when the answer is absent. If `sections` is empty, inserts `(No relevant context sections retrieved.)`.
+
+---
+
+### `answer(...) -> str`
+
+```python
+def answer(
+    prompt: str,
+    *,
+    model: str = "ollama/llama3.2",
+    api_base: str | None = None,
+    has_context: bool = True,
+) -> str
+```
+
+Lazily loaded (`__getattr__` on `docpipe_maestro`) completion wrapper powered by `litellm.completion`:
+
+- **Empty Context Refusal**: When `has_context=False`, immediately returns `EMPTY_CONTEXT_REFUSAL` (`"Not found in the provided context."`) with zero LLM network calls.
+- **Custom Endpoints**: Pass `api_base="http://localhost:8000/v1"` for vLLM, LM Studio, or private OpenAI-compatible servers.
+- **Credential Hygiene**: LiteLLM reads provider API keys directly from environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, etc.); missing credentials raise `MissingCredentialError` without logging key values.
+
+**Raises**: `MissingExtraError` (if import fails), `MissingCredentialError`, `DocpipeError`.
+
+---
+
+## 3. Configuration & Profiles (`docpipe_maestro.config`)
+
+### Defaults
+
+| Constant | Value |
+|---|---|
+| `DEFAULT_COLLECTION` | `"default"` |
+| `DEFAULT_PERSIST_DIR` | `".docpipe"` |
+| `DEFAULT_EMBED_MODEL` | `"ollama/nomic-embed-text"` |
+| `DEFAULT_GENERATION_MODEL` | `"ollama/llama3.2"` |
+| `DEFAULT_TOP_K` | `5` |
+
+### Built-In Chunking Profiles
+
+| Constant | `name` | `chunk_size` | `overlap` | `clause_preserving` | `parent_child` | `resolve_crossrefs` |
+|---|---|---|---|---|---|---|
+| `DEFAULT` | `"DEFAULT"` | `512` | `64` | `False` | `True` | `False` |
+| `POLICY` | `"POLICY"` | `1000` | `80` | `True` | `True` | `True` |
+
+You may pass `"DEFAULT"`, `"POLICY"` (case-insensitive string resolved via `resolve_profile`), or construct a custom frozen `ChunkingProfile` instance in Python:
+
+```python
+from docpipe_maestro import ingest
+from docpipe_maestro.types import ChunkingProfile
+
+custom = ChunkingProfile(
+    name="STRICT_MANUAL",
+    chunk_size=750,
+    overlap=50,
+    clause_preserving=True,
+    parent_child=True,
+    resolve_crossrefs=True,
+)
+ingest("./manual.md", profile=custom, collection="manuals")
+```
+
+---
+
+## 4. Shared Data Models (`docpipe_maestro.types`)
+
+### `ChunkMetadata` (`TypedDict`)
+
+| Key | Type | Notes |
+|---|---|---|
+| `type` | `Literal["child", "parent"]` | Mandatory filter field in ChromaDB |
+| `source` | `str` | Canonical source key (filename or relative POSIX path) |
+| `doc_version` | `str` | 12-character `sha256` hex prefix of raw file bytes |
+| `section` | `str` | Section heading label (`"Introduction"` fallback if untitled) |
+| `clause` | `str \| None` | Clause label (e.g., `"2.1"`, `"Clause 4"`) or `None` |
+| `page` | `int \| None` | 1-based page number (PDF) or `None` |
+| `chunk_index` | `int` | 0-based position within parent (for children) or section ordinal (for parents) |
+| `embed_model` | `str` | `provider/model` used during embedding |
+
+### `Chunk`, `EmbeddedChunk`, `RetrievedChunk`
+
+- `Chunk(id: str, text: str, parent_id: str | None, metadata: ChunkMetadata)`:
+  - Validates invariants in `__post_init__`: raises `ValueError` if `"child"` lacks a non-empty `parent_id` or if `"parent"` has `parent_id is not None`.
+- `EmbeddedChunk(Chunk)`: adds `vector: list[float]`.
+- `RetrievedChunk(EmbeddedChunk)`: adds `score: float` in `[0.0, 1.0]`.
+
+### Operation & Manifest Records
+
+- `IngestResult`: `collection: str`, `embed_model: str`, `ingested: list[str]`, `skipped: list[str]`, `chunks_written: int`, `parents_written: int`
+- `SyncResult`: `collection: str`, `embed_model: str`, `added: list[str]`, `updated: list[str]`, `skipped: list[str]`, `removed: list[str]`
+- `CollectionStatus`: `collection: str`, `embed_model: str | None`, `embed_dim: int | None`, `total_sources: int`, `total_children: int`, `total_parents: int`, `sources: list[SourceRecord]`
+- `SourceRecord`: `source`, `content_hash`, `doc_version`, `size`, `mtime`, `ingested_at`, `embed_model`, `profile`, `chunk_ids`, `parent_ids` (supports `.to_dict()` / `.from_dict()`).
+
+---
+
+## 5. Exception Hierarchy
+
+```text
+DocpipeError (Exception)
+├── UnsupportedFormatError   # Unknown extension, missing file/dir, corrupted/binary content
+├── MissingExtraError        # Optional dependency missing (pypdf, python-docx, bs4, etc.)
+├── ModelMismatchError       # Requested embed_model conflicts with manifest.embed_model
+└── MissingCredentialError   # Provider rejected missing or invalid API key env var
+```
+
+Example defensive wrapper for an application backend:
+
+```python
+from docpipe_maestro import (
+    DocpipeError,
+    MissingCredentialError,
+    ModelMismatchError,
+    UnsupportedFormatError,
+    answer,
+    build_prompt,
+    retrieve,
+)
+
+
+def rag_answer(question: str, *, collection: str) -> tuple[str, list[str]]:
+    try:
+        sections = retrieve(question, collection=collection, top_k=5, threshold=0.35)
+        prompt = build_prompt(question, sections)
+        reply = answer(prompt, has_context=bool(sections))
+        citations = [f"{s.metadata['source']} :: {s.metadata['section']}" for s in sections]
+        return reply, citations
+    except ModelMismatchError as exc:
+        raise RuntimeError(f"Index needs reindex before querying: {exc}") from exc
+    except MissingCredentialError as exc:
+        raise RuntimeError("LLM/embedding API key environment variable is not configured.") from exc
+    except (UnsupportedFormatError, DocpipeError) as exc:
+        raise RuntimeError(f"RAG pipeline error: {exc}") from exc
+```

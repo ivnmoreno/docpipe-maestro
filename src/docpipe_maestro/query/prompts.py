@@ -15,7 +15,19 @@ _SYSTEM_INSTRUCTIONS = (
 
 
 def build_prompt(question: str, sections: Sequence[RetrievedChunk]) -> str:
-    """Pure function: construct a grounded prompt string with source citations."""
+    """Construct a grounded prompt string with source attribution metadata.
+
+    Pure function: performs zero disk I/O, zero network calls, and has no side
+    effects. Instructs the target LLM to answer solely from the supplied context
+    and cite ``Source``, ``Section``, optional ``Clause``, and optional ``Page``.
+
+    Args:
+        question: User's natural-language question.
+        sections: Retrieved sections/chunks produced by ``retrieve()``.
+
+    Returns:
+        Complete formatted prompt ready for an LLM completion call.
+    """
     if not sections:
         context_block = "(No relevant context sections retrieved.)"
     else:

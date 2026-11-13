@@ -31,7 +31,12 @@ from docpipe_maestro.types import DocpipeError
 
 
 def _load_toml_config(config_path: str | None) -> dict[str, Any]:
-    """Load an optional TOML user configuration file (CLI-only)."""
+    """Load an optional TOML user configuration file (permitted in CLI only).
+
+    Supported keys include ``collection``, ``persist_dir``, ``embed_model``,
+    ``model``, ``profile``, ``top_k``, and ``threshold``. Credentials must
+    never be stored here; use provider environment variables instead.
+    """
     if config_path is None:
         return {}
     path = Path(config_path)
@@ -47,7 +52,12 @@ def _load_toml_config(config_path: str | None) -> dict[str, Any]:
 
 
 def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentParser:
-    """Construct the docpipe CLI argument parser."""
+    """Construct the ``docpipe`` CLI parser with shared global options.
+
+    Uses a hidden ``common`` parent parser on every subcommand so ``--config``,
+    ``--collection``, and ``--persist-dir`` are accepted either before or after
+    the subcommand name, with explicit CLI flags overriding TOML defaults.
+    """
     cfg = defaults or {}
     default_collection = str(cfg.get("collection", DEFAULT_COLLECTION))
     default_persist_dir = str(cfg.get("persist_dir", DEFAULT_PERSIST_DIR))
@@ -144,7 +154,12 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """CLI entry point."""
+    """Run the ``docpipe`` CLI entry point and return a process exit code.
+
+    Catches ``DocpipeError`` and ``ValueError`` exceptions, prints a clean
+    single-line message to ``stderr``, and exits with status ``1`` instead of
+    emitting an unhandled traceback.
+    """
     arg_list = list(argv) if argv is not None else sys.argv[1:]
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--config", default=None)

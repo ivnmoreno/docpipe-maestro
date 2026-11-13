@@ -9,10 +9,12 @@ from docpipe_maestro.types import DocpipeError, MissingCredentialError
 
 
 def _item_field(item: Any, key: str) -> Any:
+    """Read an embedding item field whether LiteLLM returns a dict or object."""
     return item[key] if isinstance(item, Mapping) else getattr(item, key)
 
 
 def _is_auth_error(exc: Exception) -> bool:
+    """Heuristically classify credential/authentication errors without inspecting secrets."""
     name = type(exc).__name__.lower()
     msg = str(exc).lower()
     return (
@@ -31,7 +33,23 @@ def embed_texts(
     batch_size: int = 64,
     api_base: str | None = None,
 ) -> list[list[float]]:
-    """Embed a sequence of texts in batches using a provider/model string."""
+    """Embed a sequence of texts in batches using a ``provider/model`` string.
+
+    Args:
+        texts: Ordered input strings to embed. Empty sequence returns ``[]``.
+        model: LiteLLM provider/model identifier (e.g., ``"ollama/nomic-embed-text"``).
+        batch_size: Maximum inputs sent per ``litellm.embedding`` request.
+        api_base: Optional base URL override for self-hosted or proxy endpoints.
+
+    Returns:
+        Dense float vectors aligned 1-to-1 with ``texts`` and verified for
+        uniform dimensionality across batches.
+
+    Raises:
+        MissingCredentialError: If the provider reports missing/invalid credentials.
+        DocpipeError: If the provider call fails, returns an empty vector, or
+            returns inconsistent vector dimensions across items.
+    """
     if not texts:
         return []
 
@@ -81,6 +99,15 @@ def embed_query(
     model: str,
     api_base: str | None = None,
 ) -> list[float]:
-    """Embed a single query string using the specified provider/model."""
+    """Embed a single search query using the specified ``provider/model`` string.
+
+    Args:
+        text: User query text to embed.
+        model: LiteLLM provider/model identifier matching the collection lock.
+        api_base: Optional OpenAI-compatible or custom endpoint URL.
+
+    Returns:
+        Single dense embedding vector for ``text``.
+    """
     result = embed_texts([text], model=model, batch_size=1, api_base=api_base)
     return result[0]

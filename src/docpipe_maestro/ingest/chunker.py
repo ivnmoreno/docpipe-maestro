@@ -19,18 +19,23 @@ _CLAUSE_START_RE = re.compile(
 
 
 def estimate_tokens(text: str) -> int:
-    """Offline-safe deterministic token estimator (zero network calls)."""
+    """Offline-safe deterministic token estimator (zero network calls).
+
+    Approximates BPE token count from whitespace word count (``ceil(words * 4 / 3)``)
+    so fresh air-gapped environments never download remote tokenizers.
+    """
     words = len(text.split())
     return max(1, (words * 4 + 2) // 3) if words else 0
 
 
 def _split_into_clauses(raw_text: str) -> list[tuple[str | None, str]]:
-    """Split section text into (clause_label, clause_text) blocks on clause/paragraph boundaries."""
+    """Split section text into ``(clause_label, clause_text)`` blocks."""
     blocks: list[tuple[str | None, str]] = []
     current_label: str | None = None
     current_lines: list[str] = []
 
     def flush() -> None:
+        """Emit accumulated clause lines if non-empty and clear buffer."""
         text = "\n".join(current_lines).strip()
         if text:
             blocks.append((current_label, text))
@@ -87,6 +92,7 @@ def _format_child_text(
     clause: str | None,
     body: str,
 ) -> str:
+    """Prepend structural provenance header to a child chunk body."""
     if clause:
         header = f"[Source: {source} | Section: {section} | Clause: {clause}]"
     else:
@@ -137,6 +143,7 @@ def _build_section_children(
     doc_version: str,
     embed_model: str,
 ) -> list[Chunk]:
+    """Split a parent section into linked child ``Chunk`` objects."""
     clauses = _split_into_clauses(sec.raw_text)
     if profile.clause_preserving:
         units = clauses
@@ -192,7 +199,14 @@ def chunk_document(
     doc_version: str,
     embed_model: str,
 ) -> list[Chunk]:
-    """Chunk a cleaned ParsedDocument into parent sections and linked child chunks."""
+    """Chunk a cleaned ``ParsedDocument`` into parent sections and linked children.
+
+    Every ``ParsedSection`` becomes one ``"parent"`` chunk (``parent_id=None``)
+    paired with one or more ``"child"`` chunks linked via ``parent_id``. When
+    ``profile.clause_preserving`` is ``True`` (e.g., ``POLICY``), individual
+    clauses remain indivisible even if they exceed ``profile.chunk_size``.
+    Overlap resets at each parent section boundary.
+    """
     all_chunks: list[Chunk] = []
     for sec_idx, sec in enumerate(doc.sections):
         parent_id = make_chunk_id(
