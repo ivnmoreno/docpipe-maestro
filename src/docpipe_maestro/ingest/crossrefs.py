@@ -6,7 +6,7 @@ import logging
 import re
 from collections.abc import Sequence
 
-from docpipe_maestro.ingest.intake import ParsedDocument, ParsedSection
+from docpipe_maestro.types import ParsedDocument, ParsedSection
 
 logger = logging.getLogger(__name__)
 

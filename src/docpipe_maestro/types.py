@@ -34,6 +34,57 @@ class MissingCredentialError(DocpipeError):
     """Raised when a required provider credential environment variable is missing."""
 
 
+class RegistryError(DocpipeError):
+    """Raised when stage registration collides on a key or lookup misses a key."""
+
+
+@dataclass(slots=True)
+class ParsedClause:
+    """Internal Phase 1 representation of a clause or paragraph block."""
+
+    clause_label: str | None
+    text: str
+    page: int | None = None
+
+
+@dataclass(slots=True)
+class ParsedSection:
+    """Internal Phase 1 representation of a document section."""
+
+    source: str
+    section_label: str
+    heading_level: int
+    raw_text: str
+    page: int | None = None
+    clauses: list[ParsedClause] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ParsedDocument:
+    """Internal Phase 1 representation of an ingested source file."""
+
+    source: str
+    format_name: str
+    sections: list[ParsedSection] = field(default_factory=list)
+
+
+class _IngestContextBase(TypedDict):
+    """Required execution context fields passed to Phase 1 enricher stages."""
+
+    collection: str
+    source: str
+    content_hash: str
+    doc_version: str
+    embed_model: str
+    profile: str
+
+
+class IngestContext(_IngestContextBase, total=False):
+    """Execution context passed to Phase 1 ``Enricher`` stage extensions."""
+
+    extra: dict[str, Any]
+
+
 class ChunkMetadata(TypedDict):
     """Structured metadata attached to every child and parent chunk.
 

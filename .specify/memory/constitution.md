@@ -1,15 +1,12 @@
 <!--
 # Sync Impact Report
-- Version change: 1.1.0 -> 1.2.0
-- Rationale: Reconcile baseline governance before modular registry refactoring — clarify Principle I ("minimal" bounds scope, not engineering rigor), designate the reverse exception-preservation suite as mandatory Release Gate #1 while reserving Release Gate #2 for future PII safety, align Quality Gates' public API contract list with all shipped 001/002 exports, and remove the stale "[generation] is an optional extra" claim from Footprint while retaining core local CPU constraints.
-- Migration Note: Documentation and governance alignment only; zero breaking changes to existing Python APIs, CLI behavior, stored collections, or runtime dependencies.
-- List of modified principles:
-  - Principle I (Scope Discipline): Clarified that minimal scope never means minimal engineering rigor or testing discipline.
-  - Principle V (Exception Preservation): Numbered the reverse test as mandatory Release Gate #1 and reserved Release Gate #2 for planned PII safety.
+- Version change: 1.2.0 -> 1.2.1
+- Rationale: Sync Quality Gates' public API contract enumeration with the Stage 1 004-registry-refactor extension surface (`RegistryError` and the eight lazy `register_*` public extension decorators) while preserving Release Gate #2 reservation for Stage 4 (`v1.3.0`).
+- Migration Note: Governance enumeration sync only; zero breaking changes to existing Python APIs, CLI behavior, stored collections, or runtime dependencies.
+- List of modified principles: None
 - Modified sections:
-  - Additional Constraints -> Quality Gates (numbered Release Gate #1 and reserved Release Gate #2; synced full public API surface contract)
-  - Additional Constraints -> Footprint (removed obsolete "[generation] is an optional extra" claim while preserving 16 GB RAM CPU-only local constraint)
-- Follow-up TODOs: Implement and activate Release Gate #2 (`@pytest.mark.pii`) in the dedicated PII Protection stage (Stage 4).
+  - Additional Constraints -> Quality Gates (added `RegistryError` and `register_parser`, `register_cleaner`, `register_enricher`, `register_chunker`, `register_embedder`, `register_store`, `register_searcher`, `register_reranker` to the public API surface contract)
+- Follow-up TODOs: Implement and activate Release Gate #2 (`@pytest.mark.pii`) in the dedicated PII Protection stage (Stage 4 / v1.3.0).
 -->
 
 # docpipe-maestro Constitution
@@ -112,12 +109,15 @@ across modules is prohibited.
   release, and publishing uses trusted publishing rather than long-lived tokens.
 - The public API surface is the contract: `ingest`, `sync`, `remove`, `status`,
   `reindex`, `retrieve`, `build_prompt`, `build_chat_messages`, optional `answer`,
-  `answer_detailed`, shared data/result shapes (`Chunk`, `EmbeddedChunk`,
-  `RetrievedChunk`, `SourceRecord`, `IngestResult`, `SyncResult`, `CollectionStatus`,
-  `GenerationResult`), public exceptions (`DocpipeError`, `MissingExtraError`,
-  `UnsupportedFormatError`, `EmptyDocumentError`, `ModelMismatchError`,
-  `MissingCredentialError`, `IngestionError`, `GenerationError`), and `__version__`.
-  If a feature cannot be reached through that surface, it does not belong in the core.
+  `answer_detailed`, extension decorators (`register_parser`, `register_cleaner`,
+  `register_enricher`, `register_chunker`, `register_embedder`, `register_store`,
+  `register_searcher`, `register_reranker`), shared data/result shapes (`Chunk`,
+  `EmbeddedChunk`, `RetrievedChunk`, `SourceRecord`, `IngestResult`, `SyncResult`,
+  `CollectionStatus`, `GenerationResult`), public exceptions (`DocpipeError`,
+  `MissingExtraError`, `UnsupportedFormatError`, `EmptyDocumentError`,
+  `ModelMismatchError`, `MissingCredentialError`, `RegistryError`, `IngestionError`,
+  `GenerationError`), and `__version__`. If a feature cannot be reached through that
+  surface, it does not belong in the core.
 
 ### Footprint
 
@@ -143,4 +143,4 @@ across modules is prohibited.
 > correctly, embeds it, stores it, retrieves the right sections, and optionally
 > generates a grounded answer. It is the engine — not the app, not the framework."
 
-**Version**: 1.2.0 | **Ratified**: 2026-11-12 | **Last Amended**: 2026-11-13
+**Version**: 1.2.1 | **Ratified**: 2026-11-12 | **Last Amended**: 2026-11-13

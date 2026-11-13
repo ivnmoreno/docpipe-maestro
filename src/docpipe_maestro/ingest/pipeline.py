@@ -6,24 +6,26 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+from docpipe_maestro._resolve import resolve_parser
+from docpipe_maestro._stages import Embedder, Store
 from docpipe_maestro.config import (
     DEFAULT_COLLECTION,
     DEFAULT_EMBED_MODEL,
     DEFAULT_PERSIST_DIR,
     resolve_profile,
 )
-from docpipe_maestro.embedder import embed_texts
-from docpipe_maestro.ingest.chunker import chunk_document
-from docpipe_maestro.ingest.clean import clean_document
+from docpipe_maestro.embedder import EMBEDDERS
+from docpipe_maestro.ingest.chunker import CHUNKERS
+from docpipe_maestro.ingest.clean import CLEANERS
 from docpipe_maestro.ingest.crossrefs import resolve_crossrefs
-from docpipe_maestro.ingest.intake import ParsedDocument, parse_file
+from docpipe_maestro.ingest.stages import Chunker, Cleaner
 from docpipe_maestro.manifest import (
     check_model_lock,
     classify_file,
     load_manifest,
     save_manifest,
 )
-from docpipe_maestro.store import VectorStore
+from docpipe_maestro.store import STORES
 from docpipe_maestro.types import (
     Chunk,
     ChunkingProfile,
@@ -32,6 +34,7 @@ from docpipe_maestro.types import (
     DocpipeError,
     EmbeddedChunk,
     IngestResult,
+    ParsedDocument,
     SourceRecord,
     SyncResult,
     UnsupportedFormatError,
@@ -81,13 +84,14 @@ def _discover_files(
 def _embed_document_chunks(
     chunks: list[Chunk],
     *,
+    embedder_inst: Embedder,
     embed_model: str,
 ) -> tuple[list[EmbeddedChunk], int]:
     """Embed all child chunks in memory and attach zero vectors to parent sections."""
     child_chunks = [c for c in chunks if c.metadata["type"] == "child"]
     parent_chunks = [c for c in chunks if c.metadata["type"] == "parent"]
 
-    child_vectors = embed_texts([c.text for c in child_chunks], model=embed_model)
+    child_vectors = embedder_inst.embed_texts([c.text for c in child_chunks], model=embed_model)
     if not child_vectors:
         return [], 0
     dim = len(child_vectors[0])
@@ -125,11 +129,15 @@ def ingest(
     persist_dir: str | Path = DEFAULT_PERSIST_DIR,
     embed_model: str = DEFAULT_EMBED_MODEL,
     force: bool = False,
+    cleaner: str = "default",
+    chunker: str = "default",
+    embedder: str = "default",
+    store: str = "default",
 ) -> IngestResult:
     """Ingest a file or directory atomically into the vector database.
 
     Validates, parses, cleans, chunks, and embeds all changed files in memory
-    *before* initializing or mutating ``VectorStore``. Each changed document is
+    *before* initializing or mutating ``Store``. Each changed document is
     written under a new ``doc_version``, committed atomically in the manifest,
     and prior versions for that source are purged afterward so failed updates
     leave the previous version intact and queryable.
@@ -141,6 +149,10 @@ def ingest(
         persist_dir: Local persistence directory for ChromaDB and manifests.
         embed_model: LiteLLM ``provider/model`` identifier for child embeddings.
         force: Re-ingest files even when ``mtime``/``size``/``sha256`` match.
+        cleaner: Registered ``CLEANERS`` key (defaults to ``"default"``).
+        chunker: Registered ``CHUNKERS`` key (defaults to ``"default"``).
+        embedder: Registered ``EMBEDDERS`` key (defaults to ``"default"``).
+        store: Registered ``STORES`` key (defaults to ``"default"``).
 
     Returns:
         Summary of ingested/skipped source keys and written child/parent counts.
@@ -152,6 +164,7 @@ def ingest(
             ``html``) is not installed.
         ModelMismatchError: If ``collection`` is already locked to another model.
         MissingCredentialError: If provider credentials are missing or invalid.
+        RegistryError: If any requested stage key is unregistered.
         DocpipeError: If embedding or store initialization fails.
     """
     target = Path(path)
@@ -163,16 +176,21 @@ def ingest(
 
     discovered = _discover_files(target, persist_path=persist_path)
 
+    cleaner_inst: Cleaner = CLEANERS.resolve(cleaner)()
+    chunker_inst: Chunker = CHUNKERS.resolve(chunker)()
+    embedder_inst: Embedder = EMBEDDERS.resolve(embedder)()
+    store_cls: type[Store] = STORES.resolve(store)
+
     # Atomic batch validation & in-memory parsing/chunking/embedding before touching the DB
     staged_docs: list[tuple[str, str, str, int, float, list[EmbeddedChunk], int]] = []
     skipped: list[str] = []
     manifest_dirty = False
 
     for file_path, source_key in discovered:
-        status, content_hash, size, mtime = classify_file(
+        status_flag, content_hash, size, mtime = classify_file(
             file_path, source_key, manifest, force=force
         )
-        if status == "unchanged":
+        if status_flag == "unchanged":
             skipped.append(source_key)
             existing = manifest.sources[source_key]
             if existing.size != size or existing.mtime != mtime:
@@ -184,32 +202,36 @@ def ingest(
         if content_hash is None:
             raise DocpipeError(f"Missing content hash for non-unchanged file: {source_key}")
         doc_version = content_hash.split(":", 1)[1][:12]
-        parsed: ParsedDocument = parse_file(file_path, source_key=source_key)
-        cleaned = clean_document(parsed)
+        parsed: ParsedDocument = resolve_parser(file_path).parse(file_path, source_key=source_key)
+        cleaned = cleaner_inst.clean(parsed)
         if prof.resolve_crossrefs:
             cleaned = resolve_crossrefs(cleaned)
-        chunks = chunk_document(
+        chunks = chunker_inst.chunk(
             cleaned,
             profile=prof,
             doc_version=doc_version,
             embed_model=embed_model,
         )
-        embedded, dim = _embed_document_chunks(chunks, embed_model=embed_model)
+        embedded, dim = _embed_document_chunks(
+            chunks,
+            embedder_inst=embedder_inst,
+            embed_model=embed_model,
+        )
         staged_docs.append((source_key, content_hash, doc_version, size, mtime, embedded, dim))
 
     if manifest_dirty and not staged_docs:
         save_manifest(persist_path, manifest)
 
-    store = VectorStore(persist_path, collection)
+    store_obj: Store = store_cls(persist_path, collection)
     active_versions = {k: v.doc_version for k, v in manifest.sources.items()}
-    store.sweep_uncommitted(active_versions)
+    store_obj.sweep_uncommitted(active_versions)
 
     ingested: list[str] = []
     chunks_written = 0
     parents_written = 0
 
     for source_key, content_hash, doc_version, size, mtime, embedded, dim in staged_docs:
-        store.add_chunks(embedded)
+        store_obj.add_chunks(embedded)
 
         child_ids = [c.id for c in embedded if c.metadata["type"] == "child"]
         parent_ids = [c.id for c in embedded if c.metadata["type"] == "parent"]
@@ -232,7 +254,7 @@ def ingest(
             parent_ids=parent_ids,
         )
         save_manifest(persist_path, manifest)
-        store.delete_stale_versions(source_key, doc_version)
+        store_obj.delete_stale_versions(source_key, doc_version)
 
         ingested.append(source_key)
         chunks_written += len(child_ids)
@@ -255,6 +277,10 @@ def sync(
     collection: str = DEFAULT_COLLECTION,
     persist_dir: str | Path = DEFAULT_PERSIST_DIR,
     embed_model: str = DEFAULT_EMBED_MODEL,
+    cleaner: str = "default",
+    chunker: str = "default",
+    embedder: str = "default",
+    store: str = "default",
 ) -> SyncResult:
     """Three-way reconcile ``directory`` against the collection manifest.
 
@@ -269,6 +295,10 @@ def sync(
         collection: Target ChromaDB collection and manifest name.
         persist_dir: Local persistence directory for ChromaDB and manifests.
         embed_model: LiteLLM ``provider/model`` identifier for child embeddings.
+        cleaner: Registered ``CLEANERS`` key (defaults to ``"default"``).
+        chunker: Registered ``CHUNKERS`` key (defaults to ``"default"``).
+        embedder: Registered ``EMBEDDERS`` key (defaults to ``"default"``).
+        store: Registered ``STORES`` key (defaults to ``"default"``).
 
     Returns:
         ``SyncResult`` listing ``added``, ``updated``, ``skipped``, and
@@ -280,6 +310,7 @@ def sync(
         MissingExtraError: If a required format parser extra is missing.
         ModelMismatchError: If ``collection`` is locked to a different model.
         MissingCredentialError: If embedding credentials are missing or invalid.
+        RegistryError: If any requested stage key is unregistered.
         DocpipeError: If embedding or store operations fail.
     """
     target = Path(directory)
@@ -294,6 +325,11 @@ def sync(
     discovered = _discover_files(target, persist_path=persist_path, allow_empty=True)
     disk_keys = {source_key for _, source_key in discovered}
     removed_keys = sorted(set(manifest.sources.keys()) - disk_keys)
+
+    cleaner_inst: Cleaner = CLEANERS.resolve(cleaner)()
+    chunker_inst: Chunker = CHUNKERS.resolve(chunker)()
+    embedder_inst: Embedder = EMBEDDERS.resolve(embedder)()
+    store_cls: type[Store] = STORES.resolve(store)
 
     staged_docs: list[tuple[str, str, str, str, int, float, list[EmbeddedChunk], int]] = []
     skipped: list[str] = []
@@ -313,24 +349,28 @@ def sync(
         if content_hash is None:
             raise DocpipeError(f"Missing content hash for non-unchanged file: {source_key}")
         doc_version = content_hash.split(":", 1)[1][:12]
-        parsed = parse_file(file_path, source_key=source_key)
-        cleaned = clean_document(parsed)
+        parsed = resolve_parser(file_path).parse(file_path, source_key=source_key)
+        cleaned = cleaner_inst.clean(parsed)
         if prof.resolve_crossrefs:
             cleaned = resolve_crossrefs(cleaned)
-        chunks = chunk_document(
+        chunks = chunker_inst.chunk(
             cleaned,
             profile=prof,
             doc_version=doc_version,
             embed_model=embed_model,
         )
-        embedded, dim = _embed_document_chunks(chunks, embed_model=embed_model)
+        embedded, dim = _embed_document_chunks(
+            chunks,
+            embedder_inst=embedder_inst,
+            embed_model=embed_model,
+        )
         staged_docs.append(
             (status_flag, source_key, content_hash, doc_version, size, mtime, embedded, dim)
         )
 
-    store = VectorStore(persist_path, collection)
+    store_obj: Store = store_cls(persist_path, collection)
     active_versions = {k: v.doc_version for k, v in manifest.sources.items()}
-    store.sweep_uncommitted(active_versions)
+    store_obj.sweep_uncommitted(active_versions)
 
     added: list[str] = []
     updated: list[str] = []
@@ -345,7 +385,7 @@ def sync(
         embedded,
         dim,
     ) in staged_docs:
-        store.add_chunks(embedded)
+        store_obj.add_chunks(embedded)
         child_ids = [c.id for c in embedded if c.metadata["type"] == "child"]
         parent_ids = [c.id for c in embedded if c.metadata["type"] == "parent"]
 
@@ -367,7 +407,7 @@ def sync(
             parent_ids=parent_ids,
         )
         save_manifest(persist_path, manifest)
-        store.delete_stale_versions(source_key, doc_version)
+        store_obj.delete_stale_versions(source_key, doc_version)
 
         if doc_status == "new":
             added.append(source_key)
@@ -375,7 +415,7 @@ def sync(
             updated.append(source_key)
 
     for source_key in removed_keys:
-        store.delete_by_source(source_key)
+        store_obj.delete_by_source(source_key)
         manifest.sources.pop(source_key, None)
         manifest_dirty = True
 
@@ -397,6 +437,7 @@ def remove(
     *,
     collection: str = DEFAULT_COLLECTION,
     persist_dir: str | Path = DEFAULT_PERSIST_DIR,
+    store: str = "default",
 ) -> bool:
     """Remove all vector records and the manifest entry for a single source.
 
@@ -404,18 +445,21 @@ def remove(
         source: Canonical source key tracked in the collection manifest.
         collection: Target collection name.
         persist_dir: Local persistence directory.
+        store: Registered ``STORES`` key (defaults to ``"default"``).
 
     Returns:
         ``True`` if the source existed and was purged, ``False`` otherwise.
     """
+    if store != "default":
+        STORES.resolve(store)
     source_key = Path(source).as_posix()
     persist_path = Path(persist_dir)
     manifest = load_manifest(persist_path, collection)
     if source_key not in manifest.sources:
         return False
 
-    store = VectorStore(persist_path, collection)
-    store.delete_by_source(source_key)
+    store_obj: Store = STORES.resolve(store)(persist_path, collection)
+    store_obj.delete_by_source(source_key)
     manifest.sources.pop(source_key)
     save_manifest(persist_path, manifest)
     return True
@@ -425,17 +469,23 @@ def status(
     *,
     collection: str = DEFAULT_COLLECTION,
     persist_dir: str | Path = DEFAULT_PERSIST_DIR,
+    store: str = "default",
 ) -> CollectionStatus:
     """Return a read-only summary of the collection's manifest state.
 
     Args:
         collection: Target collection name.
         persist_dir: Local persistence directory.
+        store: Registered ``STORES`` key (defaults to ``"default"``). Non-default
+            keys are validated against ``STORES`` while source metrics are read
+            from the collection JSON manifest.
 
     Returns:
         ``CollectionStatus`` containing locked model metadata, aggregate child
         and parent counts, and sorted per-source ``SourceRecord`` entries.
     """
+    if store != "default":
+        STORES.resolve(store)
     manifest = load_manifest(Path(persist_dir), collection)
     sources = sorted(manifest.sources.values(), key=lambda s: s.source)
     total_children = sum(len(s.chunk_ids) for s in sources)
@@ -456,38 +506,44 @@ def reindex(
     embed_model: str,
     collection: str = DEFAULT_COLLECTION,
     persist_dir: str | Path = DEFAULT_PERSIST_DIR,
+    embedder: str = "default",
+    store: str = "default",
 ) -> int:
     """Re-embed all existing stored child chunks under a new embedding model.
 
     Computes all new child vectors in memory first, updates parent zero-vector
-    dimensions to match, rebuilds the ChromaDB collection cleanly, and updates
+    dimensions to match, rebuilds the vector collection cleanly, and updates
     the manifest's model lock and vector dimensionality.
 
     Args:
         embed_model: New LiteLLM ``provider/model`` identifier for the collection.
         collection: Target collection name.
         persist_dir: Local persistence directory.
+        embedder: Registered ``EMBEDDERS`` key (defaults to ``"default"``).
+        store: Registered ``STORES`` key (defaults to ``"default"``).
 
     Returns:
         Count of committed child chunks re-embedded.
 
     Raises:
         MissingCredentialError: If provider credentials for ``embed_model`` fail.
+        RegistryError: If ``embedder`` or ``store`` is unregistered.
         DocpipeError: If embedding or collection recreation fails.
     """
     persist_path = Path(persist_dir)
     manifest = load_manifest(persist_path, collection)
-    store = VectorStore(persist_path, collection)
+    embedder_inst: Embedder = EMBEDDERS.resolve(embedder)()
+    store_obj: Store = STORES.resolve(store)(persist_path, collection)
 
     active_versions = {k: v.doc_version for k, v in manifest.sources.items()}
     children = [
         c
-        for c in store.get_all_children()
+        for c in store_obj.get_all_children()
         if active_versions.get(c.metadata["source"]) == c.metadata["doc_version"]
     ]
     parents = [
         p
-        for p in store.get_all_parents()
+        for p in store_obj.get_all_parents()
         if active_versions.get(p.metadata["source"]) == p.metadata["doc_version"]
     ]
 
@@ -497,8 +553,8 @@ def reindex(
         save_manifest(persist_path, manifest)
         return 0
 
-    # Embed all children in memory before mutating ChromaDB or manifest
-    new_vectors = embed_texts([c.text for c in children], model=embed_model)
+    # Embed all children in memory before mutating store or manifest
+    new_vectors = embedder_inst.embed_texts([c.text for c in children], model=embed_model)
     new_dim = len(new_vectors[0])
     zero_vec = [0.0] * new_dim
 
@@ -532,8 +588,8 @@ def reindex(
             )
         )
 
-    store.reset_collection()
-    store.add_chunks(rebuilt)
+    store_obj.reset_collection()
+    store_obj.add_chunks(rebuilt)
 
     manifest.embed_model = embed_model
     manifest.embed_dim = new_dim
