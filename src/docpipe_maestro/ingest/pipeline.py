@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,12 +29,15 @@ from docpipe_maestro.types import (
     ChunkingProfile,
     ChunkMetadata,
     CollectionStatus,
+    DocpipeError,
     EmbeddedChunk,
     IngestResult,
     SourceRecord,
     SyncResult,
     UnsupportedFormatError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _is_within(path: Path, parent: Path) -> bool:
@@ -55,14 +59,22 @@ def _discover_files(
     if target.is_file():
         return [(target, target.name)]
     if target.is_dir():
-        files = sorted(
-            p
-            for p in target.rglob("*")
-            if p.is_file() and (persist_path is None or not _is_within(p, persist_path))
-        )
-        if not files and not allow_empty:
+        candidates: list[Path] = []
+        for p in sorted(target.rglob("*")):
+            if p.is_symlink():
+                logger.warning("Skipping symlink during directory discovery: %s", p)
+                continue
+            if not p.is_file():
+                continue
+            if not _is_within(p, target):
+                logger.warning("Skipping path escaping target directory: %s", p)
+                continue
+            if persist_path is not None and _is_within(p, persist_path):
+                continue
+            candidates.append(p)
+        if not candidates and not allow_empty:
             raise UnsupportedFormatError(f"No files found in directory: {target}")
-        return [(p, p.relative_to(target).as_posix()) for p in files]
+        return [(p, p.relative_to(target).as_posix()) for p in candidates]
     raise UnsupportedFormatError(f"Path does not exist: {target}")
 
 
@@ -169,7 +181,8 @@ def ingest(
                 manifest_dirty = True
             continue
 
-        assert content_hash is not None
+        if content_hash is None:
+            raise DocpipeError(f"Missing content hash for non-unchanged file: {source_key}")
         doc_version = content_hash.split(":", 1)[1][:12]
         parsed: ParsedDocument = parse_file(file_path, source_key=source_key)
         cleaned = clean_document(parsed)
@@ -297,7 +310,8 @@ def sync(
                 manifest_dirty = True
             continue
 
-        assert content_hash is not None
+        if content_hash is None:
+            raise DocpipeError(f"Missing content hash for non-unchanged file: {source_key}")
         doc_version = content_hash.split(":", 1)[1][:12]
         parsed = parse_file(file_path, source_key=source_key)
         cleaned = clean_document(parsed)

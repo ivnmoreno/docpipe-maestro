@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import os
+import re
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, NoReturn
+from urllib.parse import urlparse
 
 from docpipe_maestro.types import DocpipeError, MissingCredentialError
+
+DEFAULT_REQUEST_TIMEOUT = 120.0
+_SECRET_PATTERN_RE = re.compile(
+    r"(?:://[^/\s:@]+:[^/\s@]+@|\bsk-[A-Za-z0-9_-]{8,}|\bgsk_[A-Za-z0-9_-]{8,}|\bBearer\s+\S+)",
+    re.IGNORECASE,
+)
 
 
 def _item_field(item: Any, key: str) -> Any:
@@ -24,6 +33,47 @@ def _is_auth_error(exc: Exception) -> bool:
         or "credentials" in msg
         or "unauthorized" in msg
     )
+
+
+def _contains_secret_data(exc: Exception) -> bool:
+    """Detect whether an exception message embeds URL credentials or token substrings."""
+    return bool(_SECRET_PATTERN_RE.search(str(exc)))
+
+
+def validate_api_base(api_base: str | None) -> str | None:
+    """Ensure optional custom endpoint URLs use an explicit http or https scheme."""
+    if api_base is None:
+        return None
+    parsed = urlparse(api_base)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise DocpipeError(
+            f"Invalid api_base URL {api_base!r}: must start with http:// or https://"
+        )
+    return api_base
+
+
+def prepare_litellm() -> Any:
+    """Import LiteLLM with bundled local cost map enabled by default for air-gapped safety."""
+    os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")
+    import litellm
+
+    return litellm
+
+
+def raise_litellm_error(exc: Exception, *, operation: str, model: str) -> NoReturn:
+    """Convert LiteLLM failures into typed ``DocpipeError`` without leaking credentials."""
+    if _is_auth_error(exc):
+        raise MissingCredentialError(
+            f"Missing or invalid provider credentials for {operation} model {model!r}. "
+            "Set the provider's environment variable and retry."
+        ) from None
+    if _contains_secret_data(exc):
+        raise DocpipeError(
+            f"{operation.capitalize()} request failed for model {model!r}: {type(exc).__name__}"
+        ) from None
+    raise DocpipeError(
+        f"{operation.capitalize()} request failed for model {model!r}: {type(exc).__name__}"
+    ) from exc
 
 
 def embed_texts(
@@ -53,27 +103,25 @@ def embed_texts(
     if not texts:
         return []
 
-    import litellm
+    validated_base = validate_api_base(api_base)
+    litellm = prepare_litellm()
 
     vectors: list[list[float]] = []
     expected_dim: int | None = None
 
     for start in range(0, len(texts), batch_size):
         batch = list(texts[start : start + batch_size])
-        kwargs: dict[str, Any] = {"model": model, "input": batch}
-        if api_base is not None:
-            kwargs["api_base"] = api_base
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "input": batch,
+            "timeout": DEFAULT_REQUEST_TIMEOUT,
+        }
+        if validated_base is not None:
+            kwargs["api_base"] = validated_base
         try:
             response = litellm.embedding(**kwargs)
         except Exception as exc:
-            if _is_auth_error(exc):
-                raise MissingCredentialError(
-                    f"Missing or invalid provider credentials for embedding model {model!r}. "
-                    "Set the provider's environment variable and retry."
-                ) from None
-            raise DocpipeError(
-                f"Embedding request failed for model {model!r}: {type(exc).__name__}"
-            ) from exc
+            raise_litellm_error(exc, operation="embedding", model=model)
 
         data = response["data"] if isinstance(response, dict) else response.data
         sorted_items = sorted(data, key=lambda item: int(_item_field(item, "index")))

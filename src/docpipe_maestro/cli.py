@@ -51,6 +51,36 @@ def _load_toml_config(config_path: str | None) -> dict[str, Any]:
     return dict(data)
 
 
+def _cfg_str(cfg: dict[str, Any], key: str, fallback: str) -> str:
+    """Validate and return a string configuration value from parsed TOML defaults."""
+    val = cfg.get(key)
+    if val is None:
+        return fallback
+    if not isinstance(val, str):
+        raise DocpipeError(f"Invalid TOML config value for {key!r}: expected string")
+    return val
+
+
+def _cfg_int(cfg: dict[str, Any], key: str, fallback: int) -> int:
+    """Validate and return an integer configuration value (rejecting booleans/lists)."""
+    val = cfg.get(key)
+    if val is None:
+        return fallback
+    if isinstance(val, bool) or not isinstance(val, int):
+        raise DocpipeError(f"Invalid TOML config value for {key!r}: expected integer")
+    return val
+
+
+def _cfg_opt_float(cfg: dict[str, Any], key: str) -> float | None:
+    """Validate and return an optional float configuration value from TOML defaults."""
+    val = cfg.get(key)
+    if val is None:
+        return None
+    if isinstance(val, bool) or not isinstance(val, (int, float)):
+        raise DocpipeError(f"Invalid TOML config value for {key!r}: expected number")
+    return float(val)
+
+
 def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentParser:
     """Construct the ``docpipe`` CLI parser with shared global options.
 
@@ -59,14 +89,13 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     the subcommand name, with explicit CLI flags overriding TOML defaults.
     """
     cfg = defaults or {}
-    default_collection = str(cfg.get("collection", DEFAULT_COLLECTION))
-    default_persist_dir = str(cfg.get("persist_dir", DEFAULT_PERSIST_DIR))
-    default_embed_model = str(cfg.get("embed_model", DEFAULT_EMBED_MODEL))
-    default_gen_model = str(cfg.get("model", DEFAULT_GENERATION_MODEL))
-    default_profile = str(cfg.get("profile", "DEFAULT"))
-    default_top_k = int(cfg.get("top_k", DEFAULT_TOP_K))
-    raw_threshold = cfg.get("threshold")
-    default_threshold: float | None = float(raw_threshold) if raw_threshold is not None else None
+    default_collection = _cfg_str(cfg, "collection", DEFAULT_COLLECTION)
+    default_persist_dir = _cfg_str(cfg, "persist_dir", DEFAULT_PERSIST_DIR)
+    default_embed_model = _cfg_str(cfg, "embed_model", DEFAULT_EMBED_MODEL)
+    default_gen_model = _cfg_str(cfg, "model", DEFAULT_GENERATION_MODEL)
+    default_profile = _cfg_str(cfg, "profile", "DEFAULT")
+    default_top_k = _cfg_int(cfg, "top_k", DEFAULT_TOP_K)
+    default_threshold = _cfg_opt_float(cfg, "threshold")
 
     parser = argparse.ArgumentParser(
         prog="docpipe",
@@ -298,7 +327,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print(reply)
             return 0
-    except (DocpipeError, ValueError) as exc:
+    except (DocpipeError, ValueError, TypeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 

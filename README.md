@@ -7,13 +7,16 @@
 
 > **"docpipe-maestro is a minimal RAG pipeline: it ingests any document, chunks it correctly, embeds it, stores it, retrieves the right sections, and optionally generates a grounded answer. It is the engine — not the app, not the framework."**
 
-`docpipe-maestro` is a provider-agnostic, structure-aware Python RAG (Retrieval-Augmented Generation) pipeline library and CLI. It is built to solve the hardest data-preparation and retrieval problems in RAG systems: preserving document hierarchy, preventing clause cutting, resolving internal cross-references, and guaranteeing that policy exceptions travel with their rules.
+`docpipe-maestro` is a provider-agnostic, structure-aware Python RAG (Retrieval-Augmented Generation) pipeline library and `docpipe` CLI. It solves the data-preparation and retrieval failure modes common in standard fixed-size chunkers: preserving document hierarchy, refusing to split legal or policy clauses mid-sentence, resolving intra-document cross-references, and guaranteeing that policy exceptions always stay attached to their rules.
 
 ---
 
 ## Table of Contents
 
+- [Why docpipe-maestro?](#why-docpipe-maestro)
+- [60-Second Quickstart](#60-second-quickstart)
 - [Key Architecture & Core Concepts](#key-architecture--core-concepts)
+- [Supported Formats & Limitations](#supported-formats--limitations)
 - [Installation Guide](#installation-guide)
   - [Core Install](#core-install)
   - [Optional Extras](#optional-extras)
@@ -23,7 +26,7 @@
   - [2. Cloud Provider API Keys](#2-cloud-provider-api-keys)
   - [3. Local Persistence Storage Directory](#3-local-persistence-storage-directory)
   - [4. CLI Configuration File (`docpipe.toml`)](#4-cli-configuration-file-docpipetoml)
-  - [5. Chunking Profiles (`DEFAULT` vs `POLICY`)](#5-chunking-profiles-default-vs-policy)
+  - [5. Chunking Profiles (`DEFAULT`, `POLICY`, and Custom Profiles)](#5-chunking-profiles-default-policy-and-custom-profiles)
 - [Quickstart: CLI Usage Guide](#quickstart-cli-usage-guide)
   - [1. Ingest Documents (`docpipe ingest`)](#1-ingest-documents-docpipe-ingest)
   - [2. Keep Collections in Sync (`docpipe sync`)](#2-keep-collections-in-sync-docpipe-sync)
@@ -35,28 +38,103 @@
 - [Python Library API Guide](#python-library-api-guide)
   - [Phase 1: Ingestion & Lifecycle Workflow](#phase-1-ingestion--lifecycle-workflow)
   - [Phase 2: Semantic Retrieval & Grounded RAG Workflow](#phase-2-semantic-retrieval--grounded-rag-workflow)
-  - [Core Data Shapes](#core-data-shapes)
+  - [Core Data Shapes & Exceptions](#core-data-shapes--exceptions)
+- [Security, Privacy & Grounding Notes](#security-privacy--grounding-notes)
 - [Safety & Verification](#safety--verification)
+- [Repository Structure](#repository-structure)
+- [Contributing](#contributing)
 - [Documentation](#documentation)
 - [License](#license)
 
 ---
 
+## Why docpipe-maestro?
+
+| Common RAG Failure Mode | How `docpipe-maestro` Solves It |
+|---|---|
+| **Orphaned exceptions** (*"20 days leave"* retrieved without *"except probationary hires"*) | **Parent-child retrieval** searches fine-grained child chunks and returns deduplicated full parent sections, enforced by a mandatory Reverse Safety Gate (`tests/test_reverse_safety.py`). |
+| **Broken intra-document references** (*"subject to Section 4.2"* without knowing what Section 4.2 says) | **`POLICY` cross-reference resolution** appends cycle-safe `[Crossref ...]` excerpts directly onto referring sections during ingestion. |
+| **Orphaned vectors when files shrink or change** | **Transactional `doc_version` staging** writes new chunks, flips the JSON manifest atomically, and deletes stale versions afterward. Failed runs leave the prior version intact. |
+| **Silent embedding vector-space corruption** | **Manifest model lock** pins each collection to one `embed_model` and raises `ModelMismatchError` unless migrated explicitly via `reindex`. |
+| **Hallucinations when nothing relevant matches** | **Deterministic empty-context refusal** short-circuits before calling the LLM whenever `retrieve()` returns no chunks above `--threshold`. |
+
+---
+
+## 60-Second Quickstart
+
+Run an entirely local pipeline using [Ollama](https://ollama.com/) (`nomic-embed-text` + `llama3.2`):
+
+```bash
+# 1. Install with all format parsers
+pip install "docpipe-maestro[all]"
+
+# 2. Pull local Ollama models (one-time)
+ollama pull nomic-embed-text
+ollama pull llama3.2
+
+# 3. Ingest a folder of policies and ask a grounded question
+docpipe ingest ./policies --profile POLICY --collection handbook
+docpipe ask "When are employees not entitled to overtime?" --collection handbook --threshold 0.35
+```
+
+*(Running from a cloned source repository? Prefix CLI commands with `uv run docpipe ...`.)*
+
+---
+
 ## Key Architecture & Core Concepts
+
+```mermaid
+flowchart LR
+    subgraph P1["Phase 1: Offline Ingestion (Atomic & Transactional)"]
+        A[Source Files] --> B[Intake & Format Detect]
+        B --> C[Clean & Boilerplate Strip]
+        C --> D[Crossref Resolution]
+        D --> E[Structure-Aware Chunker]
+        E --> F[Batched Embeddings]
+        F --> G[(ChromaDB + JSON Manifest)]
+    end
+
+    subgraph P2["Phase 2: Online Query (Read-Only)"]
+        Q[Question] --> QE[Embed Query]
+        QE --> S["Child Search where type=child"]
+        S --> PE["Parent Expansion & max(score) Dedupe"]
+        PE --> BP["Pure build_prompt()"]
+        BP -->|results > 0| LLM["Optional answer() via LiteLLM"]
+        BP -->|empty results| REF["Deterministic Refusal (No LLM Call)"]
+    end
+```
 
 1. **Two-Phase Separation**:
    - **Phase 1 (Offline Ingestion)**: Files $\to$ Parse $\to$ Clean $\to$ Cross-Reference Resolution $\to$ Structure-Aware Chunking $\to$ Embeddings $\to$ Vector Database. Correctness and crash safety matter.
    - **Phase 2 (Online Query)**: Question $\to$ Embed $\to$ Retrieve (Match Children, Return Deduplicated Parents) $\to$ Build Prompt $\to$ Optional Grounded LLM Generation. Read-only and low-latency.
 2. **Search Small, Return Big (Parent-Child Retrieval)**:
-   - Small **child chunks** (individual clauses/paragraphs) are embedded and searched for high precision.
-   - Large **parent sections** (complete contextual sections) are stored and returned to the prompt.
+   - Small **child chunks** (individual clauses/paragraphs prefixed with `[Source: ... | Section: ...]`) are embedded and searched for high precision.
+   - Large **parent sections** (complete contextual sections) are stored with zero-vector placeholders and returned to the prompt.
 3. **Exception Preservation & Reverse Safety Gate**:
-   - In policy and legal documents, a rule without its exception is actively misleading (e.g., *"Employees receive 20 days leave"* without *"unless probationary"*). In `POLICY` profile, clauses are kept intact and parent sections ensure exceptions always accompany their rules.
+   - In policy and legal documents, a rule without its exception is actively misleading (e.g., *"Employees receive 20 days leave"* without *"unless probationary"*). In `POLICY` profile, clauses are kept intact even when exceeding target chunk size, and parent sections ensure exceptions always accompany their rules.
 4. **Crash-Safe Transactional Synchronization**:
-   - Ingestion maintains an atomic database-collocated manifest (`.docpipe/manifests/<collection>.json`) tracking `sha256` content hashes, `mtime`, and document versions.
-   - Modifying a document performs a staged delete-then-reinsert, preventing orphaned clauses when documents shrink.
+   - Ingestion maintains an atomic database-collocated manifest (`.docpipe/manifests/<collection>.json`) tracking `sha256` content hashes, `mtime`, and `doc_version` prefixes.
+   - Modifying a document performs staged delete-then-reinsert, preventing orphaned clauses when documents shrink.
 5. **Embedding Model Lock**:
-   - The manifest locks the collection to the embedding model used during ingestion. Attempting to query with a different model raises an immediate error rather than returning corrupt similarity scores. Model migration is handled cleanly via `reindex`.
+   - The manifest locks the collection to the embedding model used during ingestion. Attempting to ingest or query with a different model raises `ModelMismatchError` rather than silently mixing incompatible vector spaces. Model migration is handled cleanly via `reindex`.
+
+---
+
+## Supported Formats & Limitations
+
+| Format | Extensions | Structural & Content Extraction | Extra Required |
+|---|---|---|---|
+| **Markdown** | `.md`, `.markdown` | ATX headings (`#`–`######`), code fence awareness (` ``` ` / `~~~` ignores `# comments`) | Core install |
+| **Plain Text** | `.txt` | Heuristic `Section` / `Article` / `Chapter` / `Part` and numbered headings | Core install |
+| **HTML** | `.html`, `.htm` | `<h1–h6>` headings, paragraphs, lists, tables (` \| `), strips `<script>`/`<style>`/`<nav>`/`<footer>`/`<noscript>` | `[html]` (`beautifulsoup4`) |
+| **Word** | `.docx` | Word `Heading 1`–`Heading 6` styles, paragraphs, tables (` \| `) | `[docx]` (`python-docx`) |
+| **PDF** | `.pdf` | Per-page text, 1-based page numbers, multi-page active heading carryover, boilerplate header/footer stripping | `[pdf]` (`pypdf`) |
+
+- **Extensionless files**: `detect_format()` inspects the first 4 KiB for `%PDF-`, ZIP `word/document.xml`, HTML root tags (`<!doctype html` / `<html`), Markdown headings, or valid UTF-8 text.
+- **Current scope & limitations**:
+  - Image-only / scanned PDFs without an embedded text layer yield empty text (OCR is outside v0.1 scope).
+  - Legacy binary `.doc` files are not supported (`.docx` only).
+  - `docpipe-maestro` is a library and CLI engine — it deliberately excludes web servers, auth layers, streaming UIs, and multi-tenant isolation.
 
 ---
 
@@ -66,7 +144,7 @@
 
 ### Core Install
 
-The core installation includes Markdown (`.md`) and plain text (`.txt`) parsing, embedding generation, ChromaDB vector storage, and semantic retrieval:
+The core installation includes Markdown (`.md`, `.markdown`) and plain text (`.txt`) parsing, embedding generation, ChromaDB vector storage, and semantic retrieval:
 
 ```bash
 pip install docpipe-maestro
@@ -85,8 +163,7 @@ Install additional document format parsers or cloud LLM generation features as n
 | `all` | Installs **all** optional format parsers (`pdf`, `docx`, `html`, `generation`) | `pypdf`, `python-docx`, `beautifulsoup4`, `litellm` |
 
 > **Note on Structure Extraction & Optional Generation**:
-> - **Structure-awareness across formats**: Markdown (`.md`, `.markdown`), plain text (`.txt`), HTML (`.html`, `.htm`), DOCX (`.docx`), and PDF (`.pdf`) are supported, with content/magic-byte fallback for extensionless files (`%PDF-`, ZIP `word/document.xml`, HTML root tags, Markdown headings, and UTF-8 text).
-> - **Fenced blocks & tables**: Markdown preserves `#` comments inside code fences (` ``` ` / `~~~`); HTML and DOCX preserve tables as pipe-delimited rows (` | `); PDFs extract per-page heuristic headings and 1-based page numbers.
+> - **Structure-awareness across formats**: Markdown, plain text, HTML, DOCX, and PDF extract headings, clauses, and pagination metadata cleanly without external SaaS parsers.
 > - **Generation capability**: Because `litellm` powers both embeddings and completions, `answer()` is available in the base install; the `[generation]` extra is retained as a backwards-compatible alias.
 
 Install specific extras:
@@ -118,13 +195,13 @@ pip install --group dev -e ".[all]"
 pre-commit install --hook-type commit-msg
 ```
 
-> **Note on Versioning & Commitizen**: Package versions are derived dynamically from Git tags via `hatch-vcs`. Use `cz check` (to validate Conventional Commits) and `cz changelog` (to update `CHANGELOG.md`), rather than `cz bump`.
+> **Note on Versioning & Commitizen**: Package versions are derived dynamically from Git tags via `hatch-vcs`. Use `uv run cz check` (to validate Conventional Commits) and `uv run cz changelog` (to update `CHANGELOG.md`), rather than `cz bump`.
 
 ---
 
 ## Configuration Guide
 
-`docpipe-maestro` follows strict architectural rules: **no library module reads configuration files**. Configuration is passed via function arguments or environment variables. The `docpipe` CLI is the only component that can optionally read a `--config` TOML file.
+`docpipe-maestro` enforces strict **Library Purity**: **no library module reads external configuration files**. Configuration is passed explicitly via function arguments or provider environment variables. Only the `docpipe` CLI optionally reads a `--config` TOML file.
 
 ### 1. Local Execution (Default: Zero Cloud Accounts Required)
 
@@ -132,14 +209,14 @@ Out of the box, `docpipe-maestro` defaults to local execution with [Ollama](http
 - **Default Embeddings Model**: `ollama/nomic-embed-text`
 - **Default Generation Model**: `ollama/llama3.2`
 
-Make sure Ollama is installed and running, then pull the default models:
+Make sure Ollama is installed and running (`http://localhost:11434`), then pull the default models:
 
 ```bash
 ollama pull nomic-embed-text
 ollama pull llama3.2
 ```
 
-When run locally, `docpipe-maestro` makes **zero outbound network calls**.
+> **Air-gapped / strict zero-egress environments**: By default, `litellm` attempts to download its public model-cost JSON map from GitHub when first imported before falling back to its bundled copy. Set `export LITELLM_LOCAL_MODEL_COST_MAP=true` in your shell to prevent any startup HTTP call on import.
 
 ### 2. Cloud Provider API Keys
 
@@ -162,11 +239,11 @@ export GROQ_API_KEY="gsk_..."
 export TOGETHERAI_API_KEY="..."
 ```
 
-You can then pass any model string directly to `--embed-model` or `--model`, e.g., `openai/text-embedding-3-small`, `openai/gpt-4o-mini`, `gemini/gemini-1.5-flash`, `anthropic/claude-3-5-haiku-20241022`.
+You can then pass any `provider/model` string directly to `--embed-model` or `--model` (e.g., `openai/text-embedding-3-small`, `openai/gpt-4o-mini`, `gemini/gemini-2.0-flash`, `anthropic/claude-3-5-haiku-20241022`).
 
 ### 3. Local Persistence Storage Directory
 
-By default, data is stored in the relative directory `./.docpipe`:
+By default, data is stored in `./.docpipe`:
 ```text
 .docpipe/
 ├── chroma.sqlite3          # ChromaDB embedded vector database
@@ -174,11 +251,11 @@ By default, data is stored in the relative directory `./.docpipe`:
 └── manifests/
     └── <collection>.json   # Atomic JSON manifest tracking file hashes, versions, and locked model
 ```
-You can customize the persistence directory using the `--persist-dir` CLI flag or the `persist_dir` argument in the Python API.
+Customize the persistence directory with `--persist-dir` on the CLI or `persist_dir=` in Python. Never commit `.docpipe/` to version control if your corpus is private.
 
 ### 4. CLI Configuration File (`docpipe.toml`)
 
-You can create an optional TOML configuration file to store default CLI options (never store secrets/API keys here):
+You can create an optional TOML configuration file to set default CLI options (never store API keys or secrets here — `--config` flags override TOML values, and TOML values override built-in defaults):
 
 ```toml
 # docpipe.toml
@@ -196,9 +273,9 @@ Pass it to any CLI command using `--config`:
 docpipe query "What is the probation period?" --config docpipe.toml
 ```
 
-### 5. Chunking Profiles (`DEFAULT` vs `POLICY`)
+### 5. Chunking Profiles (`DEFAULT`, `POLICY`, and Custom Profiles)
 
-Profiles are immutable presets calibrated for specific document types:
+Built-in profiles are immutable presets (`docpipe_maestro.config`) calibrated for specific document types:
 
 | Parameter | `DEFAULT` Profile | `POLICY` Profile |
 |---|---|---|
@@ -206,14 +283,16 @@ Profiles are immutable presets calibrated for specific document types:
 | **Target Chunk Size** | ~512 tokens | ~1000 tokens |
 | **Chunk Overlap** | ~64 tokens (scoped within section) | ~80 tokens (scoped within section) |
 | **Clause Preservation** | Disabled (splits on sentences/paragraphs) | **Enabled** (never splits inside numbered clauses) |
-| **Cross-Reference Resolution** | Disabled | **Enabled** (resolves `§2.1`, `Section 4`, etc.) |
+| **Cross-Reference Resolution** | Disabled | **Enabled** (resolves `§2.1`, `Section 4`, `Clause 3.2`) |
 | **Parent-Child Expansion** | Enabled | **Enabled** |
+
+In Python, you can also pass a custom [`ChunkingProfile`](docs/api-reference.md) instance directly to `ingest(..., profile=custom_profile)` or `sync(...)`.
 
 ---
 
 ## Quickstart: CLI Usage Guide
 
-Run `docpipe --help` to see all available subcommands (global flags `--config`, `--collection`, and `--persist-dir` work either before or after any subcommand):
+Run `docpipe --help` to see all available subcommands (global flags `--config`, `--collection`, and `--persist-dir` work either **before or after** any subcommand):
 
 ```text
 usage: docpipe [-h] [--version] [--config CONFIG] [--collection COLLECTION]
@@ -225,7 +304,7 @@ See the full [CLI Reference](docs/cli-reference.md) for all flags, TOML keys, ex
 
 ### 1. Ingest Documents (`docpipe ingest`)
 
-Ingest a single file or an entire directory of documents:
+Ingest a single file or an entire directory tree atomically (if any file fails validation, no records are committed):
 
 ```bash
 # Ingest with default profile
@@ -240,7 +319,7 @@ docpipe ingest ./docs --force --collection knowledge_base
 
 ### 2. Keep Collections in Sync (`docpipe sync`)
 
-Reconciles a target directory with the database manifest (adds new files, updates modified files, and removes deleted files):
+Reconcile a target directory against the manifest (adds new files, skips unchanged files via `mtime`/`sha256`, updates modified files, and purges deleted files):
 
 ```bash
 docpipe sync ./company_policies --profile POLICY --collection hr_policy
@@ -252,7 +331,7 @@ Synced 'hr_policy': added=1, updated=2, skipped=10, removed=1.
 
 ### 3. Inspect Collection Status (`docpipe status`)
 
-View indexed files, version hashes, chunk counts, and locked embedding model:
+View indexed files, active `doc_version` hashes, chunk counts, and locked embedding model:
 
 ```bash
 docpipe status --collection hr_policy
@@ -279,7 +358,7 @@ docpipe remove hr_leave_policy.md --collection hr_policy
 
 ### 5. Migrate Embedding Models (`docpipe reindex`)
 
-Re-embeds all existing child chunks stored in the database under a new embedding model, updates vector embeddings, and re-locks the collection:
+Re-embed all existing child chunks stored in the database under a new embedding model, update parent vector dimensions, and re-lock the collection:
 
 ```bash
 # Migrate collection to OpenAI embeddings
@@ -289,7 +368,7 @@ docpipe reindex --model openai/text-embedding-3-small --collection hr_policy
 
 ### 6. Semantic Search Without an LLM (`docpipe query`)
 
-Perform Phase 2 semantic retrieval to get relevant context passages without invoking a language model:
+Perform Phase 2 semantic retrieval to inspect scored passages and provenance without invoking a language model:
 
 ```bash
 # Basic semantic query
@@ -312,13 +391,14 @@ docpipe query "annual leave" --no-expand-parent --collection hr_policy
 
 ### 7. Grounded Question Answering (`docpipe ask`)
 
-Retrieve relevant context and generate a grounded answer:
+Retrieve relevant context, build a grounded prompt, and generate a citation-backed answer:
 
 ```bash
 # Using local Ollama (default)
 docpipe ask "How many days of leave does a first-year employee get?" --collection hr_policy
 
-# Using a cloud model or custom OpenAI-compatible base URL
+# Using a custom Ollama tag or cloud model / OpenAI-compatible base URL
+docpipe ask "Summarize travel meal limits." --model ollama/qwen2.5:1.5b-instruct --collection hr_policy
 export OPENAI_API_KEY="sk-..."
 docpipe ask "Summarize travel meal allowance limits." --model openai/gpt-4o-mini --collection hr_policy
 docpipe ask "Summarize travel policy." --model openai/my-local-model --api-base http://localhost:8000/v1 --collection hr_policy
@@ -337,7 +417,7 @@ See the complete [Python API Reference](docs/api-reference.md) for every signatu
 
 ```python
 from pathlib import Path
-from docpipe_maestro import ingest, sync, status, remove, reindex
+from docpipe_maestro import ingest, reindex, remove, status, sync
 
 # 1. Ingest a document or directory
 result = ingest(
@@ -384,7 +464,7 @@ reindexed_count = reindex(
 ### Phase 2: Semantic Retrieval & Grounded RAG Workflow
 
 ```python
-from docpipe_maestro import retrieve, build_prompt, answer
+from docpipe_maestro import answer, build_prompt, retrieve
 
 question = "What is the travel meal reimbursement rate?"
 
@@ -428,6 +508,15 @@ Exported from `docpipe_maestro` (`docpipe_maestro.types`):
 
 ---
 
+## Security, Privacy & Grounding Notes
+
+- **Trusted local corpus assumption**: Like most local ingestion tools, `docpipe ingest` processes files inside the target directory you specify. Only ingest trusted documents and avoid pointing `ingest`/`sync` at directories containing symlinks to sensitive files or untrusted HTML/PDF inputs.
+- **Credentials belong in environment variables**: API keys are never accepted in `docpipe.toml`, and `MissingCredentialError` scrubs auth error chains (`from None`) so secrets are not leaked in messages.
+- **Reduce hallucinations with `--threshold`**: Set a similarity `--threshold` (e.g. `0.35`–`0.6` depending on embedding model) on `retrieve()` / `docpipe ask` so off-topic questions return zero matches and short-circuit deterministically (`"Not found in the provided context."`).
+- **Protect your `.docpipe/` store on shared hosts**: Embedded ChromaDB files store plaintext document sections; keep `persist_dir` on owner-restricted paths (`chmod 700`) and excluded from version control.
+
+---
+
 ## Safety & Verification
 
 `docpipe-maestro` includes a mandatory **Reverse Safety Test Gate** (`tests/test_reverse_safety.py`). It enforces that every clause containing an exception marker (`except`, `unless`, `not entitled`, `subject to`, `provided that`) always retrieves a parent context that contains the exception text alongside the general rule.
@@ -439,7 +528,7 @@ Run the test suite and quality gates:
 uv run ruff check .
 uv run ruff format --check .
 
-# Run static type checking
+# Run static type checking (strict mode)
 uv run mypy src tests
 
 # Run all unit, integration, and safety tests with branch coverage
@@ -449,6 +538,41 @@ uv run pytest -v --cov
 uv run pytest -m reverse -v
 uv run pytest -m integration -v
 ```
+
+---
+
+## Repository Structure
+
+```text
+docpipe-maestro/
+├── src/docpipe_maestro/
+│   ├── __init__.py          # Public API exports & lazy generation import
+│   ├── cli.py               # `docpipe` CLI + TOML config loader
+│   ├── config.py            # Default constants & immutable chunking profiles
+│   ├── embedder.py          # Batched LiteLLM embedding adapter
+│   ├── manifest.py          # Atomic sha256/mtime JSON manifest & model lock
+│   ├── store.py             # Embedded ChromaDB PersistentClient adapter
+│   ├── types.py             # Dataclasses, TypedDicts & DocpipeError hierarchy
+│   ├── ingest/              # Phase 1: intake, clean, crossrefs, chunker, pipeline
+│   └── query/               # Phase 2: retriever, prompts, answer
+├── tests/                   # Unit, integration, and reverse-safety test suites
+├── docs/                    # Architecture, API, CLI, dev guide & roadmap
+├── specs/                   # Feature specification, plan & contracts
+├── CHANGELOG.md             # Release history
+└── pyproject.toml           # PEP 621 / 735 packaging, ruff, mypy & pytest config
+```
+
+---
+
+## Contributing
+
+Contributions are welcome! Before opening a pull request:
+
+1. Follow **Conventional Commits** (`feat:`, `fix:`, `docs:`, `test:`, `chore:`) verified with `uv run cz check`.
+2. Ensure all quality gates pass (`ruff check .`, `ruff format --check .`, `mypy src tests`, and `pytest -v --cov` with branch coverage `>= 80%` and zero failures in `tests/test_reverse_safety.py`).
+3. Keep all Phase 1 and Phase 2 library modules free of config-file reading and external UI/server concerns.
+
+See the [Development & Testing Guide](docs/development.md) for offline test doubles and live Ollama test instructions.
 
 ---
 

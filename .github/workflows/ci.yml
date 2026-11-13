@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install project and dev dependencies
+        run: uv sync --python ${{ matrix.python-version }} --all-extras --group dev
+
+      - name: Check formatting with Ruff
+        run: uv run ruff format --check .
+
+      - name: Run Ruff linter and security rules
+        run: |
+          uv run ruff check .
+          uv run ruff check --select S src/
+
+      - name: Run strict type checks with mypy
+        run: uv run mypy src tests
+
+      - name: Verify Reverse Safety Gate
+        run: uv run pytest -m reverse -v
+
+      - name: Run full test suite with coverage
+        env:
+          LITELLM_LOCAL_MODEL_COST_MAP: "true"
+        run: uv run pytest -v --cov

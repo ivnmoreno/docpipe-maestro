@@ -5,22 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 from docpipe_maestro.config import DEFAULT_GENERATION_MODEL
-from docpipe_maestro.types import DocpipeError, MissingCredentialError
+from docpipe_maestro.embedder import (
+    DEFAULT_REQUEST_TIMEOUT,
+    prepare_litellm,
+    raise_litellm_error,
+    validate_api_base,
+)
 
 EMPTY_CONTEXT_REFUSAL = "Not found in the provided context."
-
-
-def _is_auth_error(exc: Exception) -> bool:
-    """Heuristically detect provider credential errors without logging secrets."""
-    name = type(exc).__name__.lower()
-    msg = str(exc).lower()
-    return (
-        "auth" in name
-        or "api_key" in msg
-        or "apikey" in msg
-        or "credentials" in msg
-        or "unauthorized" in msg
-    )
 
 
 def answer(
@@ -52,26 +44,21 @@ def answer(
     if not has_context:
         return EMPTY_CONTEXT_REFUSAL
 
-    import litellm
+    validated_base = validate_api_base(api_base)
+    litellm = prepare_litellm()
 
     kwargs: dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
+        "timeout": DEFAULT_REQUEST_TIMEOUT,
     }
-    if api_base is not None:
-        kwargs["api_base"] = api_base
+    if validated_base is not None:
+        kwargs["api_base"] = validated_base
 
     try:
         response = litellm.completion(**kwargs)
     except Exception as exc:
-        if _is_auth_error(exc):
-            raise MissingCredentialError(
-                f"Missing or invalid provider credentials for model {model!r}. "
-                "Set the provider's environment variable and retry."
-            ) from None
-        raise DocpipeError(
-            f"Generation request failed for model {model!r}: {type(exc).__name__}"
-        ) from exc
+        raise_litellm_error(exc, operation="generation", model=model)
 
     choices = response["choices"] if isinstance(response, dict) else response.choices
     content = choices[0].message.content

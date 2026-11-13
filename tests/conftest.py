@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -77,6 +78,7 @@ def mock_litellm_offline(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             ]
         )
 
+    os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")
     import litellm
 
     monkeypatch.setattr(litellm, "embedding", fake_embedding)

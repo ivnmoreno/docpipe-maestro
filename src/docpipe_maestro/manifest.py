@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -9,14 +10,44 @@ import tempfile
 from pathlib import Path
 from typing import Literal
 
-from docpipe_maestro.types import Manifest, ModelMismatchError
+from docpipe_maestro.types import DocpipeError, Manifest, ModelMismatchError
 
 ChangeStatus = Literal["new", "unchanged", "changed"]
 
 
+def validate_collection_name(collection: str) -> str:
+    """Reject empty or path-traversal collection names before filesystem access."""
+    if (
+        not collection
+        or collection in {".", ".."}
+        or ".." in collection
+        or "/" in collection
+        or "\\" in collection
+        or "\x00" in collection
+    ):
+        raise DocpipeError(
+            f"Invalid or unusable collection {collection!r}: invalid path characters"
+        )
+    return collection
+
+
 def manifest_path(persist_dir: Path, collection: str) -> Path:
-    """Return the path to the collection's collocated manifest JSON file."""
-    return persist_dir / "manifests" / f"{collection}.json"
+    """Return the validated path to the collection's collocated manifest JSON file."""
+    safe_name = validate_collection_name(collection)
+    manifests_dir = persist_dir / "manifests"
+    candidate = manifests_dir / f"{safe_name}.json"
+    if not candidate.resolve().is_relative_to(manifests_dir.resolve()):
+        raise DocpipeError(
+            f"Invalid or unusable collection {collection!r}: resolves outside manifests directory"
+        )
+    return candidate
+
+
+def ensure_private_dir(path: Path) -> None:
+    """Create a directory if missing and restrict permissions to owner-only when supported."""
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        os.chmod(path, 0o700)
 
 
 def load_manifest(persist_dir: Path, collection: str) -> Manifest:
@@ -24,8 +55,13 @@ def load_manifest(persist_dir: Path, collection: str) -> Manifest:
     path = manifest_path(persist_dir, collection)
     if not path.exists():
         return Manifest(collection=collection)
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    return Manifest.from_dict(raw)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise TypeError("Manifest root must be a JSON object")
+        return Manifest.from_dict(raw)
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        raise DocpipeError(f"Corrupted or invalid manifest {path.name}: {exc}") from exc
 
 
 def save_manifest(persist_dir: Path, manifest: Manifest) -> None:
@@ -35,7 +71,8 @@ def save_manifest(persist_dir: Path, manifest: Manifest) -> None:
     leaves the prior committed JSON untouched.
     """
     target = manifest_path(persist_dir, manifest.collection)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(persist_dir)
+    ensure_private_dir(target.parent)
     payload = json.dumps(manifest.to_dict(), indent=2, sort_keys=True)
     fd, tmp_name = tempfile.mkstemp(
         dir=str(target.parent),

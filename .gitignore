@@ -72,6 +72,9 @@ venv.bak/
 .env.development
 
 # Local vector databases & transient storage (e.g., ChromaDB, local document stores)
+.docpipe/
+docpipe.toml
+documents/test.pdf
 .chroma/
 chroma_db/
 chroma_data/
@@ -112,3 +115,4 @@ Thumbs.db
 # Logs
 logs/
 *.log
+agy-logs/

@@ -13,6 +13,7 @@ from typing import Any, cast
 
 import chromadb
 
+from docpipe_maestro.manifest import ensure_private_dir, validate_collection_name
 from docpipe_maestro.types import (
     ChunkMetadata,
     ChunkType,
@@ -75,8 +76,8 @@ class VectorStore:
             DocpipeError: If ChromaDB rejects the collection name or initialization fails.
         """
         self._persist_dir = persist_dir
-        self._collection_name = collection_name
-        self._persist_dir.mkdir(parents=True, exist_ok=True)
+        self._collection_name = validate_collection_name(collection_name)
+        ensure_private_dir(self._persist_dir)
         self._client = chromadb.PersistentClient(path=str(self._persist_dir))
         try:
             self._collection = self._client.get_or_create_collection(

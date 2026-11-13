@@ -18,6 +18,11 @@ _TEXT_HEADING_RE = re.compile(
 )
 
 SUPPORTED_EXTENSIONS = {".md", ".markdown", ".txt", ".html", ".htm", ".pdf", ".docx"}
+_MAX_DOCX_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
+_HIDDEN_STYLE_RE = re.compile(
+    r"(?:display\s*:\s*none|visibility\s*:\s*hidden)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(slots=True)
@@ -48,6 +53,22 @@ class ParsedDocument:
     source: str
     format_name: str
     sections: list[ParsedSection] = field(default_factory=list)
+
+
+def _validate_docx_zip(path: Path, *, source_key: str) -> bool:
+    """Inspect a ZIP archive for DOCX payload presence while blocking zip bombs."""
+    try:
+        with zipfile.ZipFile(path, "r") as zf:
+            infos = zf.infolist()
+            total_uncompressed = sum(info.file_size for info in infos)
+            if total_uncompressed > _MAX_DOCX_UNCOMPRESSED_BYTES:
+                raise UnsupportedFormatError(
+                    f"DOCX archive exceeds uncompressed size limit ({total_uncompressed} bytes): "
+                    f"{source_key}"
+                )
+            return any(info.filename == "word/document.xml" for info in infos)
+    except zipfile.BadZipFile:
+        return False
 
 
 def detect_format(path: Path) -> str:
@@ -84,12 +105,8 @@ def detect_format(path: Path) -> str:
     if head.startswith(b"%PDF-"):
         return "pdf"
     if head.startswith(b"PK\x03\x04"):
-        try:
-            with zipfile.ZipFile(path, "r") as zf:
-                if "word/document.xml" in zf.namelist():
-                    return "docx"
-        except zipfile.BadZipFile:
-            pass
+        if _validate_docx_zip(path, source_key=path.name):
+            return "docx"
         raise UnsupportedFormatError(f"Unsupported ZIP-based file: {path.name}")
 
     if b"\x00" in head:
@@ -268,6 +285,8 @@ def _parse_docx(path: Path, source_key: str) -> ParsedDocument:
         ) from exc
 
     try:
+        if not _validate_docx_zip(path, source_key=source_key):
+            raise UnsupportedFormatError(f"Invalid DOCX archive structure: {source_key}")
         doc = Document(str(path))
         sections: list[ParsedSection] = []
         current_label = "Introduction"
@@ -356,8 +375,16 @@ def _parse_html(path: Path, source_key: str) -> ParsedDocument:
     try:
         raw = path.read_text(encoding="utf-8")
         soup = BeautifulSoup(raw, "html.parser")
-        for tag in soup(["script", "style", "nav", "footer", "noscript"]):
+        for tag in soup(["script", "style", "nav", "footer", "noscript", "template", "svg"]):
             tag.decompose()
+        for tag in list(soup.find_all(True)):
+            if getattr(tag, "attrs", None) is None:
+                continue
+            has_hidden_attr = tag.has_attr("hidden")
+            aria_hidden = str(tag.get("aria-hidden", "")).strip().lower() == "true"
+            style_val = str(tag.get("style", ""))
+            if has_hidden_attr or aria_hidden or (style_val and _HIDDEN_STYLE_RE.search(style_val)):
+                tag.decompose()
 
         sections: list[ParsedSection] = []
         current_label = "Introduction"
@@ -379,89 +406,92 @@ def _parse_html(path: Path, source_key: str) -> ParsedDocument:
                 )
             buf.clear()
 
-        def walk(node: Any) -> None:
-            """Recursively traverse HTML nodes in document order without duplication."""
+        def walk_iterative(root_node: Any) -> None:
+            """Iteratively traverse HTML nodes in document order without hitting RecursionError."""
             nonlocal current_label, current_level
-            if isinstance(node, Comment):
-                return
-            if isinstance(node, NavigableString):
-                text = " ".join(str(node).split())
-                if text:
-                    buf.append(text)
-                return
-            if not isinstance(node, Tag):
-                return
+            stack: list[Any] = [root_node]
+            while stack:
+                node = stack.pop()
+                if isinstance(node, Comment):
+                    continue
+                if isinstance(node, NavigableString):
+                    text = " ".join(str(node).split())
+                    if text:
+                        buf.append(text)
+                    continue
+                if not isinstance(node, Tag):
+                    continue
 
-            name = node.name.lower()
-            if name in _HTML_HEADING_TAGS:
-                heading_text = node.get_text(" ", strip=True)
-                if heading_text:
-                    flush()
-                    current_level = int(name[1])
-                    current_label = heading_text
-                return
+                name = node.name.lower()
+                if name in _HTML_HEADING_TAGS:
+                    heading_text = node.get_text(" ", strip=True)
+                    if heading_text:
+                        flush()
+                        current_level = int(name[1])
+                        current_label = heading_text
+                    continue
 
-            if name == "table":
-                for row in node.find_all("tr"):
-                    cells = [
-                        c.get_text(" ", strip=True)
-                        for c in row.find_all(["th", "td"], recursive=False)
-                    ]
-                    if not cells:
-                        cells = [c.get_text(" ", strip=True) for c in row.find_all(["th", "td"])]
-                    if any(cells):
-                        buf.append(" | ".join(cells))
-                return
+                if name == "table":
+                    for row in node.find_all("tr"):
+                        cells = [
+                            c.get_text(" ", strip=True)
+                            for c in row.find_all(["th", "td"], recursive=False)
+                        ]
+                        if not cells:
+                            cells = [
+                                c.get_text(" ", strip=True) for c in row.find_all(["th", "td"])
+                            ]
+                        if any(cells):
+                            buf.append(" | ".join(cells))
+                    continue
 
-            if name in {"p", "blockquote", "pre"}:
-                text = node.get_text(" ", strip=True)
-                if text:
-                    buf.append(text)
-                return
-
-            if name == "li":
-                if node.find(["ul", "ol", "table", "h1", "h2", "h3", "h4", "h5", "h6"]) is None:
+                if name in {"p", "blockquote", "pre"}:
                     text = node.get_text(" ", strip=True)
                     if text:
                         buf.append(text)
-                    return
-                for child in node.children:
-                    walk(child)
-                return
+                    continue
 
-            if name in _HTML_CONTAINER_TAGS and (
-                node.find(
-                    [
-                        "h1",
-                        "h2",
-                        "h3",
-                        "h4",
-                        "h5",
-                        "h6",
-                        "p",
-                        "li",
-                        "ul",
-                        "ol",
-                        "table",
-                        "div",
-                        "section",
-                        "article",
-                        "blockquote",
-                        "pre",
-                    ]
-                )
-                is None
-            ):
-                text = node.get_text(" ", strip=True)
-                if text:
-                    buf.append(text)
-                return
+                if name == "li":
+                    if node.find(["ul", "ol", "table", "h1", "h2", "h3", "h4", "h5", "h6"]) is None:
+                        text = node.get_text(" ", strip=True)
+                        if text:
+                            buf.append(text)
+                        continue
+                    stack.extend(reversed(list(node.children)))
+                    continue
 
-            for child in node.children:
-                walk(child)
+                if name in _HTML_CONTAINER_TAGS and (
+                    node.find(
+                        [
+                            "h1",
+                            "h2",
+                            "h3",
+                            "h4",
+                            "h5",
+                            "h6",
+                            "p",
+                            "li",
+                            "ul",
+                            "ol",
+                            "table",
+                            "div",
+                            "section",
+                            "article",
+                            "blockquote",
+                            "pre",
+                        ]
+                    )
+                    is None
+                ):
+                    text = node.get_text(" ", strip=True)
+                    if text:
+                        buf.append(text)
+                    continue
+
+                stack.extend(reversed(list(node.children)))
 
         root: Any = soup.body if soup.body is not None else soup
-        walk(root)
+        walk_iterative(root)
         flush()
     except MissingExtraError:
         raise
