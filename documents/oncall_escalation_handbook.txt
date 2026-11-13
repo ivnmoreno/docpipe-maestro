@@ -1,0 +1,18 @@
+ON-CALL INCIDENT ESCALATION HANDBOOK
+Document ID: SRE-HB-2026-03 | Owner: Production Reliability | Review Cycle: Quarterly
+
+1. Severity Classification and Response SLAs
+1.1 Severity 1 (SEV-1 Critical) applies when core authentication, billing, or primary retrieval APIs experience total unavailability or error_rate > 5.0% across multiple availability zones for more than 3 minutes. Initial acknowledgement must occur with response_time <= 5 minutes and executive paging within 15 minutes.
+1.2 Severity 2 (SEV-2 Major) applies when degraded throughput causes p95 latency > 1500 ms or error_rate > 1.5% for >= 10 minutes, or when single-region read replicas lag beyond 120 seconds. Acknowledgement SLA is response_time <= 15 minutes during both business hours and off-hours rotation.
+1.3 Severity 3 (SEV-3 Minor) covers non-critical batch sync delays, localized staging failures, or warning alerts without customer-facing impact, handled during next-business-day triage.
+
+2. Escalation Chain and Paging Windows
+2.1 Primary On-Call Engineer responsibilities:
+(a) Acknowledge PagerDuty alert inside the response SLA, claim the incident Slack channel (#inc-active), and designate an Incident Commander (IC) for SEV-1 events.
+(b) Execute rollback or traffic-drain runbooks before attempting live database schema surgery, except where data corruption is actively spreading and immediate table isolation is required by Clause 2.2.
+
+2.2 Secondary and Domain Specialist Escalation: If root cause is not isolated within 20 minutes for SEV-1 (or 45 minutes for SEV-2), the Primary On-Call must page the Secondary Engineer and the owning Service Tech Lead. Security-related indicators (unexpected privilege escalation, credential exposure, or anomalous egress) require immediate escalation following incident_response_runbook.md.
+
+3. Post-Incident Review and Waiver Policy
+3.1 Blameless Postmortem: Every SEV-1 and SEV-2 incident requires a written Root Cause Analysis (RCA) draft within 48 hours of resolution and action-item ownership assignment in Jira within 5 business days.
+3.2 SLA Waiver and Handoff Exceptions: On-call rotation swaps require peer confirmation at least 24 hours prior in PagerDuty. An SLA breach caused by upstream cloud provider backbone failure is exempted from team error-budget penalties, unless automated multi-region failover DNS checks had been disabled without a change-control ticket approved by the VP of Engineering.

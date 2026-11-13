@@ -83,13 +83,13 @@ def test_large_corpus_batching_real_docs_and_reindex(
     tmp_persist_dir: Path,
     mock_litellm_offline: dict[str, Any],
 ) -> None:
-    """Stress >70 child chunks (multi-batch embedder >64), real README/Product docs, and reindex."""
+    """Stress >70 child chunks (multi-batch embedder >64), real README/PRODUCT docs, and reindex."""
     corpus = tmp_path / "enterprise_kb"
     corpus.mkdir()
 
     # Include real project documentation files containing tables, code fences, and <placeholders>
     shutil.copy(REPO_ROOT / "README.md", corpus / "README.md")
-    shutil.copy(REPO_ROOT / "Product.md", corpus / "Product.md")
+    shutil.copy(REPO_ROOT / "PRODUCT.md", corpus / "PRODUCT.md")
 
     # Build a large 35-section policy manual exceeding batch_size=64
     manual_parts = ["# Global Enterprise Handbook\n"]

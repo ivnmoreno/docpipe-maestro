@@ -1,0 +1,190 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R /F2 10 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 1686 >>
+stream
+BT
+/F1 10 Tf
+1 0 0 1 54 752 Tm
+(INTERNAL - ACME ENTERPRISE VENDOR RISK STANDARD \(VRA-2026-02\)) Tj
+/F2 12 Tf
+1 0 0 1 54 739 Tm
+(VENDOR RISK ASSESSMENT & THIRD-PARTY SECURITY STANDARD) Tj
+/F1 10 Tf
+1 0 0 1 54 724 Tm
+(Standard Ref: VRA-2026-02 | Owner: Enterprise Risk & CISO Office) Tj
+/F2 12 Tf
+1 0 0 1 54 711 Tm
+(Section 1: Supplier Tiering and Onboarding Gates) Tj
+/F1 10 Tf
+1 0 0 1 54 696 Tm
+(1.1 Every third-party SaaS vendor, managed service provider, or subprocessor must) Tj
+/F1 10 Tf
+1 0 0 1 54 683 Tm
+(complete a security risk assessment before handling Company Data. Vendors are) Tj
+/F1 10 Tf
+1 0 0 1 54 670 Tm
+(assigned Tier 1 \(Critical\), Tier 2 \(Confidential\), or Tier 3 \(Public/Low Risk\)) Tj
+/F1 10 Tf
+1 0 0 1 54 657 Tm
+(based on data classification defined in company_compliance_policy.html.) Tj
+/F1 10 Tf
+1 0 0 1 54 644 Tm
+(1.2 Procurement contracts must prohibit vendor onboarding into production without) Tj
+/F1 10 Tf
+1 0 0 1 54 631 Tm
+(CISO sign-off, except for Tier 3 trial tools capped at 14 days using synthetic) Tj
+/F1 10 Tf
+1 0 0 1 54 618 Tm
+(non-production datasets governed under Clause 3.2.) Tj
+/F2 12 Tf
+1 0 0 1 54 605 Tm
+(Section 2: Cryptographic, Access, and Subprocessor Controls) Tj
+/F1 10 Tf
+1 0 0 1 54 590 Tm
+(2.1 Tier 1 and Tier 2 suppliers must enforce TLS 1.3 for all transit channels and) Tj
+/F1 10 Tf
+1 0 0 1 54 577 Tm
+(AES-256 encryption at rest with tenant-isolated key wrapping. Shared static API) Tj
+/F1 10 Tf
+1 0 0 1 54 564 Tm
+(secrets across multiple customer tenants are strictly prohibited.) Tj
+/F1 10 Tf
+1 0 0 1 54 551 Tm
+(Page 1 of 3) Tj
+/F1 10 Tf
+1 0 0 1 54 538 Tm
+(Acme Risk & Procurement Office - Rev 2026.02 Confidential) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R /F2 10 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1495 >>
+stream
+BT
+/F1 10 Tf
+1 0 0 1 54 752 Tm
+(INTERNAL - ACME ENTERPRISE VENDOR RISK STANDARD \(VRA-2026-02\)) Tj
+/F1 10 Tf
+1 0 0 1 54 739 Tm
+(2.2 Subprocessor Notification: Suppliers must maintain an up-to-date subprocessor) Tj
+/F1 10 Tf
+1 0 0 1 54 726 Tm
+(registry and provide at least thirty \(30\) calendar days advance written notice) Tj
+/F1 10 Tf
+1 0 0 1 54 713 Tm
+(before engaging any fourth-party AI inference host or cloud storage subprocessor.) Tj
+/F1 10 Tf
+1 0 0 1 54 700 Tm
+(This aligns with Subprocessor obligations in Section 4.3 of master_services_agreement.pdf.) Tj
+/F1 10 Tf
+1 0 0 1 54 687 Tm
+(2.3 Independent Assurance: Tier 1 vendors must deliver an annual SOC 2 Type II or) Tj
+/F1 10 Tf
+1 0 0 1 54 674 Tm
+(ISO/IEC 27001 surveillance audit report plus annual external penetration test summary) Tj
+/F1 10 Tf
+1 0 0 1 54 661 Tm
+(with zero unmitigated Critical or High CVSS >= 7.5 findings older than 30 days.) Tj
+/F2 12 Tf
+1 0 0 1 54 648 Tm
+(Section 3: Continuous Monitoring, Exit, and Risk Exceptions) Tj
+/F1 10 Tf
+1 0 0 1 54 633 Tm
+(3.1 Continuous Monitoring: Security Operations subscribes to vendor trust centers) Tj
+/F1 10 Tf
+1 0 0 1 54 620 Tm
+(and triggers out-of-cycle reassessment within five \(5\) business days following any) Tj
+/F1 10 Tf
+1 0 0 1 54 607 Tm
+(publicly disclosed supplier breach, ownership acquisition, or critical CVE notice.) Tj
+/F1 10 Tf
+1 0 0 1 54 594 Tm
+(Page 2 of 3) Tj
+/F1 10 Tf
+1 0 0 1 54 581 Tm
+(Acme Risk & Procurement Office - Rev 2026.02 Confidential) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R /F2 10 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 1263 >>
+stream
+BT
+/F1 10 Tf
+1 0 0 1 54 752 Tm
+(INTERNAL - ACME ENTERPRISE VENDOR RISK STANDARD \(VRA-2026-02\)) Tj
+/F1 10 Tf
+1 0 0 1 54 739 Tm
+(3.2 Exception & Provisional Onboarding Carve-Out: A business sponsor may request) Tj
+/F1 10 Tf
+1 0 0 1 54 726 Tm
+(provisional 45-day onboarding while a SOC 2 bridge letter or penetration test) Tj
+/F1 10 Tf
+1 0 0 1 54 713 Tm
+(remediation is pending, provided that \(a\) no Restricted PII or payment credentials) Tj
+/F1 10 Tf
+1 0 0 1 54 700 Tm
+(enter the vendor environment, \(b\) compensating network egress firewall rules and) Tj
+/F1 10 Tf
+1 0 0 1 54 687 Tm
+(SSO SCIM deprovisioning are verified active by Identity Engineering, and \(c\) both) Tj
+/F1 10 Tf
+1 0 0 1 54 674 Tm
+(the Data Protection Officer and CISO co-sign a time-boxed Risk Acceptance Memo.) Tj
+/F1 10 Tf
+1 0 0 1 54 661 Tm
+(3.3 Contract Termination & Sanitization: Upon vendor offboarding, the supplier) Tj
+/F1 10 Tf
+1 0 0 1 54 648 Tm
+(must return exported Company Data in open JSON/CSV formats within 30 days and) Tj
+/F1 10 Tf
+1 0 0 1 54 635 Tm
+(issue a signed NIST SP 800-88 certificate of media sanitization within 45 days.) Tj
+/F1 10 Tf
+1 0 0 1 54 622 Tm
+(Page 3 of 3) Tj
+/F1 10 Tf
+1 0 0 1 54 609 Tm
+(Acme Risk & Procurement Office - Rev 2026.02 Confidential) Tj
+ET
+endstream
+endobj
+9 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+10 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+xref
+0 11
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000127 00000 n 
+0000000264 00000 n 
+0000002002 00000 n 
+0000002139 00000 n 
+0000003686 00000 n 
+0000003823 00000 n 
+0000005138 00000 n 
+0000005208 00000 n 
+trailer
+<< /Size 11 /Root 1 0 R >>
+startxref
+5284
+%%EOF
