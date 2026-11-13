@@ -1,5 +1,6 @@
 # docpipe-maestro
 
+[![CI](https://github.com/ivnmoreno/docpipe-maestro/actions/workflows/ci.yml/badge.svg)](https://github.com/ivnmoreno/docpipe-maestro/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
@@ -65,8 +66,9 @@
 Run an entirely local pipeline using [Ollama](https://ollama.com/) (`nomic-embed-text` + `llama3.2`):
 
 ```bash
-# 1. Install with all format parsers
-pip install "docpipe-maestro[all]"
+# 1. Install with all format parsers (from GitHub until published to PyPI)
+pip install "docpipe-maestro[all] @ git+https://github.com/ivnmoreno/docpipe-maestro.git"
+# Once published on PyPI: pip install "docpipe-maestro[all]"
 
 # 2. Pull local Ollama models (one-time)
 ollama pull nomic-embed-text
@@ -147,7 +149,11 @@ flowchart LR
 The core installation includes Markdown (`.md`, `.markdown`) and plain text (`.txt`) parsing, embedding generation, ChromaDB vector storage, and semantic retrieval:
 
 ```bash
-pip install docpipe-maestro
+# Install directly from GitHub (pre-PyPI)
+pip install "git+https://github.com/ivnmoreno/docpipe-maestro.git"
+
+# Once published on PyPI:
+# pip install docpipe-maestro
 ```
 
 ### Optional Extras
@@ -156,26 +162,26 @@ Install additional document format parsers or cloud LLM generation features as n
 
 | Extra | Purpose | Dependencies Installed |
 |---|---|---|
-| `pdf` | Extract text, page numbers, and heuristic section headings (`Section X.Y`) from PDF files | `pypdf>=4.0.0` (BSD-3-Clause) |
+| `pdf` | Extract text, page numbers, and heuristic section headings (`Section X.Y`) from PDF files | `pypdf>=6.21.3` (BSD-3-Clause) |
 | `docx` | Extract text, style-based headings (`Heading 1`–`Heading 6`), and tables from Word documents | `python-docx>=1.1.0` |
 | `html` | Strip boilerplate and parse `<h1–h6>` headings from web pages / HTML exports | `beautifulsoup4>=4.12.0` |
-| `generation` | Semantic alias for grounded question answering (`litellm` is already installed in core) | `litellm>=1.55.0` |
+| `generation` | Semantic alias for grounded question answering (`litellm` is already installed in core) | `litellm>=1.108.0` |
 | `all` | Installs **all** optional format parsers (`pdf`, `docx`, `html`, `generation`) | `pypdf`, `python-docx`, `beautifulsoup4`, `litellm` |
 
 > **Note on Structure Extraction & Optional Generation**:
 > - **Structure-awareness across formats**: Markdown, plain text, HTML, DOCX, and PDF extract headings, clauses, and pagination metadata cleanly without external SaaS parsers.
 > - **Generation capability**: Because `litellm` powers both embeddings and completions, `answer()` is available in the base install; the `[generation]` extra is retained as a backwards-compatible alias.
 
-Install specific extras:
+Install specific extras (substitute `@ git+https://github.com/ivnmoreno/docpipe-maestro.git` before PyPI publication):
 ```bash
 # PDF support only
-pip install "docpipe-maestro[pdf]"
+pip install "docpipe-maestro[pdf] @ git+https://github.com/ivnmoreno/docpipe-maestro.git"
 
 # PDF and DOCX support
-pip install "docpipe-maestro[pdf,docx]"
+pip install "docpipe-maestro[pdf,docx] @ git+https://github.com/ivnmoreno/docpipe-maestro.git"
 
 # Full installation with all formats and generation
-pip install "docpipe-maestro[all]"
+pip install "docpipe-maestro[all] @ git+https://github.com/ivnmoreno/docpipe-maestro.git"
 ```
 
 ### Development Setup
@@ -545,6 +551,7 @@ uv run pytest -m integration -v
 
 ```text
 docpipe-maestro/
+├── .github/                 # CI workflows, issue templates & PR template
 ├── src/docpipe_maestro/
 │   ├── __init__.py          # Public API exports & lazy generation import
 │   ├── __main__.py          # Enables `python -m docpipe_maestro` CLI execution
@@ -556,10 +563,13 @@ docpipe-maestro/
 │   ├── types.py             # Dataclasses, TypedDicts & DocpipeError hierarchy
 │   ├── ingest/              # Phase 1: intake, clean, crossrefs, chunker, pipeline
 │   └── query/               # Phase 2: retriever, prompts, answer
-├── tests/                   # Unit, integration, and reverse-safety test suites
+├── tests/                   # Unit, integration, security & reverse-safety suites
+├── documents/               # Synthetic sample policy corpus for local demos
 ├── docs/                    # Architecture, API, CLI, dev guide & roadmap
 ├── specs/                   # Feature specification, plan & contracts
 ├── CHANGELOG.md             # Release history
+├── CONTRIBUTING.md          # Contribution workflow & quality gate checklist
+├── SECURITY.md              # Vulnerability reporting & privacy model
 └── pyproject.toml           # PEP 621 / 735 packaging, ruff, mypy & pytest config
 ```
 
@@ -567,13 +577,13 @@ docpipe-maestro/
 
 ## Contributing
 
-Contributions are welcome! Before opening a pull request:
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Development & Testing Guide](docs/development.md) before opening a pull request. In brief:
 
 1. Follow **Conventional Commits** (`feat:`, `fix:`, `docs:`, `test:`, `chore:`) verified with `uv run cz check`.
-2. Ensure all quality gates pass (`ruff check .`, `ruff format --check .`, `mypy src tests`, and `pytest -v --cov` with branch coverage `>= 80%` and zero failures in `tests/test_reverse_safety.py`).
+2. Pass all CI quality gates (`ruff format --check .`, `ruff check .`, `ruff check --select S src/`, `mypy src tests`, `pytest -m reverse -v`, and `pytest -v --cov` with branch coverage `>= 80%`).
 3. Keep all Phase 1 and Phase 2 library modules free of config-file reading and external UI/server concerns.
 
-See the [Development & Testing Guide](docs/development.md) for offline test doubles and live Ollama test instructions.
+For security vulnerabilities, see [SECURITY.md](SECURITY.md).
 
 ---
 
