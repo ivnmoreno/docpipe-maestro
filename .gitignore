@@ -67,6 +67,7 @@ venv.bak/
 # Environment variables & secrets (CRITICAL: Constitution Principle III & Data/Privacy)
 *.env
 *.env.*
+!.env.example
 *.env.local
 .env.production
 .env.development

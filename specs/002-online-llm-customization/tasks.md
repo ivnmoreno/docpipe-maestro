@@ -28,8 +28,8 @@ Single-package `src/` layout at repository root (`src/docpipe_maestro/`, `tests/
 
 **Purpose**: Packaging dependencies and Git tracking rules required across online inference features
 
-- [ ] T001 Declare explicit runtime dependency `"python-dotenv>=1.0.0"` under `[project].dependencies` in `pyproject.toml`
-- [ ] T002 [P] Add negation rule `!.env.example` directly below `*.env.*` ignore rules in `.gitignore` so `.env.example` is trackable while `.env`, `*.env`, `*.env.*`, `.env.local`, `.env.production`, and `.env.development` remain ignored
+- [X] T001 Declare explicit runtime dependency `"python-dotenv>=1.0.0"` under `[project].dependencies` in `pyproject.toml`
+- [X] T002 [P] Add negation rule `!.env.example` directly below `*.env.*` ignore rules in `.gitignore` so `.env.example` is trackable while `.env`, `*.env`, `*.env.*`, `.env.local`, `.env.production`, and `.env.development` remain ignored
 
 ---
 
@@ -39,8 +39,8 @@ Single-package `src/` layout at repository root (`src/docpipe_maestro/`, `tests/
 
 **⚠️ CRITICAL**: No user story work begins until Phase 2 is complete
 
-- [ ] T003 Verify clean baseline test and static analysis status via `uv run pytest -q`, `uv run ruff check .`, and `uv run mypy src tests` configured by `pyproject.toml`
-- [ ] T004 Extract shared `_format_context_block(sections: Sequence[RetrievedChunk]) -> str` helper (zero I/O, preserving `[1] Source: ... | Section: ...` plus optional `Clause`/`Page` headers and `---` separators) used by `build_prompt()` in `src/docpipe_maestro/query/prompts.py`
+- [X] T003 Verify clean baseline test and static analysis status via `uv run pytest -q`, `uv run ruff check .`, and `uv run mypy src tests` configured by `pyproject.toml`
+- [X] T004 Extract shared `_format_context_block(sections: Sequence[RetrievedChunk]) -> str` helper (zero I/O, preserving `[1] Source: ... | Section: ...` plus optional `Clause`/`Page` headers and `---` separators) used by `build_prompt()` in `src/docpipe_maestro/query/prompts.py`
 
 **Checkpoint**: Foundation ready — user story implementation can proceed
 
@@ -56,13 +56,13 @@ Single-package `src/` layout at repository root (`src/docpipe_maestro/`, `tests/
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T005 [US1] Add unit tests in `tests/test_prompts_answer.py` verifying `answer()` forwards explicit `temperature=0.0`, `max_tokens` (`int >= 1`), `timeout` (`float > 0.0`, default `120.0`), valid `model_kwargs` (`top_p`, `frequency_penalty`), and `num_retries=0`, while omitting `"temperature"` and `"max_tokens"` completely when `None`
-- [ ] T006 [US1] Add upfront validation tests in `tests/test_prompts_answer.py` asserting `answer()` raises `DocpipeError` for boolean/non-finite/negative `temperature` (`< 0.0`), boolean/non-`int`/`< 1` `max_tokens`, boolean/non-finite/`<= 0.0` `timeout`, and any reserved or conflicting key (`model`, `messages`, `prompt`, `api_base`, `base_url`, `api_key`, `temperature`, `max_tokens`, `timeout`, `num_retries`) in `model_kwargs`
+- [X] T005 [US1] Add unit tests in `tests/test_prompts_answer.py` verifying `answer()` forwards explicit `temperature=0.0`, `max_tokens` (`int >= 1`), `timeout` (`float > 0.0`, default `120.0`), valid `model_kwargs` (`top_p`, `frequency_penalty`), and `num_retries=0`, while omitting `"temperature"` and `"max_tokens"` completely when `None`
+- [X] T006 [US1] Add upfront validation tests in `tests/test_prompts_answer.py` asserting `answer()` raises `DocpipeError` for boolean/non-finite/negative `temperature` (`< 0.0`), boolean/non-`int`/`< 1` `max_tokens`, boolean/non-finite/`<= 0.0` `timeout`, and any reserved or conflicting key (`model`, `messages`, `prompt`, `api_base`, `base_url`, `api_key`, `temperature`, `max_tokens`, `timeout`, `num_retries`) in `model_kwargs`
 
 ### Implementation for User Story 1
 
-- [ ] T007 [US1] Implement `_RESERVED_MODEL_KWARGS` (`frozenset` of `model`, `messages`, `prompt`, `api_base`, `base_url`, `api_key`, `temperature`, `max_tokens`, `timeout`, `num_retries`) and `_validate_generation_params()` enforcing finite `timeout > 0.0` (not `bool`), `temperature is None` or finite `>= 0.0` (not `bool`), and `max_tokens is None` or `int >= 1` (not `bool`) in `src/docpipe_maestro/query/answer.py`
-- [ ] T008 [US1] Extend `answer()` signature with `temperature: float | None = None`, `max_tokens: int | None = None`, `timeout: float = DEFAULT_REQUEST_TIMEOUT`, and `model_kwargs: Mapping[str, Any] | None = None`, conditionally add `"temperature"` and `"max_tokens"` only when `is not None` (preserving `0.0`), unpack validated `model_kwargs`, and pass `num_retries=0` to `litellm.completion()` in `src/docpipe_maestro/query/answer.py`
+- [X] T007 [US1] Implement `_RESERVED_MODEL_KWARGS` (`frozenset` of `model`, `messages`, `prompt`, `api_base`, `base_url`, `api_key`, `temperature`, `max_tokens`, `timeout`, `num_retries`) and `_validate_generation_params()` enforcing finite `timeout > 0.0` (not `bool`), `temperature is None` or finite `>= 0.0` (not `bool`), and `max_tokens is None` or `int >= 1` (not `bool`) in `src/docpipe_maestro/query/answer.py`
+- [X] T008 [US1] Extend `answer()` signature with `temperature: float | None = None`, `max_tokens: int | None = None`, `timeout: float = DEFAULT_REQUEST_TIMEOUT`, and `model_kwargs: Mapping[str, Any] | None = None`, conditionally add `"temperature"` and `"max_tokens"` only when `is not None` (preserving `0.0`), unpack validated `model_kwargs`, and pass `num_retries=0` to `litellm.completion()` in `src/docpipe_maestro/query/answer.py`
 
 **Checkpoint**: User Story 1 is fully implemented and independently testable via `tests/test_prompts_answer.py` (MVP!)
 
@@ -78,13 +78,13 @@ Single-package `src/` layout at repository root (`src/docpipe_maestro/`, `tests/
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T009 [P] [US2] Add CLI credential discovery tests in `tests/test_cli.py` verifying `.env` loads from `Path(config).parent / ".env"` when `--config` is set or `Path.cwd() / ".env"` otherwise, never walks upward into ancestor directories, ignores missing `.env` files silently, preserves pre-set shell environment variables (`override=False`), and confirms `.env.example` parses with non-live placeholder values only
-- [ ] T010 [P] [US2] Verify `.gitignore` excludes `.env` and permits `.env.example` creation without live secrets by adding repository template check in `tests/test_cli.py` or alongside T009 before implementation
+- [X] T009 [P] [US2] Add CLI credential discovery tests in `tests/test_cli.py` verifying `.env` loads from `Path(config).parent / ".env"` when `--config` is set or `Path.cwd() / ".env"` otherwise, never walks upward into ancestor directories, ignores missing `.env` files silently, preserves pre-set shell environment variables (`override=False`), and confirms `.env.example` parses with non-live placeholder values only
+- [X] T010 [P] [US2] Verify `.gitignore` excludes `.env` and permits `.env.example` creation without live secrets by adding repository template check in `tests/test_cli.py` or alongside T009 before implementation
 
 ### Implementation for User Story 2
 
-- [ ] T011 [P] [US2] Create tracked `.env.example` at repository root containing placeholder keys (zero live secrets) for `GROQ_API_KEY`, `TOGETHERAI_API_KEY` (with note on `TOGETHER_API_KEY` alias), `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `AZURE_API_KEY`, `AZURE_API_BASE`, `AZURE_API_VERSION`, `LITELLM_LOCAL_MODEL_COST_MAP="true"`, and `chmod 600 .env` security guidance in `.env.example`
-- [ ] T012 [US2] Implement `_load_cli_dotenv(config_path: str | None) -> None` resolving `(Path(config_path).parent if config_path else Path.cwd()) / ".env"` and calling `load_dotenv(dotenv_path=env_path, override=False)` only when `env_path.is_file()` at the top of `main()` before `_load_toml_config()` in `src/docpipe_maestro/cli.py`
+- [X] T011 [P] [US2] Create tracked `.env.example` at repository root containing placeholder keys (zero live secrets) for `GROQ_API_KEY`, `TOGETHERAI_API_KEY` (with note on `TOGETHER_API_KEY` alias), `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `AZURE_API_KEY`, `AZURE_API_BASE`, `AZURE_API_VERSION`, `LITELLM_LOCAL_MODEL_COST_MAP="true"`, and `chmod 600 .env` security guidance in `.env.example`
+- [X] T012 [US2] Implement `_load_cli_dotenv(config_path: str | None) -> None` resolving `(Path(config_path).parent if config_path else Path.cwd()) / ".env"` and calling `load_dotenv(dotenv_path=env_path, override=False)` only when `env_path.is_file()` at the top of `main()` before `_load_toml_config()` in `src/docpipe_maestro/cli.py`
 
 **Checkpoint**: User Stories 1 AND 2 work independently and securely without leaking credentials to Git
 
@@ -100,14 +100,14 @@ Single-package `src/` layout at repository root (`src/docpipe_maestro/`, `tests/
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T013 [P] [US3] Add transport security, secret redaction, and HTTP 401/403/429 tests in `tests/test_security_hardening.py` verifying `http://localhost`, `http://127.0.0.1`, and `http://[::1]:8000` are permitted while `http://api.example.com/v1` raises `DocpipeError("Insecure remote api_base URL: must use https:// for external endpoints")`, redaction covers `gsk_...`, `AIza...`, `Bearer ...`, `?key=`/`?api_key=`/`?token=`, and opaque bare env secrets (`TOGETHERAI_API_KEY`, `AZURE_API_KEY`), `401`/`403`/`PermissionDeniedError` raises `MissingCredentialError`, and `429`/`RateLimitError` raises sanitized `DocpipeError` matching `"Rate limit or quota exceeded (HTTP 429)"`
-- [ ] T014 [P] [US3] Add completion moderation and empty-content safety tests in `tests/test_prompts_answer.py` asserting `answer()` raises descriptive `DocpipeError` (instead of `IndexError` or `""`) when mocked `litellm.completion` returns `choices=[]`, non-empty `message.refusal`, or `message.content` that is `None` or whitespace-only (while still handling `SimpleNamespace` responses omitting `refusal`)
+- [X] T013 [P] [US3] Add transport security, secret redaction, and HTTP 401/403/429 tests in `tests/test_security_hardening.py` verifying `http://localhost`, `http://127.0.0.1`, and `http://[::1]:8000` are permitted while `http://api.example.com/v1` raises `DocpipeError("Insecure remote api_base URL: must use https:// for external endpoints")`, redaction covers `gsk_...`, `AIza...`, `Bearer ...`, `?key=`/`?api_key=`/`?token=`, and opaque bare env secrets (`TOGETHERAI_API_KEY`, `AZURE_API_KEY`), `401`/`403`/`PermissionDeniedError` raises `MissingCredentialError`, and `429`/`RateLimitError` raises sanitized `DocpipeError` matching `"Rate limit or quota exceeded (HTTP 429)"`
+- [X] T014 [P] [US3] Add completion moderation and empty-content safety tests in `tests/test_prompts_answer.py` asserting `answer()` raises descriptive `DocpipeError` (instead of `IndexError` or `""`) when mocked `litellm.completion` returns `choices=[]`, non-empty `message.refusal`, or `message.content` that is `None` or whitespace-only (while still handling `SimpleNamespace` responses omitting `refusal`)
 
 ### Implementation for User Story 3
 
-- [ ] T015 [P] [US3] Update `validate_api_base()` using stdlib `ipaddress.ip_address(host).is_loopback` and `"localhost"` check to permit loopback `http://` and raise `DocpipeError("Insecure remote api_base URL: must use https:// for external endpoints")` on remote `http://` URLs in `src/docpipe_maestro/embedder.py`
-- [ ] T016 [US3] Broaden `_SECRET_PATTERN_RE` (`://user:pass@`, `sk-`, `gsk_`, `AIza`, `Bearer`, `[?&](?:api[_-]?key|key|token)=[^&\s]+`), add `_active_env_secrets()` helper checking loaded `*_API_KEY`/`*_TOKEN`/`*_SECRET` (`len >= 8`) values, extend `_is_auth_error()` for `401`/`403`/`PermissionDeniedError`, and emit sanitized `"Rate limit or quota exceeded (HTTP 429)"` errors in `raise_litellm_error()` in `src/docpipe_maestro/embedder.py`
-- [ ] T017 [P] [US3] Add `_extract_completion_text(response, model)` helper verifying non-empty `choices`, checking dict/object `refusal` safely via `_item_field` / `getattr(msg, "refusal", None)`, raising `DocpipeError` when empty/`refusal`/null/blank, and returning stripped answer text in `src/docpipe_maestro/query/answer.py`
+- [X] T015 [P] [US3] Update `validate_api_base()` using stdlib `ipaddress.ip_address(host).is_loopback` and `"localhost"` check to permit loopback `http://` and raise `DocpipeError("Insecure remote api_base URL: must use https:// for external endpoints")` on remote `http://` URLs in `src/docpipe_maestro/embedder.py`
+- [X] T016 [US3] Broaden `_SECRET_PATTERN_RE` (`://user:pass@`, `sk-`, `gsk_`, `AIza`, `Bearer`, `[?&](?:api[_-]?key|key|token)=[^&\s]+`), add `_active_env_secrets()` helper checking loaded `*_API_KEY`/`*_TOKEN`/`*_SECRET` (`len >= 8`) values, extend `_is_auth_error()` for `401`/`403`/`PermissionDeniedError`, and emit sanitized `"Rate limit or quota exceeded (HTTP 429)"` errors in `raise_litellm_error()` in `src/docpipe_maestro/embedder.py`
+- [X] T017 [P] [US3] Add `_extract_completion_text(response, model)` helper verifying non-empty `choices`, checking dict/object `refusal` safely via `_item_field` / `getattr(msg, "refusal", None)`, raising `DocpipeError` when empty/`refusal`/null/blank, and returning stripped answer text in `src/docpipe_maestro/query/answer.py`
 
 **Checkpoint**: User Stories 1, 2, AND 3 pass all P1 security, credential, and generation safety criteria
 
@@ -123,13 +123,13 @@ Single-package `src/` layout at repository root (`src/docpipe_maestro/`, `tests/
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T018 [US4] Add ChatML prompt structure and message-input tests in `tests/test_prompts_answer.py` verifying top-level `build_chat_messages()` returns `[{"role": "system", ...}, {"role": "user", ...}]` separating `_SYSTEM_INSTRUCTIONS` from context/question (including empty sections), `answer()` forwards message sequences directly to `litellm.completion(messages=...)`, retains `str` compatibility, and raises `DocpipeError` on empty or malformed message sequences
+- [X] T018 [US4] Add ChatML prompt structure and message-input tests in `tests/test_prompts_answer.py` verifying top-level `build_chat_messages()` returns `[{"role": "system", ...}, {"role": "user", ...}]` separating `_SYSTEM_INSTRUCTIONS` from context/question (including empty sections), `answer()` forwards message sequences directly to `litellm.completion(messages=...)`, retains `str` compatibility, and raises `DocpipeError` on empty or malformed message sequences
 
 ### Implementation for User Story 4
 
-- [ ] T019 [P] [US4] Implement `build_chat_messages(question: str, sections: Sequence[RetrievedChunk]) -> list[dict[str, str]]` sharing `_SYSTEM_INSTRUCTIONS` and `_format_context_block(sections)` (zero I/O, zero side effects) in `src/docpipe_maestro/query/prompts.py`
-- [ ] T020 [US4] Re-export `build_chat_messages` alongside `build_prompt` and add `"build_chat_messages"` alphabetically to `__all__` in `src/docpipe_maestro/__init__.py`
-- [ ] T021 [US4] Update `answer()` parameter annotation to `prompt: str | Sequence[Mapping[str, str]]` and add `_normalize_messages()` validating non-empty sequences with non-empty `str` `"role"` and `str` `"content"` entries in `src/docpipe_maestro/query/answer.py`
+- [X] T019 [P] [US4] Implement `build_chat_messages(question: str, sections: Sequence[RetrievedChunk]) -> list[dict[str, str]]` sharing `_SYSTEM_INSTRUCTIONS` and `_format_context_block(sections)` (zero I/O, zero side effects) in `src/docpipe_maestro/query/prompts.py`
+- [X] T020 [US4] Re-export `build_chat_messages` alongside `build_prompt` and add `"build_chat_messages"` alphabetically to `__all__` in `src/docpipe_maestro/__init__.py`
+- [X] T021 [US4] Update `answer()` parameter annotation to `prompt: str | Sequence[Mapping[str, str]]` and add `_normalize_messages()` validating non-empty sequences with non-empty `str` `"role"` and `str` `"content"` entries in `src/docpipe_maestro/query/answer.py`
 
 **Checkpoint**: User Story 4 works independently across both plain-string callers and structured role-separated callers
 
@@ -145,13 +145,13 @@ Single-package `src/` layout at repository root (`src/docpipe_maestro/`, `tests/
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T022 [US5] Add CLI flag & TOML parity precedence tests in `tests/test_cli.py` verifying `docpipe.toml` keys (`api_base`, `temperature`, `max_tokens`, `timeout`) apply as defaults, CLI `--temperature`, `--max-tokens`, `--timeout`, and `--api-base` flags override TOML values, invalid TOML types (such as `bool` for `max_tokens`/`temperature`/`timeout` or non-string `api_base`) fail cleanly with exit code `1`, and `ask` constructs role-separated messages via `build_chat_messages()`
+- [X] T022 [US5] Add CLI flag & TOML parity precedence tests in `tests/test_cli.py` verifying `docpipe.toml` keys (`api_base`, `temperature`, `max_tokens`, `timeout`) apply as defaults, CLI `--temperature`, `--max-tokens`, `--timeout`, and `--api-base` flags override TOML values, invalid TOML types (such as `bool` for `max_tokens`/`temperature`/`timeout` or non-string `api_base`) fail cleanly with exit code `1`, and `ask` constructs role-separated messages via `build_chat_messages()`
 
 ### Implementation for User Story 5
 
-- [ ] T023 [US5] Add `_cfg_opt_str()` and `_cfg_opt_int()` helpers (rejecting `bool` and unexpected TOML types with `DocpipeError("Invalid TOML config value for ...")`) in `src/docpipe_maestro/cli.py`
-- [ ] T024 [US5] Extend `build_parser()` to load `api_base`, `temperature`, `max_tokens`, and `timeout` (defaulting to `DEFAULT_REQUEST_TIMEOUT` = `120.0`) from `cfg_defaults` and register `--temperature` (`float`), `--max-tokens` (`int`), and `--timeout` (`float`) options on `p_ask` in `src/docpipe_maestro/cli.py`
-- [ ] T025 [US5] Import `build_chat_messages` and update `args.command == "ask"` handler to pass `build_chat_messages(args.question, sections)`, `temperature=args.temperature`, `max_tokens=args.max_tokens`, `timeout=args.timeout`, and `api_base=args.api_base` to `answer()` in `src/docpipe_maestro/cli.py`
+- [X] T023 [US5] Add `_cfg_opt_str()` and `_cfg_opt_int()` helpers (rejecting `bool` and unexpected TOML types with `DocpipeError("Invalid TOML config value for ...")`) in `src/docpipe_maestro/cli.py`
+- [X] T024 [US5] Extend `build_parser()` to load `api_base`, `temperature`, `max_tokens`, and `timeout` (defaulting to `DEFAULT_REQUEST_TIMEOUT` = `120.0`) from `cfg_defaults` and register `--temperature` (`float`), `--max-tokens` (`int`), and `--timeout` (`float`) options on `p_ask` in `src/docpipe_maestro/cli.py`
+- [X] T025 [US5] Import `build_chat_messages` and update `args.command == "ask"` handler to pass `build_chat_messages(args.question, sections)`, `temperature=args.temperature`, `max_tokens=args.max_tokens`, `timeout=args.timeout`, and `api_base=args.api_base` to `answer()` in `src/docpipe_maestro/cli.py`
 
 **Checkpoint**: All 5 user stories (P1 and P2) are independently complete and verified end-to-end
 
@@ -161,10 +161,10 @@ Single-package `src/` layout at repository root (`src/docpipe_maestro/`, `tests/
 
 **Purpose**: Align user documentation with new contracts and pass all CI & quickstart gates
 
-- [ ] T026 [P] Update `docs/api-reference.md` with `build_chat_messages()`, extended `answer()` parameters (`temperature`, `max_tokens`, `timeout`, `model_kwargs`), reserved `model_kwargs` rules, Groq/Together.ai Python examples, and HTTP 429/moderation error documentation
-- [ ] T027 [P] Update `docs/cli-reference.md` with `.env` scoped startup discovery rules, extended `docpipe-maestro ask` flags (`--temperature`, `--max-tokens`, `--timeout`), `docpipe.toml` generation keys, and strict precedence order
-- [ ] T028 [P] Update `README.md` with `.env` + `chmod 600 .env` setup quickstart, Groq serverless and Together.ai examples, and air-gapped safety guidance
-- [ ] T029 Run full offline verification suite per `specs/002-online-llm-customization/quickstart.md`: `uv run ruff format --check .`, `uv run ruff check .`, `uv run ruff check --select S src/`, `uv run mypy src tests`, `uv run pytest -m reverse -v`, `LITELLM_LOCAL_MODEL_COST_MAP=true uv run pytest -v --cov` (`>=80%` branch coverage), and verify `git check-ignore .env` passes while `.env.example` stays untracked-ready (`!ignored`)
+- [X] T026 [P] Update `docs/api-reference.md` with `build_chat_messages()`, extended `answer()` parameters (`temperature`, `max_tokens`, `timeout`, `model_kwargs`), reserved `model_kwargs` rules, Groq/Together.ai Python examples, and HTTP 429/moderation error documentation
+- [X] T027 [P] Update `docs/cli-reference.md` with `.env` scoped startup discovery rules, extended `docpipe-maestro ask` flags (`--temperature`, `--max-tokens`, `--timeout`), `docpipe.toml` generation keys, and strict precedence order
+- [X] T028 [P] Update `README.md` with `.env` + `chmod 600 .env` setup quickstart, Groq serverless and Together.ai examples, and air-gapped safety guidance
+- [X] T029 Run full offline verification suite per `specs/002-online-llm-customization/quickstart.md`: `uv run ruff format --check .`, `uv run ruff check .`, `uv run ruff check --select S src/`, `uv run mypy src tests`, `uv run pytest -m reverse -v`, `LITELLM_LOCAL_MODEL_COST_MAP=true uv run pytest -v --cov` (`>=80%` branch coverage), and verify `git check-ignore .env` passes while `.env.example` stays untracked-ready (`!ignored`)
 
 ---
 

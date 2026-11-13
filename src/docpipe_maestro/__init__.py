@@ -19,7 +19,7 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Any
 
 from docpipe_maestro.ingest.pipeline import ingest, reindex, remove, status, sync
-from docpipe_maestro.query.prompts import build_prompt
+from docpipe_maestro.query.prompts import build_chat_messages, build_prompt
 from docpipe_maestro.query.retriever import retrieve
 from docpipe_maestro.types import (
     Chunk,
@@ -59,6 +59,7 @@ __all__ = [
     "UnsupportedFormatError",
     "__version__",
     "answer",
+    "build_chat_messages",
     "build_prompt",
     "ingest",
     "reindex",

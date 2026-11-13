@@ -25,6 +25,24 @@ _SYSTEM_INSTRUCTIONS = (
 )
 
 
+def _format_context_block(sections: Sequence[RetrievedChunk]) -> str:
+    """Render retrieved sections into numbered context blocks with provenance headers."""
+    if not sections:
+        return "(No relevant context sections retrieved.)"
+
+    formatted_sections: list[str] = []
+    for idx, sec in enumerate(sections, start=1):
+        meta = sec.metadata
+        parts = [f"Source: {meta['source']}", f"Section: {meta['section']}"]
+        if meta["clause"] is not None:
+            parts.append(f"Clause: {meta['clause']}")
+        if meta["page"] is not None:
+            parts.append(f"Page: {meta['page']}")
+        header = f"[{idx}] " + " | ".join(parts)
+        formatted_sections.append(f"{header}\n{sec.text}")
+    return "\n\n---\n\n".join(formatted_sections)
+
+
 def build_prompt(question: str, sections: Sequence[RetrievedChunk]) -> str:
     """Construct a grounded prompt string with source attribution metadata.
 
@@ -39,24 +57,35 @@ def build_prompt(question: str, sections: Sequence[RetrievedChunk]) -> str:
     Returns:
         Complete formatted prompt ready for an LLM completion call.
     """
-    if not sections:
-        context_block = "(No relevant context sections retrieved.)"
-    else:
-        formatted_sections: list[str] = []
-        for idx, sec in enumerate(sections, start=1):
-            meta = sec.metadata
-            parts = [f"Source: {meta['source']}", f"Section: {meta['section']}"]
-            if meta["clause"] is not None:
-                parts.append(f"Clause: {meta['clause']}")
-            if meta["page"] is not None:
-                parts.append(f"Page: {meta['page']}")
-            header = f"[{idx}] " + " | ".join(parts)
-            formatted_sections.append(f"{header}\n{sec.text}")
-        context_block = "\n\n---\n\n".join(formatted_sections)
-
+    context_block = _format_context_block(sections)
     return (
         f"{_SYSTEM_INSTRUCTIONS}\n\n"
         f"## Context\n\n{context_block}\n\n"
         f"## Question\n\n{question}\n\n"
         "## Answer\n"
     )
+
+
+def build_chat_messages(
+    question: str,
+    sections: Sequence[RetrievedChunk],
+) -> list[dict[str, str]]:
+    """Construct role-separated ChatML messages isolating instructions from context.
+
+    Pure function: performs zero disk I/O, zero network calls, and has no side
+    effects. Places system grounding rules in the ``system`` message and the
+    formatted context sections plus user question in the ``user`` message.
+
+    Args:
+        question: User's natural-language question.
+        sections: Retrieved sections/chunks produced by ``retrieve()``.
+
+    Returns:
+        Two-element ``[{"role": "system", ...}, {"role": "user", ...}]`` message list.
+    """
+    context_block = _format_context_block(sections)
+    user_content = f"## Context\n\n{context_block}\n\n## Question\n\n{question}"
+    return [
+        {"role": "system", "content": _SYSTEM_INSTRUCTIONS},
+        {"role": "user", "content": user_content},
+    ]

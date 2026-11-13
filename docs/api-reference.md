@@ -184,23 +184,74 @@ Pure, deterministic function (zero disk I/O, zero network calls) constructing a 
 
 ---
 
+### `build_chat_messages(...) -> list[dict[str, str]]`
+
+```python
+def build_chat_messages(
+    question: str,
+    sections: Sequence[RetrievedChunk],
+) -> list[dict[str, str]]
+```
+
+Pure, deterministic function (zero disk I/O, zero network calls) returning a two-element ChatML structure:
+
+- `[{"role": "system", "content": ...}, {"role": "user", "content": ...}]`
+- Isolates grounding instructions inside the `system` role and keeps untrusted document chunks plus the user question inside the `user` role.
+- Shares the exact same provenance block formatter as `build_prompt()`.
+
+---
+
 ### `answer(...) -> str`
 
 ```python
 def answer(
-    prompt: str,
+    prompt: str | Sequence[Mapping[str, str]],
     *,
     model: str = "ollama/llama3.2",
     api_base: str | None = None,
     has_context: bool = True,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    timeout: float = 120.0,
+    model_kwargs: Mapping[str, Any] | None = None,
 ) -> str
 ```
 
 Lazily loaded (`__getattr__` on `docpipe_maestro`) completion wrapper powered by `litellm.completion`:
 
-- **Empty Context Refusal**: When `has_context=False`, immediately returns `EMPTY_CONTEXT_REFUSAL` (`"Not found in the provided context."`) with zero LLM network calls.
-- **Custom Endpoints**: Pass `api_base="http://localhost:8000/v1"` for vLLM, LM Studio, or private OpenAI-compatible servers.
-- **Credential Hygiene**: LiteLLM reads provider API keys directly from environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, etc.); missing credentials raise `MissingCredentialError` without logging key values.
+- **Empty Context Refusal**: Validates inputs first, then immediately returns `EMPTY_CONTEXT_REFUSAL` (`"Not found in the provided context."`) with zero LLM calls when `has_context=False`.
+- **Reasoning-Model Parameter Safety**: `temperature` (`>= 0.0`) and `max_tokens` (`>= 1`) are omitted completely from the LiteLLM request when `None` (while explicit `temperature=0.0` is preserved verbatim). `timeout` defaults to `120.0` seconds.
+- **Extra Generation Controls (`model_kwargs`)**: Forwarded to `litellm.completion` (e.g., `top_p`, `frequency_penalty`), excluding reserved/conflicting keys (`model`, `messages`, `prompt`, `api_base`, `base_url`, `api_key`, `temperature`, `max_tokens`, `timeout`, `num_retries`) which raise `DocpipeError`.
+- **Transport Security (`api_base`)**: Plain `http://` is permitted only for loopback hosts (`localhost`, `127.0.0.0/8`, `::1`); remote endpoints must use `https://`.
+- **Provider Examples**:
+
+```python
+from docpipe_maestro import answer, build_chat_messages, retrieve
+
+sections = retrieve("What is the leave policy?", top_k=5)
+messages = build_chat_messages("What is the leave policy?", sections)
+
+# Groq serverless inference (reads GROQ_API_KEY from environment)
+groq_reply = answer(
+    messages,
+    model="groq/llama-3.3-70b-versatile",
+    temperature=0.0,
+    max_tokens=512,
+    timeout=30.0,
+    has_context=bool(sections),
+)
+
+# Together.ai inference (reads TOGETHERAI_API_KEY / TOGETHER_API_KEY)
+together_reply = answer(
+    messages,
+    model="together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    temperature=0.2,
+    model_kwargs={"top_p": 0.9},
+    has_context=bool(sections),
+)
+```
+
+- **Fail-Fast Resilience & Privacy**: Passes `num_retries=0` so HTTP `429` fails fast with a sanitized `DocpipeError`; HTTP `401`/`403` raise `MissingCredentialError`; empty `choices`, populated `message.refusal`, or `None`/whitespace-only `content` raise `DocpipeError`; active env secrets and token patterns are scrubbed from error chains.
 
 **Raises**: `MissingExtraError` (if import fails), `MissingCredentialError`, `DocpipeError`.
 

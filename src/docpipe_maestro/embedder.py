@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 from collections.abc import Mapping, Sequence
@@ -11,15 +12,41 @@ from urllib.parse import urlparse
 from docpipe_maestro.types import DocpipeError, MissingCredentialError
 
 DEFAULT_REQUEST_TIMEOUT = 120.0
+_MISSING = object()
 _SECRET_PATTERN_RE = re.compile(
-    r"(?:://[^/\s:@]+:[^/\s@]+@|\bsk-[A-Za-z0-9_-]{8,}|\bgsk_[A-Za-z0-9_-]{8,}|\bBearer\s+\S+)",
+    r"(?:://[^/\s:@]+:[^/\s@]+@"
+    r"|\bsk-[A-Za-z0-9_-]{8,}"
+    r"|\bgsk_[A-Za-z0-9_-]{8,}"
+    r"|\bAIza[A-Za-z0-9_-]{8,}"
+    r"|\bBearer\s+\S+"
+    r"|[?&](?:api[_-]?key|key|token)=[^&\s]+)",
     re.IGNORECASE,
 )
+_ENV_SECRET_SUFFIXES = ("_API_KEY", "_TOKEN", "_SECRET")
+_HTTP_AUTH_STATUS_RE = re.compile(r"\b(?:401|403)\b")
+_HTTP_RATE_LIMIT_STATUS_RE = re.compile(r"\b429\b")
 
 
-def _item_field(item: Any, key: str) -> Any:
-    """Read an embedding item field whether LiteLLM returns a dict or object."""
-    return item[key] if isinstance(item, Mapping) else getattr(item, key)
+def _item_field(item: Any, key: str, default: Any = _MISSING) -> Any:
+    """Read a response field whether LiteLLM returns a dict or attribute object."""
+    if isinstance(item, Mapping):
+        if key in item:
+            return item[key]
+        if default is not _MISSING:
+            return default
+        raise KeyError(key)
+    if default is not _MISSING:
+        return getattr(item, key, default)
+    return getattr(item, key)
+
+
+def _active_env_secrets() -> tuple[str, ...]:
+    """Collect active non-trivial secret values from environment variables."""
+    return tuple(
+        val
+        for name, val in os.environ.items()
+        if name.endswith(_ENV_SECRET_SUFFIXES) and len(val) >= 8
+    )
 
 
 def _is_auth_error(exc: Exception) -> bool:
@@ -28,20 +55,52 @@ def _is_auth_error(exc: Exception) -> bool:
     msg = str(exc).lower()
     return (
         "auth" in name
+        or "permission" in name
         or "api_key" in msg
         or "apikey" in msg
         or "credentials" in msg
         or "unauthorized" in msg
+        or bool(_HTTP_AUTH_STATUS_RE.search(msg))
+    )
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """Detect HTTP 429 or provider rate-limit exhaustion errors."""
+    name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+    return (
+        "ratelimit" in name
+        or "rate_limit" in name
+        or "rate limit" in msg
+        or "rate_limit" in msg
+        or "too many requests" in msg
+        or bool(_HTTP_RATE_LIMIT_STATUS_RE.search(msg))
     )
 
 
 def _contains_secret_data(exc: Exception) -> bool:
-    """Detect whether an exception message embeds URL credentials or token substrings."""
-    return bool(_SECRET_PATTERN_RE.search(str(exc)))
+    """Detect URL credentials, token patterns, or loaded environment secrets in errors."""
+    text = str(exc)
+    if _SECRET_PATTERN_RE.search(text):
+        return True
+    return any(secret in text for secret in _active_env_secrets())
+
+
+def _is_loopback_host(hostname: str | None) -> bool:
+    """Return ``True`` when ``hostname`` targets ``localhost`` or a loopback IP."""
+    if not hostname:
+        return False
+    normalized = hostname.strip().lower().rstrip(".")
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
 
 
 def validate_api_base(api_base: str | None) -> str | None:
-    """Ensure optional custom endpoint URLs use an explicit http or https scheme."""
+    """Ensure custom endpoints are valid URLs and restrict plain HTTP to loopback hosts."""
     if api_base is None:
         return None
     parsed = urlparse(api_base)
@@ -49,6 +108,8 @@ def validate_api_base(api_base: str | None) -> str | None:
         raise DocpipeError(
             f"Invalid api_base URL {api_base!r}: must start with http:// or https://"
         )
+    if parsed.scheme == "http" and not _is_loopback_host(parsed.hostname):
+        raise DocpipeError("Insecure remote api_base URL: must use https:// for external endpoints")
     return api_base
 
 
@@ -67,7 +128,16 @@ def raise_litellm_error(exc: Exception, *, operation: str, model: str) -> NoRetu
             f"Missing or invalid provider credentials for {operation} model {model!r}. "
             "Set the provider's environment variable and retry."
         ) from None
-    if _contains_secret_data(exc):
+    has_secret = _contains_secret_data(exc)
+    if _is_rate_limit_error(exc):
+        msg = (
+            f"Rate limit or quota exceeded (HTTP 429) for {operation} model {model!r}. "
+            "Retry later or switch provider."
+        )
+        if has_secret:
+            raise DocpipeError(msg) from None
+        raise DocpipeError(msg) from exc
+    if has_secret:
         raise DocpipeError(
             f"{operation.capitalize()} request failed for model {model!r}: {type(exc).__name__}"
         ) from None

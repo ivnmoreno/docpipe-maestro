@@ -226,28 +226,33 @@ ollama pull llama3.2
 
 > **Air-gapped / strict zero-egress environments**: By default, `litellm` attempts to download its public model-cost JSON map from GitHub when first imported before falling back to its bundled copy. Set `export LITELLM_LOCAL_MODEL_COST_MAP=true` in your shell to prevent any startup HTTP call on import.
 
-### 2. Cloud Provider API Keys
+### 2. Cloud Provider API Keys (`.env` or Shell Environment)
 
-To use cloud embedding or generation models, set the standard environment variables required by LiteLLM:
+Copy the tracked template `.env.example` to `.env` (git-ignored) and restrict permissions:
 
 ```bash
-# OpenAI
-export OPENAI_API_KEY="sk-..."
-
-# Anthropic (Claude)
-export ANTHROPIC_API_KEY="sk-ant-..."
-
-# Google Gemini
-export GEMINI_API_KEY="..."
-
-# Groq
-export GROQ_API_KEY="gsk_..."
-
-# Together AI
-export TOGETHERAI_API_KEY="..."
+cp .env.example .env && chmod 600 .env
 ```
 
-You can then pass any `provider/model` string directly to `--embed-model` or `--model` (e.g., `openai/text-embedding-3-small`, `openai/gpt-4o-mini`, `gemini/gemini-2.0-flash`, `anthropic/claude-3-5-haiku-20241022`).
+Or export provider environment variables directly in your shell (shell variables always take precedence over `.env`):
+
+```bash
+# Groq serverless inference
+export GROQ_API_KEY="your-groq-api-key"
+
+# Together.ai serverless inference (TOGETHER_API_KEY alias is also recognized by LiteLLM)
+export TOGETHERAI_API_KEY="your-together-api-key"
+
+# OpenAI / Anthropic / Google Gemini
+export OPENAI_API_KEY="your-openai-api-key"
+export ANTHROPIC_API_KEY="your-anthropic-api-key"
+export GEMINI_API_KEY="your-gemini-api-key"
+
+# Air-gapped / offline startup cost-map safety
+export LITELLM_LOCAL_MODEL_COST_MAP="true"
+```
+
+You can then pass any `provider/model` string directly to `--embed-model` or `--model` (e.g., `groq/llama-3.3-70b-versatile`, `together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo`, `openai/gpt-4o-mini`, `gemini/gemini-2.5-flash`). Note that the CLI loads `.env` strictly from the `--config` directory or current working directory (never walking parent directories), while direct Python API callers configure `os.environ`.
 
 ### 3. Local Persistence Storage Directory
 
@@ -274,6 +279,11 @@ model = "ollama/llama3.2"
 profile = "POLICY"
 top_k = 5
 threshold = 0.4
+# Optional online/gateway defaults for `docpipe-maestro ask` (CLI flags override these):
+# api_base = "https://api.groq.com/openai/v1"
+# temperature = 0.0
+# max_tokens = 512
+# timeout = 60.0
 ```
 
 Pass it to any CLI command using `--config`:
@@ -472,7 +482,7 @@ reindexed_count = reindex(
 ### Phase 2: Semantic Retrieval & Grounded RAG Workflow
 
 ```python
-from docpipe_maestro import answer, build_prompt, retrieve
+from docpipe_maestro import answer, build_chat_messages, retrieve
 
 question = "What is the travel meal reimbursement rate?"
 
@@ -489,13 +499,17 @@ for section in retrieved_sections:
     print(f"[{section.score:.2f}] {section.metadata['source']} - {section.metadata['section']}")
     print(section.text)
 
-# 2. Build a grounded prompt (Pure function, zero network calls)
-prompt = build_prompt(question=question, sections=retrieved_sections)
+# 2. Build role-separated ChatML messages (Pure function, zero network calls)
+#    (build_prompt() also remains available for single-string prompts.)
+messages = build_chat_messages(question=question, sections=retrieved_sections)
 
-# 3. Generate a grounded answer (uses local Ollama by default)
+# 3. Generate a grounded answer (local Ollama default, or e.g. groq/llama-3.3-70b-versatile)
 response = answer(
-    prompt=prompt,
-    model="ollama/llama3.2",  # or "openai/gpt-4o-mini", "anthropic/claude-3-5-haiku", etc.
+    prompt=messages,
+    model="ollama/llama3.2",
+    temperature=0.0,  # Omit (None) for reasoning models that reject temperature
+    max_tokens=512,
+    timeout=60.0,
     has_context=bool(retrieved_sections),  # Short-circuits with refusal if context is empty
 )
 print("Answer:\n", response)
@@ -519,7 +533,7 @@ Exported from `docpipe_maestro` (`docpipe_maestro.types`):
 ## Security, Privacy & Grounding Notes
 
 - **Trusted local corpus assumption**: Like most local ingestion tools, `docpipe-maestro ingest` processes files inside the target directory you specify. Only ingest trusted documents and avoid pointing `ingest`/`sync` at directories containing symlinks to sensitive files or untrusted HTML/PDF inputs.
-- **Credentials belong in environment variables**: API keys are never accepted in `docpipe.toml`, and `MissingCredentialError` scrubs auth error chains (`from None`) so secrets are not leaked in messages.
+- **Credentials & transport security**: API keys are never accepted in `docpipe.toml`; remote custom endpoints require `https://` (`http://` is permitted only for loopback hosts), and error handlers scrub regex key patterns as well as loaded environment secrets (`from None`) so credentials never leak in exceptions.
 - **Reduce hallucinations with `--threshold`**: Set a similarity `--threshold` (e.g. `0.35`–`0.6` depending on embedding model) on `retrieve()` / `docpipe-maestro ask` so off-topic questions return zero matches and short-circuit deterministically (`"Not found in the provided context."`).
 - **Protect your `.docpipe/` store on shared hosts**: Embedded ChromaDB files store plaintext document sections; keep `persist_dir` on owner-restricted paths (`chmod 700`) and excluded from version control.
 

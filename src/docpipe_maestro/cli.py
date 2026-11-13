@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
 from docpipe_maestro import (
     __version__,
     answer,
-    build_prompt,
+    build_chat_messages,
     ingest,
     reindex,
     remove,
@@ -27,15 +30,29 @@ from docpipe_maestro.config import (
     DEFAULT_PERSIST_DIR,
     DEFAULT_TOP_K,
 )
+from docpipe_maestro.embedder import DEFAULT_REQUEST_TIMEOUT
 from docpipe_maestro.types import DocpipeError
+
+
+def _load_cli_dotenv(config_path: str | None) -> None:
+    """Load an optional ``.env`` strictly from the config directory or CWD (CLI only).
+
+    Never walks upward into ancestor directories and never overwrites variables
+    that are already present in the caller's environment.
+    """
+    base_dir = Path(config_path).parent if config_path else Path.cwd()
+    env_path = base_dir / ".env"
+    if env_path.is_file():
+        load_dotenv(dotenv_path=env_path, override=False)
 
 
 def _load_toml_config(config_path: str | None) -> dict[str, Any]:
     """Load an optional TOML user configuration file (permitted in CLI only).
 
     Supported keys include ``collection``, ``persist_dir``, ``embed_model``,
-    ``model``, ``profile``, ``top_k``, and ``threshold``. Credentials must
-    never be stored here; use provider environment variables instead.
+    ``model``, ``profile``, ``top_k``, ``threshold``, ``api_base``,
+    ``temperature``, ``max_tokens``, and ``timeout``. Credentials must
+    never be stored here; use provider environment variables or `.env` instead.
     """
     if config_path is None:
         return {}
@@ -51,32 +68,44 @@ def _load_toml_config(config_path: str | None) -> dict[str, Any]:
     return dict(data)
 
 
-def _cfg_str(cfg: dict[str, Any], key: str, fallback: str) -> str:
-    """Validate and return a string configuration value from parsed TOML defaults."""
+def _cfg_opt_str(cfg: dict[str, Any], key: str) -> str | None:
+    """Validate and return an optional string configuration value from TOML defaults."""
     val = cfg.get(key)
     if val is None:
-        return fallback
+        return None
     if not isinstance(val, str):
         raise DocpipeError(f"Invalid TOML config value for {key!r}: expected string")
     return val
 
 
-def _cfg_int(cfg: dict[str, Any], key: str, fallback: int) -> int:
-    """Validate and return an integer configuration value (rejecting booleans/lists)."""
+def _cfg_str(cfg: dict[str, Any], key: str, fallback: str) -> str:
+    """Validate and return a string configuration value from parsed TOML defaults."""
+    val = _cfg_opt_str(cfg, key)
+    return fallback if val is None else val
+
+
+def _cfg_opt_int(cfg: dict[str, Any], key: str) -> int | None:
+    """Validate and return an optional integer configuration value (rejecting booleans)."""
     val = cfg.get(key)
     if val is None:
-        return fallback
+        return None
     if isinstance(val, bool) or not isinstance(val, int):
         raise DocpipeError(f"Invalid TOML config value for {key!r}: expected integer")
     return val
 
 
+def _cfg_int(cfg: dict[str, Any], key: str, fallback: int) -> int:
+    """Validate and return an integer configuration value (rejecting booleans/lists)."""
+    val = _cfg_opt_int(cfg, key)
+    return fallback if val is None else val
+
+
 def _cfg_opt_float(cfg: dict[str, Any], key: str) -> float | None:
-    """Validate and return an optional float configuration value from TOML defaults."""
+    """Validate and return an optional finite float configuration value from TOML defaults."""
     val = cfg.get(key)
     if val is None:
         return None
-    if isinstance(val, bool) or not isinstance(val, (int, float)):
+    if isinstance(val, bool) or not isinstance(val, (int, float)) or not math.isfinite(float(val)):
         raise DocpipeError(f"Invalid TOML config value for {key!r}: expected number")
     return float(val)
 
@@ -96,6 +125,11 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     default_profile = _cfg_str(cfg, "profile", "DEFAULT")
     default_top_k = _cfg_int(cfg, "top_k", DEFAULT_TOP_K)
     default_threshold = _cfg_opt_float(cfg, "threshold")
+    default_api_base = _cfg_opt_str(cfg, "api_base")
+    default_temperature = _cfg_opt_float(cfg, "temperature")
+    default_max_tokens = _cfg_opt_int(cfg, "max_tokens")
+    toml_timeout = _cfg_opt_float(cfg, "timeout")
+    default_timeout = DEFAULT_REQUEST_TIMEOUT if toml_timeout is None else toml_timeout
 
     parser = argparse.ArgumentParser(
         prog="docpipe-maestro",
@@ -177,7 +211,27 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     )
     p_ask.add_argument("--model", default=default_gen_model, help="LLM provider/model")
     p_ask.add_argument("--embed-model", default=default_embed_model, help="Embedding model")
-    p_ask.add_argument("--api-base", default=None, help="Optional OpenAI-compatible base URL")
+    p_ask.add_argument(
+        "--api-base", default=default_api_base, help="Optional OpenAI-compatible base URL"
+    )
+    p_ask.add_argument(
+        "--temperature",
+        type=float,
+        default=default_temperature,
+        help="Sampling temperature (>= 0.0); omitted when unset",
+    )
+    p_ask.add_argument(
+        "--max-tokens",
+        type=int,
+        default=default_max_tokens,
+        help="Maximum completion tokens (>= 1); omitted when unset",
+    )
+    p_ask.add_argument(
+        "--timeout",
+        type=float,
+        default=default_timeout,
+        help=f"Completion timeout in seconds (default: {DEFAULT_REQUEST_TIMEOUT})",
+    )
 
     return parser
 
@@ -195,6 +249,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     known, _ = pre.parse_known_args(arg_list)
 
     try:
+        _load_cli_dotenv(known.config)
         cfg_defaults = _load_toml_config(known.config)
         parser = build_parser(cfg_defaults)
         args = parser.parse_args(arg_list)
@@ -318,12 +373,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 threshold=args.threshold,
                 expand_parent=True,
             )
-            prompt = build_prompt(args.question, sections)
+            messages = build_chat_messages(args.question, sections)
             reply = answer(
-                prompt,
+                messages,
                 model=args.model,
                 api_base=args.api_base,
                 has_context=bool(sections),
+                temperature=args.temperature,
+                max_tokens=args.max_tokens,
+                timeout=args.timeout,
             )
             print(reply)
             return 0
