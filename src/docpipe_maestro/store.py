@@ -110,6 +110,7 @@ class VectorStore:
         *,
         top_k: int = 5,
         active_versions: dict[str, str] | None = None,
+        include_embeddings: bool = False,
     ) -> list[RetrievedChunk]:
         """Search child chunks exclusively (``where={"type": "child"}``).
 
@@ -119,6 +120,8 @@ class VectorStore:
             active_versions: Optional map of ``source -> committed doc_version``.
                 When provided, uncommitted staging records are filtered out and
                 search over-fetches by ``2x`` so filtering still yields up to ``top_k``.
+            include_embeddings: When ``False`` (default), skips fetching raw dense
+                vectors from ChromaDB to reduce Phase 2 read latency and memory.
 
         Returns:
             Matched ``RetrievedChunk`` items with cosine similarity normalized onto
@@ -131,11 +134,12 @@ class VectorStore:
         # Over-fetch 2x when active_versions is supplied so uncommitted staging records
         # filtered below do not starve top_k committed results.
         n_results = min(max(top_k * 2, top_k), count) if active_versions else min(top_k, count)
+        include_fields = self._build_include_fields(include_embeddings, with_distances=True)
         results = self._collection.query(
             query_embeddings=cast(Any, [query_vector]),
             n_results=n_results,
             where={"type": "child"},
-            include=["documents", "metadatas", "distances", "embeddings"],
+            include=cast(Any, include_fields),
         )
 
         ids_list = (results.get("ids") or [[]])[0]
@@ -176,15 +180,56 @@ class VectorStore:
                 break
         return retrieved
 
-    def get_by_ids(self, ids: Sequence[str]) -> list[EmbeddedChunk]:
+    def get_by_ids(
+        self,
+        ids: Sequence[str],
+        *,
+        include_embeddings: bool = False,
+    ) -> list[EmbeddedChunk]:
         """Fetch records by exact IDs (used for parent expansion)."""
         if not ids:
             return []
         results = self._collection.get(
             ids=list(ids),
-            include=["documents", "metadatas", "embeddings"],
+            include=cast(Any, self._build_include_fields(include_embeddings)),
         )
         return self._hydrate_get_results(results)
+
+    def get_parents_by_source(
+        self,
+        source: str,
+        *,
+        active_doc_version: str | None = None,
+        include_embeddings: bool = False,
+    ) -> list[EmbeddedChunk]:
+        """Fetch committed parent sections for a given ``source`` key."""
+        clauses: list[dict[str, Any]] = [
+            {"type": {"$eq": "parent"}},
+            {"source": {"$eq": source}},
+        ]
+        if active_doc_version is not None:
+            clauses.append({"doc_version": {"$eq": active_doc_version}})
+        results = self._collection.get(
+            where=cast(Any, {"$and": clauses}),
+            include=cast(Any, self._build_include_fields(include_embeddings)),
+        )
+        parents = self._hydrate_get_results(results)
+        parents.sort(key=lambda c: c.metadata["chunk_index"])
+        return parents
+
+    @staticmethod
+    def _build_include_fields(
+        include_embeddings: bool,
+        *,
+        with_distances: bool = False,
+    ) -> list[str]:
+        """Construct Chroma ``include`` field lists cleanly."""
+        fields = ["documents", "metadatas"]
+        if with_distances:
+            fields.append("distances")
+        if include_embeddings:
+            fields.append("embeddings")
+        return fields
 
     def get_all_children(self) -> list[EmbeddedChunk]:
         """Fetch all child records in the collection (used by reindex)."""

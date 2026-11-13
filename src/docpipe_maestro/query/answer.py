@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -14,7 +15,7 @@ from docpipe_maestro.embedder import (
     raise_litellm_error,
     validate_api_base,
 )
-from docpipe_maestro.types import DocpipeError
+from docpipe_maestro.types import DocpipeError, GenerationResult
 
 EMPTY_CONTEXT_REFUSAL = "Not found in the provided context."
 
@@ -110,7 +111,16 @@ def _normalize_messages(prompt: str | Sequence[Mapping[str, str]]) -> list[dict[
     return normalized
 
 
-def answer(
+def _opt_int(value: Any) -> int | None:
+    """Coerce an optional provider usage counter into ``int`` without raising on blanks."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    return None
+
+
+def answer_detailed(
     prompt: str | Sequence[Mapping[str, str]],
     *,
     model: str = DEFAULT_GENERATION_MODEL,
@@ -120,32 +130,33 @@ def answer(
     max_tokens: int | None = None,
     timeout: float = DEFAULT_REQUEST_TIMEOUT,
     model_kwargs: Mapping[str, Any] | None = None,
-) -> str:
-    """Generate a grounded answer from a prompt string or role-separated messages.
+    fail_on_truncation: bool = False,
+) -> GenerationResult:
+    """Generate a grounded answer plus completion telemetry via LiteLLM.
 
     Args:
         prompt: Grounded prompt string built by ``build_prompt()`` or a
             role-separated message sequence built by ``build_chat_messages()``.
         model: LiteLLM ``provider/model`` identifier (e.g., ``"ollama/llama3.2"``,
-            ``"groq/llama-3.3-70b-versatile"``, or ``"together_ai/..."``).
-            Credentials are read exclusively from environment variables.
+            ``"groq/openai/gpt-oss-120b"``, or ``"together_ai/..."``).
         api_base: Optional custom base URL for OpenAI-compatible endpoints.
         has_context: When ``False``, immediately returns ``EMPTY_CONTEXT_REFUSAL``
             without invoking the language model.
-        temperature: Optional sampling temperature (``>= 0.0``). Omitted from
-            provider requests when ``None`` for reasoning-model compatibility.
+        temperature: Optional sampling temperature (``>= 0.0``). Omitted when ``None``.
         max_tokens: Optional maximum completion tokens (``>= 1``). Omitted when ``None``.
         timeout: Completion request timeout in seconds (``> 0.0``).
-        model_kwargs: Optional extra provider generation parameters (must not
-            redefine reserved or first-class controls).
+        model_kwargs: Optional extra provider generation parameters.
+        fail_on_truncation: When ``True``, raises ``DocpipeError`` if provider
+            reports ``finish_reason == "length"``.
 
     Returns:
-        Stripped LLM response text, or ``EMPTY_CONTEXT_REFUSAL`` if
-        ``has_context`` is ``False``.
+        ``GenerationResult`` containing stripped answer text, truncation flags,
+        and reported token usage counters.
 
     Raises:
         MissingCredentialError: If the provider rejects missing/invalid API keys.
-        DocpipeError: If validation fails or the completion request fails.
+        DocpipeError: If validation fails, truncation enforcement trips, or the
+            completion request fails.
     """
     messages = _normalize_messages(prompt)
     valid_temp, valid_max_tokens, valid_timeout, extra_kwargs = _validate_generation_params(
@@ -156,7 +167,13 @@ def answer(
     )
 
     if not has_context:
-        return EMPTY_CONTEXT_REFUSAL
+        return GenerationResult(
+            text=EMPTY_CONTEXT_REFUSAL,
+            model=model,
+            finish_reason=None,
+            truncated=False,
+            elapsed_seconds=0.0,
+        )
 
     validated_base = validate_api_base(api_base)
     litellm = prepare_litellm()
@@ -176,20 +193,76 @@ def answer(
     if extra_kwargs:
         kwargs.update(extra_kwargs)
 
+    t0 = time.perf_counter()
     try:
         response = litellm.completion(**kwargs)
     except Exception as exc:
         raise_litellm_error(exc, operation="generation", model=model)
+    elapsed = time.perf_counter() - t0
 
-    return _extract_completion_text(response, model=model)
+    text, finish_reason, prompt_tok, comp_tok, reason_tok, total_tok = _extract_completion_details(
+        response, model=model
+    )
+    truncated = finish_reason == "length"
+    if truncated and fail_on_truncation:
+        raise DocpipeError(
+            f"Generation model {model!r} output was truncated at max_tokens limit "
+            "(finish_reason='length'). Increase or omit max_tokens and retry."
+        )
+
+    return GenerationResult(
+        text=text,
+        model=model,
+        finish_reason=finish_reason,
+        truncated=truncated,
+        prompt_tokens=prompt_tok,
+        completion_tokens=comp_tok,
+        reasoning_tokens=reason_tok,
+        total_tokens=total_tok,
+        elapsed_seconds=elapsed,
+    )
 
 
-def _extract_completion_text(response: Any, *, model: str) -> str:
-    """Validate and extract non-empty answer text from a LiteLLM completion response."""
+def answer(
+    prompt: str | Sequence[Mapping[str, str]],
+    *,
+    model: str = DEFAULT_GENERATION_MODEL,
+    api_base: str | None = None,
+    has_context: bool = True,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT,
+    model_kwargs: Mapping[str, Any] | None = None,
+    fail_on_truncation: bool = False,
+) -> str:
+    """Generate a grounded answer string from a prompt or role-separated messages.
+
+    Thin convenience wrapper over ``answer_detailed()`` returning ``result.text``.
+    """
+    return answer_detailed(
+        prompt,
+        model=model,
+        api_base=api_base,
+        has_context=has_context,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout,
+        model_kwargs=model_kwargs,
+        fail_on_truncation=fail_on_truncation,
+    ).text
+
+
+def _extract_completion_details(
+    response: Any,
+    *,
+    model: str,
+) -> tuple[str, str | None, int | None, int | None, int | None, int | None]:
+    """Validate response choices and extract answer text, finish reason, and usage."""
     choices = _item_field(response, "choices", None)
     if not choices:
         raise DocpipeError(f"Generation model {model!r} returned no completion choices.")
-    message = _item_field(choices[0], "message", None)
+    choice0 = choices[0]
+    message = _item_field(choice0, "message", None)
     if message is None:
         raise DocpipeError(f"Generation model {model!r} returned an empty choice message.")
     refusal = _item_field(message, "refusal", None)
@@ -201,4 +274,20 @@ def _extract_completion_text(response: Any, *, model: str) -> str:
     text = str(content).strip() if content is not None else ""
     if not text:
         raise DocpipeError(f"Generation model {model!r} returned an empty response.")
-    return text
+
+    raw_finish = _item_field(choice0, "finish_reason", None)
+    finish_reason = str(raw_finish).strip() if raw_finish is not None else None
+
+    usage = _item_field(response, "usage", None)
+    prompt_tokens = _opt_int(_item_field(usage, "prompt_tokens", None)) if usage else None
+    completion_tokens = _opt_int(_item_field(usage, "completion_tokens", None)) if usage else None
+    total_tokens = _opt_int(_item_field(usage, "total_tokens", None)) if usage else None
+    reasoning_tokens: int | None = None
+    if usage:
+        comp_details = _item_field(usage, "completion_tokens_details", None)
+        if comp_details:
+            reasoning_tokens = _opt_int(_item_field(comp_details, "reasoning_tokens", None))
+        if reasoning_tokens is None:
+            reasoning_tokens = _opt_int(_item_field(usage, "reasoning_tokens", None))
+
+    return text, finish_reason, prompt_tokens, completion_tokens, reasoning_tokens, total_tokens

@@ -15,17 +15,18 @@ Static chunking profiles (``DEFAULT``, ``POLICY``) live in ``docpipe_maestro.con
 
 from __future__ import annotations
 
+import sys
+import types as _stdlib_types
 from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Any
 
-from docpipe_maestro.ingest.pipeline import ingest, reindex, remove, status, sync
 from docpipe_maestro.query.prompts import build_chat_messages, build_prompt
-from docpipe_maestro.query.retriever import retrieve
 from docpipe_maestro.types import (
     Chunk,
     CollectionStatus,
     DocpipeError,
     EmbeddedChunk,
+    GenerationResult,
     IngestResult,
     MissingCredentialError,
     MissingExtraError,
@@ -37,7 +38,9 @@ from docpipe_maestro.types import (
 )
 
 if TYPE_CHECKING:
-    from docpipe_maestro.query.answer import answer
+    from docpipe_maestro.ingest.pipeline import ingest, reindex, remove, status, sync
+    from docpipe_maestro.query.answer import answer, answer_detailed
+    from docpipe_maestro.query.retriever import retrieve
 
 try:
     __version__ = version("docpipe-maestro")
@@ -49,6 +52,7 @@ __all__ = [
     "CollectionStatus",
     "DocpipeError",
     "EmbeddedChunk",
+    "GenerationResult",
     "IngestResult",
     "MissingCredentialError",
     "MissingExtraError",
@@ -59,6 +63,7 @@ __all__ = [
     "UnsupportedFormatError",
     "__version__",
     "answer",
+    "answer_detailed",
     "build_chat_messages",
     "build_prompt",
     "ingest",
@@ -69,17 +74,45 @@ __all__ = [
     "sync",
 ]
 
+_PIPELINE_EXPORTS = frozenset({"ingest", "reindex", "remove", "status", "sync"})
+
 
 def __getattr__(name: str) -> Any:
-    """Lazily expose optional generation helpers such as ``answer``."""
-    if name == "answer":
+    """Lazily expose heavy vector/LLM pipeline helpers on attribute access."""
+    if name in {"answer", "answer_detailed"}:
         try:
-            from docpipe_maestro.query.answer import answer as _answer
+            from docpipe_maestro.query import answer as _answer_mod
 
-            return _answer
+            obj = getattr(_answer_mod, name)
+            globals()[name] = obj
+            return obj
         except ImportError as exc:
             raise MissingExtraError(
                 "Generation support requires the 'generation' extra: "
                 "pip install docpipe-maestro[generation]"
             ) from exc
+    if name in _PIPELINE_EXPORTS:
+        from docpipe_maestro.ingest import pipeline as _pipeline_mod
+
+        obj = getattr(_pipeline_mod, name)
+        globals()[name] = obj
+        return obj
+    if name == "retrieve":
+        from docpipe_maestro.query.retriever import retrieve as _retrieve
+
+        globals()[name] = _retrieve
+        return _retrieve
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+class _DocpipeModule(_stdlib_types.ModuleType):
+    """Ensure lazy function exports (``ingest``) are never shadowed by subpackages."""
+
+    def __getattribute__(self, name: str) -> Any:
+        val = super().__getattribute__(name)
+        if name == "ingest" and isinstance(val, _stdlib_types.ModuleType):
+            return __getattr__(name)
+        return val
+
+
+sys.modules[__name__].__class__ = _DocpipeModule

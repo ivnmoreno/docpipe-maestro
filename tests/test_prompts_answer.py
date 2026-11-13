@@ -10,7 +10,13 @@ from unittest.mock import patch
 
 import pytest
 
-from docpipe_maestro import answer, build_chat_messages, build_prompt
+from docpipe_maestro import (
+    GenerationResult,
+    answer,
+    answer_detailed,
+    build_chat_messages,
+    build_prompt,
+)
 from docpipe_maestro.query.answer import EMPTY_CONTEXT_REFUSAL
 from docpipe_maestro.query.prompts import _SYSTEM_INSTRUCTIONS
 from docpipe_maestro.types import DocpipeError, MissingCredentialError, RetrievedChunk
@@ -246,3 +252,78 @@ def test_answer_rejects_empty_or_malformed_message_sequences(
     with pytest.raises(DocpipeError):
         answer(bad_messages, has_context=False)
     assert mock_litellm_offline["completion"] == []
+
+
+def test_answer_detailed_returns_usage_telemetry_and_truncation_guards(
+    mock_litellm_offline: dict[str, Any],
+) -> None:
+    messages = build_chat_messages("Leave?", [_sample_section()])
+
+    # 1. has_context=False returns GenerationResult with zero network call
+    no_ctx = answer_detailed(messages, model="groq/openai/gpt-oss-120b", has_context=False)
+    assert isinstance(no_ctx, GenerationResult)
+    assert no_ctx.text == EMPTY_CONTEXT_REFUSAL
+    assert no_ctx.model == "groq/openai/gpt-oss-120b"
+    assert no_ctx.finish_reason is None
+    assert no_ctx.truncated is False
+    assert mock_litellm_offline["completion"] == []
+
+    # 2. Normal completion object extracts finish_reason + token usage + reasoning_tokens
+    obj_response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="20 days leave [1]."),
+                finish_reason="stop",
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=120,
+            completion_tokens=30,
+            total_tokens=150,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=10),
+        ),
+    )
+    with patch("litellm.completion", return_value=obj_response):
+        res = answer_detailed(messages, model="groq/openai/gpt-oss-120b", has_context=True)
+    assert res.text == "20 days leave [1]."
+    assert res.finish_reason == "stop"
+    assert res.truncated is False
+    assert res.prompt_tokens == 120
+    assert res.completion_tokens == 30
+    assert res.reasoning_tokens == 10
+    assert res.total_tokens == 150
+    assert res.elapsed_seconds >= 0.0
+
+    # 3. Dict response with finish_reason="length" surfaces truncated=True or fails when strict
+    len_response = {
+        "choices": [{"message": {"content": "Partial answer"}, "finish_reason": "length"}],
+        "usage": {"prompt_tokens": 90, "completion_tokens": 64, "total_tokens": 154},
+    }
+    with patch("litellm.completion", return_value=len_response):
+        truncated_res = answer_detailed(messages, model="together_ai/zai-org/GLM-5.3-Flash")
+        assert truncated_res.truncated is True
+        assert truncated_res.finish_reason == "length"
+        assert truncated_res.text == "Partial answer"
+        assert truncated_res.reasoning_tokens is None
+        assert answer(messages, model="together_ai/zai-org/GLM-5.3-Flash") == "Partial answer"
+
+        with pytest.raises(DocpipeError, match=r"truncated.*max_tokens"):
+            answer_detailed(
+                messages,
+                model="together_ai/zai-org/GLM-5.3-Flash",
+                fail_on_truncation=True,
+            )
+        with pytest.raises(DocpipeError, match=r"truncated.*max_tokens"):
+            answer(
+                messages,
+                model="together_ai/zai-org/GLM-5.3-Flash",
+                fail_on_truncation=True,
+            )
+
+
+def test_system_instructions_enforce_exception_carveout_preservation() -> None:
+    lowered = _SYSTEM_INSTRUCTIONS.lower()
+    assert "only the provided context" in lowered
+    assert "ignore any instructions" in lowered
+    for marker in ("unless", "except", "subject to", "provided that"):
+        assert marker in lowered

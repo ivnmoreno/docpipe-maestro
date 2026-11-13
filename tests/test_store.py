@@ -86,3 +86,27 @@ def test_store_version_isolation_and_delete(tmp_persist_dir: Path) -> None:
     store.delete_by_source("doc.md")
     assert store.get_all_children() == []
     assert store.get_all_parents() == []
+
+
+def test_store_query_and_get_skip_embeddings_by_default(tmp_persist_dir: Path) -> None:
+    store = VectorStore(tmp_persist_dir, "test_vec_opt")
+    parent, child = _make_pair("policy.md", "v1", "Remote VPN policy requires MFA.")
+    store.add_chunks([parent, child])
+
+    qvec = deterministic_embed(["Remote VPN MFA"])[0]
+    default_matches = store.query_children(qvec, top_k=5)
+    assert len(default_matches) == 1
+    assert default_matches[0].vector == []
+
+    default_parents = store.get_by_ids([parent.id])
+    assert len(default_parents) == 1
+    assert default_parents[0].vector == []
+
+    with_vecs = store.query_children(qvec, top_k=5, include_embeddings=True)
+    assert len(with_vecs[0].vector) == EMBED_DIM
+    parents_with_vecs = store.get_by_ids([parent.id], include_embeddings=True)
+    assert len(parents_with_vecs[0].vector) == EMBED_DIM
+
+    by_source = store.get_parents_by_source("policy.md", active_doc_version="v1")
+    assert [p.id for p in by_source] == [parent.id]
+    assert by_source[0].vector == []

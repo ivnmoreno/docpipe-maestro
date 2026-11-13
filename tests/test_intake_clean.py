@@ -151,3 +151,37 @@ def test_clean_strips_normalized_multipage_boilerplate() -> None:
     assert "CONFIDENTIAL" not in combined
     assert "Footer Line" not in combined
     assert "Clause 1.2 text." in combined
+
+
+def test_clean_strips_numbered_page_markers_and_counters_preserving_clauses() -> None:
+    from docpipe_maestro.ingest.intake import ParsedClause, ParsedDocument, ParsedSection
+
+    pages = [
+        (1, "Section 1: Rules", "1.1 First rule stays."),
+        (2, "Section 2: More", "2.1 Second rule stays."),
+        (3, "Section 3: End", "3.1 Third rule stays."),
+        (4, "Section 4: Final", "4.1 Fourth rule stays."),
+    ]
+    raw_doc = ParsedDocument(
+        source="numbered.pdf",
+        format_name="pdf",
+        sections=[
+            ParsedSection(
+                source="numbered.pdf",
+                section_label=label,
+                heading_level=2,
+                raw_text=f"{body}\nPage {pno} of 4\nAcme Corp All Rights Reserved 2026 {pno}",
+                page=pno,
+                clauses=[ParsedClause(f"{pno}.1", f"{body}\nPage {pno} of 4", page=pno)],
+            )
+            for pno, label, body in pages
+        ],
+    )
+    cleaned = clean_document(raw_doc)
+    combined = "\n".join(s.raw_text for s in cleaned.sections)
+    assert "Page 1 of 4" not in combined
+    assert "Page 4 of 4" not in combined
+    assert "All Rights Reserved 2026" not in combined
+    assert "1.1 First rule stays." in combined
+    assert "4.1 Fourth rule stays." in combined
+    assert "Page 1 of 4" not in cleaned.sections[0].clauses[0].text

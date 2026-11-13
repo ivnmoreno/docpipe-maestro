@@ -315,3 +315,30 @@ class CollectionStatus:
     total_children: int
     total_parents: int
     sources: list[SourceRecord]
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationResult:
+    """Structured response and telemetry returned by ``answer_detailed()``.
+
+    Attributes:
+        text: Stripped LLM answer text, or ``EMPTY_CONTEXT_REFUSAL`` if empty context.
+        model: Target LiteLLM ``provider/model`` identifier used for generation.
+        finish_reason: Provider stop reason (e.g., ``"stop"``, ``"length"``), or ``None``.
+        truncated: ``True`` when ``finish_reason == "length"``.
+        prompt_tokens: Reported input prompt tokens, or ``None`` when unavailable.
+        completion_tokens: Reported output tokens, or ``None`` when unavailable.
+        reasoning_tokens: Reported internal reasoning tokens, or ``None`` when unavailable.
+        total_tokens: Reported total tokens billed, or ``None`` when unavailable.
+        elapsed_seconds: Wall-clock duration of the completion call in seconds.
+    """
+
+    text: str
+    model: str
+    finish_reason: str | None = None
+    truncated: bool = False
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    total_tokens: int | None = None
+    elapsed_seconds: float = 0.0

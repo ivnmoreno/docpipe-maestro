@@ -268,7 +268,7 @@ Customize the persistence directory with `--persist-dir` on the CLI or `persist_
 
 ### 4. CLI Configuration File (`docpipe.toml`)
 
-You can create an optional TOML configuration file to set default CLI options (never store API keys or secrets here — `--config` flags override TOML values, and TOML values override built-in defaults):
+When `--config` is omitted (and `--no-config` is not passed), the CLI automatically loads `./docpipe.toml` from the current working directory if present (non-recursively; never walking parent directories). Create an optional TOML configuration file to set default CLI options (never store API keys or secrets here — explicit CLI flags override `--config` / `./docpipe.toml`, which override built-in defaults):
 
 ```toml
 # docpipe.toml
@@ -284,11 +284,13 @@ threshold = 0.4
 # temperature = 0.0
 # max_tokens = 512
 # timeout = 60.0
+# fail_on_truncation = false
 ```
 
-Pass it to any CLI command using `--config`:
+Pass an explicit config path with `--config`, or ignore `./docpipe.toml` with `--no-config`:
 ```bash
 docpipe-maestro query "What is the probation period?" --config docpipe.toml
+docpipe-maestro ask "What is the probation period?" --no-config
 ```
 
 ### 5. Chunking Profiles (`DEFAULT`, `POLICY`, and Custom Profiles)
@@ -423,7 +425,12 @@ docpipe-maestro ask "Summarize travel policy." --model openai/my-local-model --a
 
 # Safe thresholding: if no retrieved content matches threshold, short-circuits with a refusal
 docpipe-maestro ask "What is the recipe for lasagna?" --threshold 0.7 --collection hr_policy
+
+# Inspect retrieved context on stderr, request JSON telemetry on stdout, or fail if truncated at max_tokens
+docpipe-maestro ask "Summarize travel limits." --show-context --collection hr_policy
+docpipe-maestro ask "Summarize travel limits." --json --fail-on-truncation --collection hr_policy
 ```
+*(By default, if a provider hits `--max-tokens` and sets `finish_reason == "length"`, `ask` prints a `Warning:` on `stderr`; pass `--fail-on-truncation` to fail non-zero instead.)*
 
 ---
 
@@ -503,7 +510,7 @@ for section in retrieved_sections:
 #    (build_prompt() also remains available for single-string prompts.)
 messages = build_chat_messages(question=question, sections=retrieved_sections)
 
-# 3. Generate a grounded answer (local Ollama default, or e.g. groq/llama-3.3-70b-versatile)
+# 3. Generate a grounded answer (use answer_detailed() for finish_reason/token telemetry)
 response = answer(
     prompt=messages,
     model="ollama/llama3.2",
@@ -522,6 +529,7 @@ Exported from `docpipe_maestro` (`docpipe_maestro.types`):
 - `Chunk`: Base unit (`id`, `text`, `parent_id`, `metadata: ChunkMetadata`).
 - `EmbeddedChunk`: `Chunk` with dense embedding (`vector: list[float]`).
 - `RetrievedChunk`: `EmbeddedChunk` with normalized cosine similarity (`score: float` in `[0.0, 1.0]`).
+- `GenerationResult`: Detailed LLM completion result (`text`, `model`, `finish_reason`, `truncated`, `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `total_tokens`, `elapsed_seconds`).
 - `IngestResult`: Summary (`collection`, `embed_model`, `ingested`, `skipped`, `chunks_written`, `parents_written`).
 - `SyncResult`: Summary (`collection`, `embed_model`, `added`, `updated`, `skipped`, `removed`).
 - `CollectionStatus`: Manifest overview (`collection`, `embed_model`, `embed_dim`, `total_sources`, `total_children`, `total_parents`, `sources`).

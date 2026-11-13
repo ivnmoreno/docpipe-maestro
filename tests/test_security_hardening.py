@@ -302,3 +302,32 @@ def test_litellm_classifies_auth_and_rate_limit_errors_safely(
         answer("Q?", model="together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo", has_context=True)
     assert secret not in str(rl_sec.value)
     assert rl_sec.value.__cause__ is None
+
+
+def test_ollama_direct_embed_fast_path_and_security(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import http.client
+    import json
+    from unittest.mock import MagicMock
+
+    monkeypatch.delitem(sys.modules, "litellm", raising=False)
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://remote-insecure.example.com:11434")
+    with pytest.raises(DocpipeError, match="Insecure remote api_base URL"):
+        embed_texts(["hello"], model="ollama/nomic-embed-text")
+    assert "litellm" not in sys.modules
+
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://127.0.0.1:11434")
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.read.return_value = json.dumps({"embeddings": [[0.1, 0.2, 0.3]]}).encode("utf-8")
+    mock_conn = MagicMock()
+    mock_conn.getresponse.return_value = mock_resp
+
+    with patch.object(http.client, "HTTPConnection", return_value=mock_conn) as conn_cls:
+        vecs = embed_texts(["hello"], model="ollama/nomic-embed-text")
+
+    conn_cls.assert_called_once_with("127.0.0.1", 11434, timeout=120.0)
+    mock_conn.request.assert_called_once()
+    assert vecs == [[0.1, 0.2, 0.3]]
+    assert "litellm" not in sys.modules

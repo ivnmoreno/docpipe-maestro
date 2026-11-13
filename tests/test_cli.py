@@ -7,7 +7,9 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from dotenv import dotenv_values
@@ -329,9 +331,10 @@ def test_cli_ask_generation_flags_toml_parity_and_chat_messages(
     assert call_cli["kwargs"]["timeout"] == 15.5
     assert call_cli["kwargs"]["api_base"] == "http://localhost:11434/v1"
 
-    # 3. Without TOML/CLI generation overrides, optionals stay omitted and timeout defaults to 120.0
+    # 3. With --no-config (ignoring any CWD docpipe.toml), built-in defaults apply
     rc_builtin = main(
         [
+            "--no-config",
             "--persist-dir",
             str(tmp_persist_dir),
             "--collection",
@@ -368,3 +371,186 @@ def test_cli_rejects_invalid_toml_generation_types(
     rc = main(["--config", str(cfg), "status"])
     assert rc == 1
     assert "Invalid TOML config value" in capsys.readouterr().err
+
+
+def test_cli_cwd_docpipe_toml_autodiscovery_precedence_and_no_config(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_litellm_offline: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    doc = tmp_path / "rules.md"
+    doc.write_text("## Section 1: Laptops\n\nAll laptops require encryption.\n", encoding="utf-8")
+
+    # Ancestor docpipe.toml must NEVER be loaded via upward traversal
+    (tmp_path / "docpipe.toml").write_text('model = "ancestor/should-not-load"\n', encoding="utf-8")
+
+    work_dir = tmp_path / "workspace"
+    work_dir.mkdir()
+    (work_dir / "docpipe.toml").write_text(
+        f'collection = "cwd_col"\n'
+        f'persist_dir = "{tmp_persist_dir.as_posix()}"\n'
+        f'model = "groq/openai/gpt-oss-120b"\n',
+        encoding="utf-8",
+    )
+
+    override_cfg = tmp_path / "override.toml"
+    override_cfg.write_text(
+        f'collection = "cwd_col"\n'
+        f'persist_dir = "{tmp_persist_dir.as_posix()}"\n'
+        f'model = "mistral/mistral-small-2603"\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(work_dir)
+    assert main(["ingest", str(doc), "--force"]) == 0
+    capsys.readouterr()
+
+    # 1. CWD docpipe.toml auto-loads when --config is omitted
+    assert main(["ask", "Do laptops require encryption?"]) == 0
+    capsys.readouterr()
+    assert mock_litellm_offline["completion"][-1]["model"] == "groq/openai/gpt-oss-120b"
+
+    # 2. Explicit --config overrides CWD docpipe.toml
+    assert main(["--config", str(override_cfg), "ask", "Do laptops require encryption?"]) == 0
+    capsys.readouterr()
+    assert mock_litellm_offline["completion"][-1]["model"] == "mistral/mistral-small-2603"
+
+    # 3. --no-config bypasses CWD docpipe.toml completely and restores built-in defaults
+    assert (
+        main(
+            [
+                "--no-config",
+                "--persist-dir",
+                str(tmp_persist_dir),
+                "--collection",
+                "cwd_col",
+                "ask",
+                "Do laptops require encryption?",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert mock_litellm_offline["completion"][-1]["model"] == "ollama/llama3.2"
+
+    # 4. Empty directory without docpipe.toml never walks upward to parent
+    empty_dir = work_dir / "sub_empty"
+    empty_dir.mkdir()
+    monkeypatch.chdir(empty_dir)
+    assert (
+        main(
+            [
+                "--persist-dir",
+                str(tmp_persist_dir),
+                "--collection",
+                "cwd_col",
+                "ask",
+                "Do laptops require encryption?",
+            ]
+        )
+        == 0
+    )
+    assert mock_litellm_offline["completion"][-1]["model"] == "ollama/llama3.2"
+
+
+def test_cli_ask_truncation_warning_strict_mode_show_context_and_json(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_litellm_offline: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    doc = tmp_path / "policy.md"
+    doc.write_text("## Section 1: Access\n\nMFA is required for all logins.\n", encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    assert main(["--no-config", "--persist-dir", str(tmp_persist_dir), "ingest", str(doc)]) == 0
+    capsys.readouterr()
+
+    truncated_reply = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="Partial MFA answer"),
+                finish_reason="length",
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=60,
+            completion_tokens=20,
+            total_tokens=80,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=5),
+        ),
+    )
+
+    with patch("litellm.completion", return_value=truncated_reply):
+        # 1. Default mode: exits 0, outputs partial answer, warns cleanly on stderr
+        rc_warn = main(
+            [
+                "--no-config",
+                "--persist-dir",
+                str(tmp_persist_dir),
+                "ask",
+                "Is MFA required?",
+                "--show-context",
+            ]
+        )
+        assert rc_warn == 0
+        captured = capsys.readouterr()
+        assert "Partial MFA answer" in captured.out
+        assert "Warning:" in captured.err
+        assert "truncated" in captured.err.lower()
+        assert "Section 1: Access" in captured.err
+
+        # 2. --json includes answer, truncation state, usage counters, and sources
+        rc_json = main(
+            [
+                "--no-config",
+                "--persist-dir",
+                str(tmp_persist_dir),
+                "ask",
+                "Is MFA required?",
+                "--json",
+            ]
+        )
+        assert rc_json == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["answer"] == "Partial MFA answer"
+        assert payload["truncated"] is True
+        assert payload["finish_reason"] == "length"
+        assert payload["usage"]["reasoning_tokens"] == 5
+        assert payload["sources"][0]["section"] == "Section 1: Access"
+
+        # 3. --fail-on-truncation converts finish_reason="length" into exit code 1 error
+        rc_fail = main(
+            [
+                "--no-config",
+                "--persist-dir",
+                str(tmp_persist_dir),
+                "ask",
+                "Is MFA required?",
+                "--fail-on-truncation",
+            ]
+        )
+        assert rc_fail == 1
+        err_out = capsys.readouterr().err
+        assert "Error:" in err_out
+        assert "truncated" in err_out.lower()
+
+
+def test_cli_lazy_imports_avoid_heavy_deps_on_parser_init() -> None:
+    code = (
+        "import sys; "
+        "import docpipe_maestro.cli as c; "
+        "c.build_parser(); "
+        "assert 'chromadb' not in sys.modules, 'chromadb loaded eagerly'; "
+        "assert 'litellm' not in sys.modules, 'litellm loaded eagerly'"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
