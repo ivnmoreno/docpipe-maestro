@@ -222,6 +222,8 @@ ollama pull nomic-embed-text
 ollama pull llama3.2
 ```
 
+> **Tip — Choosing a local generation model**: For multi-section policy synthesis (especially on CPU or limited RAM), `ollama/qwen2.5:1.5b-instruct` or `ollama/qwen2.5:3b` follows retrieved context more reliably than `ollama/llama3.2` (which can over-refuse paraphrased queries) and `<1B` models (which are too small for grounded synthesis). Override the default with `--model ollama/qwen2.5:1.5b-instruct` or set `model = "ollama/qwen2.5:1.5b-instruct"` in `docpipe.toml`.
+
 > **Air-gapped / strict zero-egress environments**: By default, `litellm` attempts to download its public model-cost JSON map from GitHub when first imported before falling back to its bundled copy. Set `export LITELLM_LOCAL_MODEL_COST_MAP=true` in your shell to prevent any startup HTTP call on import.
 
 ### 2. Cloud Provider API Keys
