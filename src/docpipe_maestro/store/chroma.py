@@ -1,9 +1,4 @@
-"""Embedded ChromaDB vector store adapter for Phase 1 writes and Phase 2 reads.
-
-Stores both child chunks (with dense vectors) and parent sections (with
-zero-vector placeholders) inside a single cosine-indexed collection, while
-stripping and restoring ``None`` metadata fields to satisfy ChromaDB scalar rules.
-"""
+"""Default embedded ChromaDB vector store backend registered under ``STORES['default']``."""
 
 from __future__ import annotations
 
@@ -14,6 +9,7 @@ from typing import Any, cast
 import chromadb
 
 from docpipe_maestro.manifest import ensure_private_dir, validate_collection_name
+from docpipe_maestro.store import STORES
 from docpipe_maestro.types import (
     ChunkMetadata,
     ChunkType,
@@ -62,19 +58,14 @@ def _deserialize_metadata(raw: dict[str, Any]) -> tuple[ChunkMetadata, str | Non
     return meta, parent_id
 
 
-class VectorStore:
+@STORES.register("default")
+class ChromaStore:
     """ChromaDB PersistentClient wrapper enforcing cosine space and child-only search."""
 
+    name: str = "default"
+
     def __init__(self, persist_dir: Path, collection_name: str) -> None:
-        """Open or create a cosine-space persistent ChromaDB collection.
-
-        Args:
-            persist_dir: Local directory backing ChromaDB's persistent storage.
-            collection_name: Target ChromaDB collection identifier.
-
-        Raises:
-            DocpipeError: If ChromaDB rejects the collection name or initialization fails.
-        """
+        """Open or create a cosine-space persistent ChromaDB collection."""
         self._persist_dir = persist_dir
         self._collection_name = validate_collection_name(collection_name)
         ensure_private_dir(self._persist_dir)
@@ -110,29 +101,17 @@ class VectorStore:
         *,
         top_k: int = 5,
         active_versions: dict[str, str] | None = None,
+        where: dict[str, object] | None = None,
         include_embeddings: bool = False,
     ) -> list[RetrievedChunk]:
-        """Search child chunks exclusively (``where={"type": "child"}``).
-
-        Args:
-            query_vector: Query embedding vector matching collection dimensionality.
-            top_k: Maximum committed child chunks to return.
-            active_versions: Optional map of ``source -> committed doc_version``.
-                When provided, uncommitted staging records are filtered out and
-                search over-fetches by ``2x`` so filtering still yields up to ``top_k``.
-            include_embeddings: When ``False`` (default), skips fetching raw dense
-                vectors from ChromaDB to reduce Phase 2 read latency and memory.
-
-        Returns:
-            Matched ``RetrievedChunk`` items with cosine similarity normalized onto
-            ``[0.0, 1.0]``.
-        """
+        """Search child chunks exclusively (``where={'type': 'child'}``)."""
+        # ``where`` is accepted for protocol compatibility (Stage 7 metadata filters);
+        # Stage 1 preserves the baseline child-only filter unchanged.
+        _ = where
         count = self._collection.count()
         if count == 0:
             return []
 
-        # Over-fetch 2x when active_versions is supplied so uncommitted staging records
-        # filtered below do not starve top_k committed results.
         n_results = min(max(top_k * 2, top_k), count) if active_versions else min(top_k, count)
         include_fields = self._build_include_fields(include_embeddings, with_distances=True)
         results = self._collection.query(
@@ -273,10 +252,10 @@ class VectorStore:
             metadata={"hnsw:space": "cosine"},
         )
 
-    def sweep_uncommitted(self, active_versions: dict[str, str]) -> None:
-        """Purge any uncommitted staging records left over from an interrupted Phase 1 write."""
+    def sweep_uncommitted(self, active_versions: dict[str, str]) -> int:
+        """Purge uncommitted staging records and return the number of removed items."""
         if self._collection.count() == 0:
-            return
+            return 0
         results = self._collection.get(include=["metadatas"])
         ids = results.get("ids") or []
         metas = results.get("metadatas") or []
@@ -290,6 +269,7 @@ class VectorStore:
                 stale_ids.append(str(cid))
         if stale_ids:
             self._collection.delete(ids=stale_ids)
+        return len(stale_ids)
 
     @staticmethod
     def _hydrate_get_results(results: Any) -> list[EmbeddedChunk]:
@@ -318,3 +298,6 @@ class VectorStore:
                 )
             )
         return out
+
+
+VectorStore = ChromaStore

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from docpipe_maestro._stages import Embedder, Store
 from docpipe_maestro.config import (
     DEFAULT_COLLECTION,
     DEFAULT_EMBED_MODEL,
     DEFAULT_PERSIST_DIR,
     DEFAULT_TOP_K,
 )
-from docpipe_maestro.embedder import embed_query
+from docpipe_maestro.embedder import EMBEDDERS
 from docpipe_maestro.ingest.crossrefs import (
     extract_doc_crossrefs,
     index_section_targets,
@@ -18,14 +19,14 @@ from docpipe_maestro.ingest.crossrefs import (
     truncate_excerpt,
 )
 from docpipe_maestro.manifest import check_model_lock, load_manifest
-from docpipe_maestro.store import VectorStore
+from docpipe_maestro.store import STORES
 from docpipe_maestro.types import EmbeddedChunk, RetrievedChunk
 
 
 def _enrich_crossdoc_references(
     sections: list[RetrievedChunk],
     *,
-    store: VectorStore,
+    store: Store,
     active_versions: dict[str, str],
 ) -> list[RetrievedChunk]:
     """Resolve explicit cross-document section/clause references cleanly in 1 hop."""
@@ -110,6 +111,8 @@ def retrieve(
     threshold: float | None = None,
     expand_parent: bool = True,
     follow_crossrefs: bool = True,
+    embedder: str = "default",
+    store: str = "default",
 ) -> list[RetrievedChunk]:
     """Retrieve relevant parent sections (or child chunks) for a question.
 
@@ -131,6 +134,8 @@ def retrieve(
             ``True``, resolves explicit cross-document section/clause citations
             into non-recursive ``[Crossref ...]`` annotations when the target
             section is absent from top-k results.
+        embedder: Registered ``EMBEDDERS`` key (defaults to ``"default"``).
+        store: Registered ``STORES`` key (defaults to ``"default"``).
 
     Returns:
         Matched ``RetrievedChunk`` objects ordered by descending ``score``.
@@ -138,8 +143,14 @@ def retrieve(
     Raises:
         ModelMismatchError: If ``embed_model`` mismatches the collection lock.
         MissingCredentialError: If provider credentials are missing or invalid.
+        RegistryError: If ``embedder`` or ``store`` is unregistered.
         DocpipeError: If embedding or store lookup fails.
     """
+    if embedder != "default":
+        EMBEDDERS.resolve(embedder)
+    if store != "default":
+        STORES.resolve(store)
+
     persist_path = Path(persist_dir)
     manifest = load_manifest(persist_path, collection)
     check_model_lock(manifest, embed_model)
@@ -147,12 +158,14 @@ def retrieve(
     if not manifest.sources or top_k <= 0:
         return []
 
-    query_vec = embed_query(question, model=embed_model)
-    store = VectorStore(persist_path, collection)
+    embedder_inst: Embedder = EMBEDDERS.resolve(embedder)()
+    store_cls: type[Store] = STORES.resolve(store)
+    query_vec = embedder_inst.embed_query(question, model=embed_model)
+    store_obj: Store = store_cls(persist_path, collection)
     active_versions = {k: v.doc_version for k, v in manifest.sources.items()}
 
     child_top_k = top_k * 3 if expand_parent else top_k
-    child_matches = store.query_children(
+    child_matches = store_obj.query_children(
         query_vec,
         top_k=child_top_k,
         active_versions=active_versions,
@@ -184,7 +197,7 @@ def retrieve(
         key=lambda pid: parent_scores[pid],
         reverse=True,
     )[:top_k]
-    parents = store.get_by_ids(top_parent_ids, include_embeddings=False)
+    parents = store_obj.get_by_ids(top_parent_ids, include_embeddings=False)
     retrieved_parents = [
         RetrievedChunk(
             id=p.id,
@@ -202,7 +215,7 @@ def retrieve(
     if follow_crossrefs:
         return _enrich_crossdoc_references(
             top_parents,
-            store=store,
+            store=store_obj,
             active_versions=active_versions,
         )
     return top_parents

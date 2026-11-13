@@ -1,4 +1,4 @@
-"""Shared provider-agnostic embedding adapter powered by litellm."""
+"""Default provider-agnostic LiteLLM embedder strategy under ``EMBEDDERS['default']``."""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any, NoReturn
 from urllib.parse import urlparse
 
+from docpipe_maestro.embedder import DEFAULT_REQUEST_TIMEOUT, EMBEDDERS
 from docpipe_maestro.types import DocpipeError, MissingCredentialError
 
-DEFAULT_REQUEST_TIMEOUT = 120.0
 _DEFAULT_OLLAMA_BASE = "http://127.0.0.1:11434"
 _MISSING = object()
 _SECRET_PATTERN_RE = re.compile(
@@ -237,23 +237,7 @@ def embed_texts(
     batch_size: int = 64,
     api_base: str | None = None,
 ) -> list[list[float]]:
-    """Embed a sequence of texts in batches using a ``provider/model`` string.
-
-    Args:
-        texts: Ordered input strings to embed. Empty sequence returns ``[]``.
-        model: LiteLLM provider/model identifier (e.g., ``"ollama/nomic-embed-text"``).
-        batch_size: Maximum inputs sent per ``litellm.embedding`` request.
-        api_base: Optional base URL override for self-hosted or proxy endpoints.
-
-    Returns:
-        Dense float vectors aligned 1-to-1 with ``texts`` and verified for
-        uniform dimensionality across batches.
-
-    Raises:
-        MissingCredentialError: If the provider reports missing/invalid credentials.
-        DocpipeError: If the provider call fails, returns an empty vector, or
-            returns inconsistent vector dimensions across items.
-    """
+    """Embed a sequence of texts in batches using a ``provider/model`` string."""
     if not texts:
         return []
 
@@ -305,15 +289,33 @@ def embed_query(
     model: str,
     api_base: str | None = None,
 ) -> list[float]:
-    """Embed a single search query using the specified ``provider/model`` string.
-
-    Args:
-        text: User query text to embed.
-        model: LiteLLM provider/model identifier matching the collection lock.
-        api_base: Optional OpenAI-compatible or custom endpoint URL.
-
-    Returns:
-        Single dense embedding vector for ``text``.
-    """
+    """Embed a single search query using the specified ``provider/model`` string."""
     result = embed_texts([text], model=model, batch_size=1, api_base=api_base)
     return result[0]
+
+
+@EMBEDDERS.register("default")
+class LiteLLMEmbedder:
+    """Built-in LiteLLM + Ollama-direct embedding backend."""
+
+    name: str = "default"
+
+    def embed_texts(
+        self,
+        texts: Sequence[str],
+        *,
+        model: str,
+        api_base: str | None = None,
+    ) -> list[list[float]]:
+        """Embed a sequence of child chunk texts aligned 1-to-1 with inputs."""
+        return embed_texts(texts, model=model, api_base=api_base)
+
+    def embed_query(
+        self,
+        text: str,
+        *,
+        model: str,
+        api_base: str | None = None,
+    ) -> list[float]:
+        """Embed a single retrieval query string."""
+        return embed_query(text, model=model, api_base=api_base)

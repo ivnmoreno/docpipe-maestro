@@ -1,0 +1,455 @@
+{
+  "profile": "POLICY",
+  "collection": "golden_stage1",
+  "corpus": "tests/fixtures/policy_corpus",
+  "queries": [
+    {
+      "name": "direct_annual_leave",
+      "question": "annual leave paid days full-time employees",
+      "top_k": 3,
+      "threshold": null,
+      "expand_parent": true,
+      "follow_crossrefs": true,
+      "results": [
+        {
+          "id": "1a6c12c4e9f7bdb6",
+          "parent_id": null,
+          "score": 0.6098717451095581,
+          "text": "1.1 Full-time employees are entitled to 20 days of paid annual leave per calendar year, except for employees in their initial 90-day probationary period.\n\n1.2 Accrued annual leave may be carried over up to 5 days into the following calendar year, unless the employee is on a fixed-term seasonal contract.",
+          "metadata": {
+            "type": "parent",
+            "source": "hr_leave_policy.md",
+            "doc_version": "cb91f7722953",
+            "section": "Section 1: Annual Leave Entitlement",
+            "clause": null,
+            "page": null,
+            "chunk_index": 0,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        },
+        {
+          "id": "6cdb8a119cac7942",
+          "parent_id": null,
+          "score": 0.5172499418258667,
+          "text": "3.1 Eligible staff receive a $500 home-office equipment stipend annually, provided that all receipts are submitted within 30 days of purchase and subject to \u00a71.1 eligibility.\n\n[Crossref \u00a71.1: 1.1 Full-time employees are entitled to 20 days of paid annual leave per calendar year, except for employees in their initial 90-day probationary period.]",
+          "metadata": {
+            "type": "parent",
+            "source": "hr_leave_policy.md",
+            "doc_version": "cb91f7722953",
+            "section": "Section 3: Remote Work Stipend",
+            "clause": null,
+            "page": null,
+            "chunk_index": 2,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        },
+        {
+          "id": "8de82bd300b883d4",
+          "parent_id": null,
+          "score": 0.2835465669631958,
+          "text": "2.1 Employees with five years of continuous tenure may apply for a paid sabbatical of four weeks, subject to Section 4 approval and staffing requirements.\n\n2.2 Part-time contractors working fewer than 15 hours per week are not entitled to paid sabbatical leave or holiday stipends.\n\n[Crossref Section 4: Section 4: Sabbatical Approval Conditions: 4.1 Sabbatical applications must be submitted 60 days in advance and approved by both the department head and People Operations, except in documented medical emergencies.]",
+          "metadata": {
+            "type": "parent",
+            "source": "hr_leave_policy.md",
+            "doc_version": "cb91f7722953",
+            "section": "Section 2: Bereavement and Sabbatical Leave",
+            "clause": null,
+            "page": null,
+            "chunk_index": 1,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        }
+      ]
+    },
+    {
+      "name": "exception_carryover_unless",
+      "question": "accrued annual leave carried over calendar year",
+      "top_k": 3,
+      "threshold": null,
+      "expand_parent": true,
+      "follow_crossrefs": true,
+      "results": [
+        {
+          "id": "1a6c12c4e9f7bdb6",
+          "parent_id": null,
+          "score": 0.286998450756073,
+          "text": "1.1 Full-time employees are entitled to 20 days of paid annual leave per calendar year, except for employees in their initial 90-day probationary period.\n\n1.2 Accrued annual leave may be carried over up to 5 days into the following calendar year, unless the employee is on a fixed-term seasonal contract.",
+          "metadata": {
+            "type": "parent",
+            "source": "hr_leave_policy.md",
+            "doc_version": "cb91f7722953",
+            "section": "Section 1: Annual Leave Entitlement",
+            "clause": null,
+            "page": null,
+            "chunk_index": 0,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        },
+        {
+          "id": "6cdb8a119cac7942",
+          "parent_id": null,
+          "score": 0.05747222900390625,
+          "text": "3.1 Eligible staff receive a $500 home-office equipment stipend annually, provided that all receipts are submitted within 30 days of purchase and subject to \u00a71.1 eligibility.\n\n[Crossref \u00a71.1: 1.1 Full-time employees are entitled to 20 days of paid annual leave per calendar year, except for employees in their initial 90-day probationary period.]",
+          "metadata": {
+            "type": "parent",
+            "source": "hr_leave_policy.md",
+            "doc_version": "cb91f7722953",
+            "section": "Section 3: Remote Work Stipend",
+            "clause": null,
+            "page": null,
+            "chunk_index": 2,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        },
+        {
+          "id": "8de82bd300b883d4",
+          "parent_id": null,
+          "score": 0.025776982307434082,
+          "text": "2.1 Employees with five years of continuous tenure may apply for a paid sabbatical of four weeks, subject to Section 4 approval and staffing requirements.\n\n2.2 Part-time contractors working fewer than 15 hours per week are not entitled to paid sabbatical leave or holiday stipends.\n\n[Crossref Section 4: Section 4: Sabbatical Approval Conditions: 4.1 Sabbatical applications must be submitted 60 days in advance and approved by both the department head and People Operations, except in documented medical emergencies.]",
+          "metadata": {
+            "type": "parent",
+            "source": "hr_leave_policy.md",
+            "doc_version": "cb91f7722953",
+            "section": "Section 2: Bereavement and Sabbatical Leave",
+            "clause": null,
+            "page": null,
+            "chunk_index": 1,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        }
+      ]
+    },
+    {
+      "name": "crossref_sabbatical_section4",
+      "question": "continuous tenure paid sabbatical four weeks",
+      "top_k": 3,
+      "threshold": null,
+      "expand_parent": true,
+      "follow_crossrefs": true,
+      "results": [
+        {
+          "id": "8de82bd300b883d4",
+          "parent_id": null,
+          "score": 0.5011614561080933,
+          "text": "2.1 Employees with five years of continuous tenure may apply for a paid sabbatical of four weeks, subject to Section 4 approval and staffing requirements.\n\n2.2 Part-time contractors working fewer than 15 hours per week are not entitled to paid sabbatical leave or holiday stipends.\n\n[Crossref Section 4: Section 4: Sabbatical Approval Conditions: 4.1 Sabbatical applications must be submitted 60 days in advance and approved by both the department head and People Operations, except in documented medical emergencies.]",
+          "metadata": {
+            "type": "parent",
+            "source": "hr_leave_policy.md",
+            "doc_version": "cb91f7722953",
+            "section": "Section 2: Bereavement and Sabbatical Leave",
+            "clause": null,
+            "page": null,
+            "chunk_index": 1,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        },
+        {
+          "id": "6cdb8a119cac7942",
+          "parent_id": null,
+          "score": 0.4345396161079407,
+          "text": "3.1 Eligible staff receive a $500 home-office equipment stipend annually, provided that all receipts are submitted within 30 days of purchase and subject to \u00a71.1 eligibility.\n\n[Crossref \u00a71.1: 1.1 Full-time employees are entitled to 20 days of paid annual leave per calendar year, except for employees in their initial 90-day probationary period.]",
+          "metadata": {
+            "type": "parent",
+            "source": "hr_leave_policy.md",
+            "doc_version": "cb91f7722953",
+            "section": "Section 3: Remote Work Stipend",
+            "clause": null,
+            "page": null,
+            "chunk_index": 2,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        },
+        {
+          "id": "1a6c12c4e9f7bdb6",
+          "parent_id": null,
+          "score": 0.38749217987060547,
+          "text": "1.1 Full-time employees are entitled to 20 days of paid annual leave per calendar year, except for employees in their initial 90-day probationary period.\n\n1.2 Accrued annual leave may be carried over up to 5 days into the following calendar year, unless the employee is on a fixed-term seasonal contract.",
+          "metadata": {
+            "type": "parent",
+            "source": "hr_leave_policy.md",
+            "doc_version": "cb91f7722953",
+            "section": "Section 1: Annual Leave Entitlement",
+            "clause": null,
+            "page": null,
+            "chunk_index": 0,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        }
+      ]
+    },
+    {
+      "name": "crossref_stipend_clause11",
+      "question": "home-office equipment stipend $500 annually",
+      "top_k": 3,
+      "threshold": null,
+      "expand_parent": true,
+      "follow_crossrefs": true,
+      "results": [
+        {
+          "id": "6cdb8a119cac7942",
+          "parent_id": null,
+          "score": 0.0537603497505188,
+          "text": "3.1 Eligible staff receive a $500 home-office equipment stipend annually, provided that all receipts are submitted within 30 days of purchase and subject to \u00a71.1 eligibility.\n\n[Crossref \u00a71.1: 1.1 Full-time employees are entitled to 20 days of paid annual leave per calendar year, except for employees in their initial 90-day probationary period.]",
+          "metadata": {
+            "type": "parent",
+            "source": "hr_leave_policy.md",
+            "doc_version": "cb91f7722953",
+            "section": "Section 3: Remote Work Stipend",
+            "clause": null,
+            "page": null,
+            "chunk_index": 2,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        },
+        {
+          "id": "8de82bd300b883d4",
+          "parent_id": null,
+          "score": 0.024112164974212646,
+          "text": "2.1 Employees with five years of continuous tenure may apply for a paid sabbatical of four weeks, subject to Section 4 approval and staffing requirements.\n\n2.2 Part-time contractors working fewer than 15 hours per week are not entitled to paid sabbatical leave or holiday stipends.\n\n[Crossref Section 4: Section 4: Sabbatical Approval Conditions: 4.1 Sabbatical applications must be submitted 60 days in advance and approved by both the department head and People Operations, except in documented medical emergencies.]",
+          "metadata": {
+            "type": "parent",
+            "source": "hr_leave_policy.md",
+            "doc_version": "cb91f7722953",
+            "section": "Section 2: Bereavement and Sabbatical Leave",
+            "clause": null,
+            "page": null,
+            "chunk_index": 1,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        },
+        {
+          "id": "03bcea6e41488c5e",
+          "parent_id": null,
+          "score": 0.0,
+          "text": "1.1 Economy class airfare is reimbursed for domestic flights, except when a medical accommodation is approved in advance by HR.\n\n1.2 Hotel stays above $250 per night are not reimbursed, unless the conference host hotel rate exceeds the cap and is pre-approved under Clause 2.1.\n\n[Crossref Clause 2.1: 2.1 Written pre-approval from a Vice President is required for any exception to standard lodging or airfare caps, provided that the request includes two comparable quotes.]",
+          "metadata": {
+            "type": "parent",
+            "source": "travel_expenses_policy.md",
+            "doc_version": "1069bf4dc22a",
+            "section": "Section 1: Airfare and Lodging",
+            "clause": null,
+            "page": null,
+            "chunk_index": 0,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        }
+      ]
+    },
+    {
+      "name": "crossref_hotel_clause21",
+      "question": "hotel stays above $250 per night reimbursed",
+      "top_k": 3,
+      "threshold": null,
+      "expand_parent": true,
+      "follow_crossrefs": true,
+      "results": [
+        {
+          "id": "8de82bd300b883d4",
+          "parent_id": null,
+          "score": 0.0,
+          "text": "2.1 Employees with five years of continuous tenure may apply for a paid sabbatical of four weeks, subject to Section 4 approval and staffing requirements.\n\n2.2 Part-time contractors working fewer than 15 hours per week are not entitled to paid sabbatical leave or holiday stipends.\n\n[Crossref Section 4: Section 4: Sabbatical Approval Conditions: 4.1 Sabbatical applications must be submitted 60 days in advance and approved by both the department head and People Operations, except in documented medical emergencies.]",
+          "metadata": {
+            "type": "parent",
+            "source": "hr_leave_policy.md",
+            "doc_version": "cb91f7722953",
+            "section": "Section 2: Bereavement and Sabbatical Leave",
+            "clause": null,
+            "page": null,
+            "chunk_index": 1,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        },
+        {
+          "id": "03bcea6e41488c5e",
+          "parent_id": null,
+          "score": 0.0,
+          "text": "1.1 Economy class airfare is reimbursed for domestic flights, except when a medical accommodation is approved in advance by HR.\n\n1.2 Hotel stays above $250 per night are not reimbursed, unless the conference host hotel rate exceeds the cap and is pre-approved under Clause 2.1.\n\n[Crossref Clause 2.1: 2.1 Written pre-approval from a Vice President is required for any exception to standard lodging or airfare caps, provided that the request includes two comparable quotes.]",
+          "metadata": {
+            "type": "parent",
+            "source": "travel_expenses_policy.md",
+            "doc_version": "1069bf4dc22a",
+            "section": "Section 1: Airfare and Lodging",
+            "clause": null,
+            "page": null,
+            "chunk_index": 0,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        },
+        {
+          "id": "abe47264d7c28509",
+          "parent_id": null,
+          "score": 0.0,
+          "text": "2.1 Written pre-approval from a Vice President is required for any exception to standard lodging or airfare caps, provided that the request includes two comparable quotes.",
+          "metadata": {
+            "type": "parent",
+            "source": "travel_expenses_policy.md",
+            "doc_version": "1069bf4dc22a",
+            "section": "Section 2: Pre-Approval Rules",
+            "clause": null,
+            "page": null,
+            "chunk_index": 1,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        }
+      ]
+    },
+    {
+      "name": "exception_airfare_except",
+      "question": "economy class airfare domestic flights reimbursed",
+      "top_k": 3,
+      "threshold": null,
+      "expand_parent": true,
+      "follow_crossrefs": true,
+      "results": [
+        {
+          "id": "03bcea6e41488c5e",
+          "parent_id": null,
+          "score": 0.2853909134864807,
+          "text": "1.1 Economy class airfare is reimbursed for domestic flights, except when a medical accommodation is approved in advance by HR.\n\n1.2 Hotel stays above $250 per night are not reimbursed, unless the conference host hotel rate exceeds the cap and is pre-approved under Clause 2.1.\n\n[Crossref Clause 2.1: 2.1 Written pre-approval from a Vice President is required for any exception to standard lodging or airfare caps, provided that the request includes two comparable quotes.]",
+          "metadata": {
+            "type": "parent",
+            "source": "travel_expenses_policy.md",
+            "doc_version": "1069bf4dc22a",
+            "section": "Section 1: Airfare and Lodging",
+            "clause": null,
+            "page": null,
+            "chunk_index": 0,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        },
+        {
+          "id": "8de82bd300b883d4",
+          "parent_id": null,
+          "score": 0.24112141132354736,
+          "text": "2.1 Employees with five years of continuous tenure may apply for a paid sabbatical of four weeks, subject to Section 4 approval and staffing requirements.\n\n2.2 Part-time contractors working fewer than 15 hours per week are not entitled to paid sabbatical leave or holiday stipends.\n\n[Crossref Section 4: Section 4: Sabbatical Approval Conditions: 4.1 Sabbatical applications must be submitted 60 days in advance and approved by both the department head and People Operations, except in documented medical emergencies.]",
+          "metadata": {
+            "type": "parent",
+            "source": "hr_leave_policy.md",
+            "doc_version": "cb91f7722953",
+            "section": "Section 2: Bereavement and Sabbatical Leave",
+            "clause": null,
+            "page": null,
+            "chunk_index": 1,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        },
+        {
+          "id": "abe47264d7c28509",
+          "parent_id": null,
+          "score": 0.224506676197052,
+          "text": "2.1 Written pre-approval from a Vice President is required for any exception to standard lodging or airfare caps, provided that the request includes two comparable quotes.",
+          "metadata": {
+            "type": "parent",
+            "source": "travel_expenses_policy.md",
+            "doc_version": "1069bf4dc22a",
+            "section": "Section 2: Pre-Approval Rules",
+            "clause": null,
+            "page": null,
+            "chunk_index": 1,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        }
+      ]
+    },
+    {
+      "name": "child_chunks_no_parent_expansion",
+      "question": "written pre-approval Vice President lodging airfare caps",
+      "top_k": 3,
+      "threshold": null,
+      "expand_parent": false,
+      "follow_crossrefs": true,
+      "results": [
+        {
+          "id": "4392e1a5e4515109",
+          "parent_id": "abe47264d7c28509",
+          "score": 0.5622535943984985,
+          "text": "[Source: travel_expenses_policy.md | Section: Section 2: Pre-Approval Rules | Clause: 2.1]\n2.1 Written pre-approval from a Vice President is required for any exception to standard lodging or airfare caps, provided that the request includes two comparable quotes.",
+          "metadata": {
+            "type": "child",
+            "source": "travel_expenses_policy.md",
+            "doc_version": "1069bf4dc22a",
+            "section": "Section 2: Pre-Approval Rules",
+            "clause": "2.1",
+            "page": null,
+            "chunk_index": 0,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        },
+        {
+          "id": "9194b03c95b5f15d",
+          "parent_id": "03bcea6e41488c5e",
+          "score": 0.4041638970375061,
+          "text": "[Source: travel_expenses_policy.md | Section: Section 1: Airfare and Lodging | Clause: 1.1]\n1.1 Economy class airfare is reimbursed for domestic flights, except when a medical accommodation is approved in advance by HR.\n\n1.2 Hotel stays above $250 per night are not reimbursed, unless the conference host hotel rate exceeds the cap and is pre-approved under Clause 2.1.\n\n[Crossref Clause 2.1: 2.1 Written pre-approval from a Vice President is required for any exception to standard lodging or airfare caps, provided that the request includes two comparable quotes.]",
+          "metadata": {
+            "type": "child",
+            "source": "travel_expenses_policy.md",
+            "doc_version": "1069bf4dc22a",
+            "section": "Section 1: Airfare and Lodging",
+            "clause": "1.1",
+            "page": null,
+            "chunk_index": 0,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        },
+        {
+          "id": "d8f757151e82ac0d",
+          "parent_id": "192aedc969801a01",
+          "score": 0.17213261127471924,
+          "text": "[Source: hr_leave_policy.md | Section: Section 4: Sabbatical Approval Conditions | Clause: 4.1]\n4.1 Sabbatical applications must be submitted 60 days in advance and approved by both the department head and People Operations, except in documented medical emergencies.",
+          "metadata": {
+            "type": "child",
+            "source": "hr_leave_policy.md",
+            "doc_version": "cb91f7722953",
+            "section": "Section 4: Sabbatical Approval Conditions",
+            "clause": "4.1",
+            "page": null,
+            "chunk_index": 0,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        }
+      ]
+    },
+    {
+      "name": "no_follow_crossrefs",
+      "question": "home-office equipment stipend $500 annually",
+      "top_k": 2,
+      "threshold": null,
+      "expand_parent": true,
+      "follow_crossrefs": false,
+      "results": [
+        {
+          "id": "6cdb8a119cac7942",
+          "parent_id": null,
+          "score": 0.0537603497505188,
+          "text": "3.1 Eligible staff receive a $500 home-office equipment stipend annually, provided that all receipts are submitted within 30 days of purchase and subject to \u00a71.1 eligibility.\n\n[Crossref \u00a71.1: 1.1 Full-time employees are entitled to 20 days of paid annual leave per calendar year, except for employees in their initial 90-day probationary period.]",
+          "metadata": {
+            "type": "parent",
+            "source": "hr_leave_policy.md",
+            "doc_version": "cb91f7722953",
+            "section": "Section 3: Remote Work Stipend",
+            "clause": null,
+            "page": null,
+            "chunk_index": 2,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        },
+        {
+          "id": "8de82bd300b883d4",
+          "parent_id": null,
+          "score": 0.024112164974212646,
+          "text": "2.1 Employees with five years of continuous tenure may apply for a paid sabbatical of four weeks, subject to Section 4 approval and staffing requirements.\n\n2.2 Part-time contractors working fewer than 15 hours per week are not entitled to paid sabbatical leave or holiday stipends.\n\n[Crossref Section 4: Section 4: Sabbatical Approval Conditions: 4.1 Sabbatical applications must be submitted 60 days in advance and approved by both the department head and People Operations, except in documented medical emergencies.]",
+          "metadata": {
+            "type": "parent",
+            "source": "hr_leave_policy.md",
+            "doc_version": "cb91f7722953",
+            "section": "Section 2: Bereavement and Sabbatical Leave",
+            "clause": null,
+            "page": null,
+            "chunk_index": 1,
+            "embed_model": "ollama/nomic-embed-text"
+          }
+        }
+      ]
+    }
+  ]
+}

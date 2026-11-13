@@ -15,6 +15,7 @@ Static chunking profiles (``DEFAULT``, ``POLICY``) live in ``docpipe_maestro.con
 
 from __future__ import annotations
 
+import importlib
 import sys
 import types as _stdlib_types
 from importlib.metadata import PackageNotFoundError, version
@@ -31,6 +32,7 @@ from docpipe_maestro.types import (
     MissingCredentialError,
     MissingExtraError,
     ModelMismatchError,
+    RegistryError,
     RetrievedChunk,
     SourceRecord,
     SyncResult,
@@ -38,9 +40,17 @@ from docpipe_maestro.types import (
 )
 
 if TYPE_CHECKING:
+    from docpipe_maestro.embedder import register_embedder
+    from docpipe_maestro.ingest.chunker import register_chunker
+    from docpipe_maestro.ingest.clean import register_cleaner
+    from docpipe_maestro.ingest.enricher import register_enricher
+    from docpipe_maestro.ingest.intake import register_parser
     from docpipe_maestro.ingest.pipeline import ingest, reindex, remove, status, sync
     from docpipe_maestro.query.answer import answer, answer_detailed
+    from docpipe_maestro.query.reranker import register_reranker
     from docpipe_maestro.query.retriever import retrieve
+    from docpipe_maestro.query.searcher import register_searcher
+    from docpipe_maestro.store import register_store
 
 try:
     __version__ = version("docpipe-maestro")
@@ -57,6 +67,7 @@ __all__ = [
     "MissingCredentialError",
     "MissingExtraError",
     "ModelMismatchError",
+    "RegistryError",
     "RetrievedChunk",
     "SourceRecord",
     "SyncResult",
@@ -67,6 +78,14 @@ __all__ = [
     "build_chat_messages",
     "build_prompt",
     "ingest",
+    "register_chunker",
+    "register_cleaner",
+    "register_embedder",
+    "register_enricher",
+    "register_parser",
+    "register_reranker",
+    "register_searcher",
+    "register_store",
     "reindex",
     "remove",
     "retrieve",
@@ -75,10 +94,25 @@ __all__ = [
 ]
 
 _PIPELINE_EXPORTS = frozenset({"ingest", "reindex", "remove", "status", "sync"})
+_REGISTER_EXPORTS: dict[str, tuple[str, str]] = {
+    "register_parser": ("docpipe_maestro.ingest.intake", "register_parser"),
+    "register_cleaner": ("docpipe_maestro.ingest.clean", "register_cleaner"),
+    "register_enricher": ("docpipe_maestro.ingest.enricher", "register_enricher"),
+    "register_chunker": ("docpipe_maestro.ingest.chunker", "register_chunker"),
+    "register_embedder": ("docpipe_maestro.embedder", "register_embedder"),
+    "register_store": ("docpipe_maestro.store", "register_store"),
+    "register_searcher": ("docpipe_maestro.query.searcher", "register_searcher"),
+    "register_reranker": ("docpipe_maestro.query.reranker", "register_reranker"),
+}
 
 
 def __getattr__(name: str) -> Any:
-    """Lazily expose heavy vector/LLM pipeline helpers on attribute access."""
+    """Lazily expose heavy vector/LLM pipeline helpers and stage registration entry points."""
+    if name in _REGISTER_EXPORTS:
+        mod_path, attr = _REGISTER_EXPORTS[name]
+        obj = getattr(importlib.import_module(mod_path), attr)
+        globals()[name] = obj
+        return obj
     if name in {"answer", "answer_detailed"}:
         from docpipe_maestro.query import answer as _answer_mod
 

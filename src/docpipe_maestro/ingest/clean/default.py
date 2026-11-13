@@ -1,11 +1,12 @@
-"""Phase 1 text cleaning: artifact removal, whitespace normalization, and boilerplate stripping."""
+"""Default Phase 1 cleaner strategy registered under ``CLEANERS['default']``."""
 
 from __future__ import annotations
 
 import re
 from collections import Counter
 
-from docpipe_maestro.ingest.intake import ParsedClause, ParsedDocument, ParsedSection
+from docpipe_maestro.ingest.clean import CLEANERS
+from docpipe_maestro.types import ParsedClause, ParsedDocument, ParsedSection
 
 _STANDALONE_PAGE_MARKER_RE = re.compile(
     r"^(?:page\s+\d+(?:\s*(?:of|/)\s*\d+)?|\d+\s*/\s*\d+|-\s*\d+\s*-)$",
@@ -225,3 +226,14 @@ def clean_document(doc: ParsedDocument) -> ParsedDocument:
         format_name=doc.format_name,
         sections=cleaned_sections,
     )
+
+
+@CLEANERS.register("default")
+class DefaultCleaner:
+    """Built-in linear-time text cleaner and paginated boilerplate remover."""
+
+    name: str = "default"
+
+    def clean(self, doc: ParsedDocument) -> ParsedDocument:
+        """Clean extracted text and strip paginated headers/footers from ``doc``."""
+        return clean_document(doc)

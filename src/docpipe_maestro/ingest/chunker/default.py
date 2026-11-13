@@ -1,4 +1,4 @@
-"""Phase 1 structure-aware hierarchical chunker (parent sections + child chunks)."""
+"""Default Phase 1 structure-aware chunker strategy under ``CHUNKERS['default']``."""
 
 from __future__ import annotations
 
@@ -6,8 +6,15 @@ import re
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from docpipe_maestro.ingest.intake import ParsedDocument, ParsedSection
-from docpipe_maestro.types import Chunk, ChunkingProfile, ChunkMetadata, make_chunk_id
+from docpipe_maestro.ingest.chunker import CHUNKERS
+from docpipe_maestro.types import (
+    Chunk,
+    ChunkingProfile,
+    ChunkMetadata,
+    ParsedDocument,
+    ParsedSection,
+    make_chunk_id,
+)
 
 _CLAUSE_START_RE = re.compile(
     r"^(?:(?:Clause|Article|Section)\s+([0-9]+(?:\.[0-9]+)*)|"
@@ -245,3 +252,26 @@ def chunk_document(
             )
         )
     return all_chunks
+
+
+@CHUNKERS.register("default")
+class DefaultChunker:
+    """Built-in structure-aware hierarchical parent/child chunker."""
+
+    name: str = "default"
+
+    def chunk(
+        self,
+        doc: ParsedDocument,
+        *,
+        profile: ChunkingProfile,
+        doc_version: str,
+        embed_model: str,
+    ) -> list[Chunk]:
+        """Split ``doc`` into parent sections and child chunks under ``profile``."""
+        return chunk_document(
+            doc,
+            profile=profile,
+            doc_version=doc_version,
+            embed_model=embed_model,
+        )
