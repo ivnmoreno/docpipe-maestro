@@ -5,7 +5,16 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-from docpipe_maestro.ingest.intake import ParsedDocument, ParsedSection
+from docpipe_maestro.ingest.intake import ParsedClause, ParsedDocument, ParsedSection
+
+_STANDALONE_PAGE_MARKER_RE = re.compile(
+    r"^(?:page\s+\d+(?:\s*(?:of|/)\s*\d+)?|\d+\s*/\s*\d+|-\s*\d+\s*-)$",
+    re.IGNORECASE,
+)
+_CLAUSE_PREFIX_RE = re.compile(r"^\d+(?:\.\d+)+(?:\s|$)")
+_HEADING_PREFIX_RE = re.compile(r"^(?:section|article|chapter|part|clause)\s+\d+\b", re.IGNORECASE)
+_DIGITS_RE = re.compile(r"\b\d+\b")
+_EDGE_ALPHA_WORD_RE = re.compile(r"[A-Za-z]{2,}")
 
 _TAG_START_RE = re.compile(
     r"</?(?:a|abbr|article|aside|b|blockquote|body|br|caption|code|dd|del|details|div|dl|dt|"
@@ -86,12 +95,55 @@ def clean_text(text: str) -> str:
     return normalized.strip()
 
 
+def _edge_template(line: str) -> str | None:
+    """Build a digit-normalized boilerplate template for paginated edge lines.
+
+    Matches recurring page markers (e.g., ``Page 1 of 4``) and non-clause
+    headers/footers with embedded page counters or years (e.g., copyright
+    bylines ending in increasing page numbers) while preserving real numbered
+    clauses and headings.
+    """
+    stripped = line.strip()
+    if not stripped or not _DIGITS_RE.search(stripped):
+        return None
+    if _CLAUSE_PREFIX_RE.match(stripped) or _HEADING_PREFIX_RE.match(stripped):
+        return None
+    normalized = _DIGITS_RE.sub("<NUM>", stripped).lower()
+    if _STANDALONE_PAGE_MARKER_RE.match(stripped):
+        return normalized
+    if len(_EDGE_ALPHA_WORD_RE.findall(normalized)) >= 3:
+        return normalized
+    return None
+
+
+def _strip_lines_from_text(
+    text: str,
+    *,
+    exact_boilerplate: set[str],
+    template_boilerplate: set[str],
+) -> str:
+    """Remove matched boilerplate lines from cleaned text."""
+    if not text or (not exact_boilerplate and not template_boilerplate):
+        return text
+    kept: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line in exact_boilerplate:
+            continue
+        tmpl = _edge_template(line)
+        if tmpl is not None and tmpl in template_boilerplate:
+            continue
+        kept.append(raw_line)
+    return "\n".join(kept).strip()
+
+
 def clean_document(doc: ParsedDocument) -> ParsedDocument:
     """Clean all sections in a ``ParsedDocument`` and strip multi-page boilerplate.
 
     Tracks the first and last non-empty normalized line per paginated page; any
-    edge line appearing on three or more distinct pages is treated as recurring
-    header/footer boilerplate and stripped before emitting cleaned sections.
+    exact edge line appearing on three or more distinct pages, recurring
+    standalone page marker on two or more pages, or digit-normalized footer/header
+    template on three or more pages is stripped before emitting cleaned sections.
     """
     page_edges: dict[int, set[str]] = {}
     precleaned: list[tuple[ParsedSection, str]] = []
@@ -105,22 +157,58 @@ def clean_document(doc: ParsedDocument) -> ParsedDocument:
                 bucket.add(lines[0])
                 if len(lines) > 1:
                     bucket.add(lines[-1])
+                for candidate in (*lines[:2], *lines[-2:]):
+                    if _STANDALONE_PAGE_MARKER_RE.match(candidate):
+                        bucket.add(candidate)
 
-    boilerplate: set[str] = set()
-    if len(page_edges) >= 3:
+    exact_boilerplate: set[str] = set()
+    template_boilerplate: set[str] = set()
+    if len(page_edges) >= 2:
         edge_counts: Counter[str] = Counter()
+        template_counts: Counter[str] = Counter()
         for edges in page_edges.values():
+            seen_templates: set[str] = set()
             for line in edges:
                 edge_counts[line] += 1
-        boilerplate = {line for line, count in edge_counts.items() if count >= 3}
+                tmpl = _edge_template(line)
+                if tmpl is not None:
+                    seen_templates.add(tmpl)
+            for tmpl in seen_templates:
+                template_counts[tmpl] += 1
+
+        if len(page_edges) >= 3:
+            exact_boilerplate = {line for line, count in edge_counts.items() if count >= 3}
+        for tmpl, count in template_counts.items():
+            # Standalone page-number lines ("Page 1 of 2") strip at >= 2 distinct pages;
+            # richer text templates require >= 3 distinct pages to avoid accidental loss.
+            min_pages = 2 if _STANDALONE_PAGE_MARKER_RE.match(tmpl.replace("<num>", "1")) else 3
+            if count >= min_pages:
+                template_boilerplate.add(tmpl)
 
     cleaned_sections: list[ParsedSection] = []
-    for sec, text in precleaned:
-        if boilerplate and text:
-            kept = [ln for ln in text.splitlines() if ln.strip() not in boilerplate]
-            text = "\n".join(kept).strip()
+    for sec, raw_section_text in precleaned:
+        text = _strip_lines_from_text(
+            raw_section_text,
+            exact_boilerplate=exact_boilerplate,
+            template_boilerplate=template_boilerplate,
+        )
         if not text:
             continue
+        cleaned_clauses: list[ParsedClause] = []
+        for clause in sec.clauses:
+            clause_text = _strip_lines_from_text(
+                clean_text(clause.text),
+                exact_boilerplate=exact_boilerplate,
+                template_boilerplate=template_boilerplate,
+            )
+            if clause_text:
+                cleaned_clauses.append(
+                    ParsedClause(
+                        clause_label=clause.clause_label,
+                        text=clause_text,
+                        page=clause.page,
+                    )
+                )
         cleaned_sections.append(
             ParsedSection(
                 source=sec.source,
@@ -128,7 +216,7 @@ def clean_document(doc: ParsedDocument) -> ParsedDocument:
                 heading_level=sec.heading_level,
                 raw_text=text,
                 page=sec.page,
-                clauses=list(sec.clauses),
+                clauses=cleaned_clauses,
             )
         )
 

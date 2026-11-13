@@ -4,22 +4,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from docpipe_maestro import (
-    __version__,
-    answer,
-    build_prompt,
-    ingest,
-    reindex,
-    remove,
-    retrieve,
-    status,
-    sync,
-)
+from dotenv import load_dotenv
+
+from docpipe_maestro import __version__, build_chat_messages
 from docpipe_maestro.config import (
     DEFAULT_COLLECTION,
     DEFAULT_EMBED_MODEL,
@@ -27,21 +21,43 @@ from docpipe_maestro.config import (
     DEFAULT_PERSIST_DIR,
     DEFAULT_TOP_K,
 )
+from docpipe_maestro.embedder import DEFAULT_REQUEST_TIMEOUT
 from docpipe_maestro.types import DocpipeError
 
 
-def _load_toml_config(config_path: str | None) -> dict[str, Any]:
+def _load_cli_dotenv(config_path: str | None) -> None:
+    """Load an optional ``.env`` strictly from the config directory or CWD (CLI only).
+
+    Never walks upward into ancestor directories and never overwrites variables
+    that are already present in the caller's environment.
+    """
+    base_dir = Path(config_path).parent if config_path else Path.cwd()
+    env_path = base_dir / ".env"
+    if env_path.is_file():
+        load_dotenv(dotenv_path=env_path, override=False)
+
+
+def _load_toml_config(config_path: str | None, *, no_config: bool = False) -> dict[str, Any]:
     """Load an optional TOML user configuration file (permitted in CLI only).
 
-    Supported keys include ``collection``, ``persist_dir``, ``embed_model``,
-    ``model``, ``profile``, ``top_k``, and ``threshold``. Credentials must
-    never be stored here; use provider environment variables instead.
+    When ``config_path`` is omitted and ``no_config`` is ``False``, checks strictly
+    for ``docpipe.toml`` in the current working directory (never walking upward
+    into parent directories). Supported keys include ``collection``, ``persist_dir``,
+    ``embed_model``, ``model``, ``profile``, ``top_k``, ``threshold``, ``api_base``,
+    ``temperature``, ``max_tokens``, ``timeout``, and ``fail_on_truncation``.
+    Credentials must never be stored here; use environment variables or ``.env``.
     """
-    if config_path is None:
+    if no_config:
         return {}
-    path = Path(config_path)
-    if not path.is_file():
-        raise DocpipeError(f"Config file not found: {config_path}")
+    if config_path is None:
+        cwd_cfg = Path.cwd() / "docpipe.toml"
+        if not cwd_cfg.is_file():
+            return {}
+        path = cwd_cfg
+    else:
+        path = Path(config_path)
+        if not path.is_file():
+            raise DocpipeError(f"Config file not found: {config_path}")
     if sys.version_info >= (3, 11):
         import tomllib
     else:
@@ -51,32 +67,54 @@ def _load_toml_config(config_path: str | None) -> dict[str, Any]:
     return dict(data)
 
 
-def _cfg_str(cfg: dict[str, Any], key: str, fallback: str) -> str:
-    """Validate and return a string configuration value from parsed TOML defaults."""
+def _cfg_bool(cfg: dict[str, Any], key: str, fallback: bool) -> bool:
+    """Validate and return a boolean configuration value from TOML defaults."""
     val = cfg.get(key)
     if val is None:
         return fallback
+    if not isinstance(val, bool):
+        raise DocpipeError(f"Invalid TOML config value for {key!r}: expected boolean")
+    return val
+
+
+def _cfg_opt_str(cfg: dict[str, Any], key: str) -> str | None:
+    """Validate and return an optional string configuration value from TOML defaults."""
+    val = cfg.get(key)
+    if val is None:
+        return None
     if not isinstance(val, str):
         raise DocpipeError(f"Invalid TOML config value for {key!r}: expected string")
     return val
 
 
-def _cfg_int(cfg: dict[str, Any], key: str, fallback: int) -> int:
-    """Validate and return an integer configuration value (rejecting booleans/lists)."""
+def _cfg_str(cfg: dict[str, Any], key: str, fallback: str) -> str:
+    """Validate and return a string configuration value from parsed TOML defaults."""
+    val = _cfg_opt_str(cfg, key)
+    return fallback if val is None else val
+
+
+def _cfg_opt_int(cfg: dict[str, Any], key: str) -> int | None:
+    """Validate and return an optional integer configuration value (rejecting booleans)."""
     val = cfg.get(key)
     if val is None:
-        return fallback
+        return None
     if isinstance(val, bool) or not isinstance(val, int):
         raise DocpipeError(f"Invalid TOML config value for {key!r}: expected integer")
     return val
 
 
+def _cfg_int(cfg: dict[str, Any], key: str, fallback: int) -> int:
+    """Validate and return an integer configuration value (rejecting booleans/lists)."""
+    val = _cfg_opt_int(cfg, key)
+    return fallback if val is None else val
+
+
 def _cfg_opt_float(cfg: dict[str, Any], key: str) -> float | None:
-    """Validate and return an optional float configuration value from TOML defaults."""
+    """Validate and return an optional finite float configuration value from TOML defaults."""
     val = cfg.get(key)
     if val is None:
         return None
-    if isinstance(val, bool) or not isinstance(val, (int, float)):
+    if isinstance(val, bool) or not isinstance(val, (int, float)) or not math.isfinite(float(val)):
         raise DocpipeError(f"Invalid TOML config value for {key!r}: expected number")
     return float(val)
 
@@ -96,6 +134,12 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     default_profile = _cfg_str(cfg, "profile", "DEFAULT")
     default_top_k = _cfg_int(cfg, "top_k", DEFAULT_TOP_K)
     default_threshold = _cfg_opt_float(cfg, "threshold")
+    default_api_base = _cfg_opt_str(cfg, "api_base")
+    default_temperature = _cfg_opt_float(cfg, "temperature")
+    default_max_tokens = _cfg_opt_int(cfg, "max_tokens")
+    toml_timeout = _cfg_opt_float(cfg, "timeout")
+    default_timeout = DEFAULT_REQUEST_TIMEOUT if toml_timeout is None else toml_timeout
+    default_fail_on_truncation = _cfg_bool(cfg, "fail_on_truncation", False)
 
     parser = argparse.ArgumentParser(
         prog="docpipe-maestro",
@@ -103,6 +147,12 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     )
     parser.add_argument("--version", action="version", version=f"docpipe-maestro {__version__}")
     parser.add_argument("--config", default=None, help="Optional TOML config file path")
+    parser.add_argument(
+        "--no-config",
+        action="store_true",
+        default=False,
+        help="Ignore CWD docpipe.toml and --config TOML defaults",
+    )
     parser.add_argument("--collection", default=default_collection, help="Target collection name")
     parser.add_argument("--persist-dir", default=default_persist_dir, help="Local store directory")
 
@@ -110,6 +160,12 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
         "--config", default=argparse.SUPPRESS, help="Optional TOML config file path"
+    )
+    common.add_argument(
+        "--no-config",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Ignore CWD docpipe.toml and --config TOML defaults",
     )
     common.add_argument("--collection", default=argparse.SUPPRESS, help="Target collection name")
     common.add_argument("--persist-dir", default=argparse.SUPPRESS, help="Local store directory")
@@ -177,9 +233,133 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     )
     p_ask.add_argument("--model", default=default_gen_model, help="LLM provider/model")
     p_ask.add_argument("--embed-model", default=default_embed_model, help="Embedding model")
-    p_ask.add_argument("--api-base", default=None, help="Optional OpenAI-compatible base URL")
+    p_ask.add_argument(
+        "--api-base", default=default_api_base, help="Optional OpenAI-compatible base URL"
+    )
+    p_ask.add_argument(
+        "--temperature",
+        type=float,
+        default=default_temperature,
+        help="Sampling temperature (>= 0.0); omitted when unset",
+    )
+    p_ask.add_argument(
+        "--max-tokens",
+        type=int,
+        default=default_max_tokens,
+        help="Maximum completion tokens (>= 1); omitted when unset",
+    )
+    p_ask.add_argument(
+        "--timeout",
+        type=float,
+        default=default_timeout,
+        help=f"Completion timeout in seconds (default: {DEFAULT_REQUEST_TIMEOUT})",
+    )
+    p_ask.add_argument(
+        "--fail-on-truncation",
+        action="store_true",
+        default=default_fail_on_truncation,
+        help="Exit non-zero if completion stops due to token limit (finish_reason='length')",
+    )
+    p_ask.add_argument(
+        "--show-context",
+        action="store_true",
+        default=False,
+        help="Print retrieved context sections and similarity scores to stderr",
+    )
+    p_ask.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        default=False,
+        help="Emit structured JSON with answer, truncation flag, token usage, and sources",
+    )
 
     return parser
+
+
+def _handle_ask(args: argparse.Namespace) -> int:
+    """Execute the ``ask`` subcommand with timing, context inspection, and truncation warnings."""
+    from docpipe_maestro.query.answer import answer_detailed
+    from docpipe_maestro.query.retriever import retrieve
+
+    t_ret = time.perf_counter()
+    sections = retrieve(
+        args.question,
+        collection=args.collection,
+        persist_dir=args.persist_dir,
+        embed_model=args.embed_model,
+        top_k=args.top_k,
+        threshold=args.threshold,
+        expand_parent=True,
+    )
+    retrieval_elapsed = time.perf_counter() - t_ret
+
+    if args.show_context:
+        if not sections:
+            print("[Context] No matching sections retrieved.", file=sys.stderr)
+        else:
+            for idx, item in enumerate(sections, start=1):
+                meta = item.metadata
+                clause_info = f" | Clause: {meta['clause']}" if meta["clause"] else ""
+                page_info = f" | Page: {meta['page']}" if meta["page"] is not None else ""
+                print(
+                    f"[Context {idx}] score={item.score:.4f} | Source: {meta['source']} | "
+                    f"Section: {meta['section']}{clause_info}{page_info}",
+                    file=sys.stderr,
+                )
+
+    messages = build_chat_messages(args.question, sections)
+    gen = answer_detailed(
+        messages,
+        model=args.model,
+        api_base=args.api_base,
+        has_context=bool(sections),
+        temperature=args.temperature,
+        max_tokens=args.max_tokens,
+        timeout=args.timeout,
+        fail_on_truncation=args.fail_on_truncation,
+    )
+
+    if gen.truncated:
+        print(
+            f"Warning: Response for model {args.model!r} was truncated at token limit "
+            "(finish_reason='length'). Increase or omit --max-tokens to get the full answer.",
+            file=sys.stderr,
+        )
+
+    if args.as_json:
+        print(
+            json.dumps(
+                {
+                    "answer": gen.text,
+                    "model": gen.model,
+                    "truncated": gen.truncated,
+                    "finish_reason": gen.finish_reason,
+                    "usage": {
+                        "prompt_tokens": gen.prompt_tokens,
+                        "completion_tokens": gen.completion_tokens,
+                        "reasoning_tokens": gen.reasoning_tokens,
+                        "total_tokens": gen.total_tokens,
+                    },
+                    "elapsed_seconds": round(gen.elapsed_seconds, 4),
+                    "retrieval_elapsed_seconds": round(retrieval_elapsed, 4),
+                    "sources": [
+                        {
+                            "source": sec.metadata["source"],
+                            "section": sec.metadata["section"],
+                            "clause": sec.metadata["clause"],
+                            "page": sec.metadata["page"],
+                            "score": round(sec.score, 4),
+                        }
+                        for sec in sections
+                    ],
+                },
+                indent=2,
+            )
+        )
+    else:
+        print(gen.text)
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -192,14 +372,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     arg_list = list(argv) if argv is not None else sys.argv[1:]
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--config", default=None)
+    pre.add_argument("--no-config", action="store_true", default=False)
     known, _ = pre.parse_known_args(arg_list)
 
     try:
-        cfg_defaults = _load_toml_config(known.config)
+        effective_cfg = None if known.no_config else known.config
+        _load_cli_dotenv(effective_cfg)
+        cfg_defaults = _load_toml_config(known.config, no_config=known.no_config)
         parser = build_parser(cfg_defaults)
         args = parser.parse_args(arg_list)
 
         if args.command == "ingest":
+            from docpipe_maestro.ingest.pipeline import ingest
+
             res = ingest(
                 args.path,
                 profile=args.profile,
@@ -216,6 +401,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.command == "sync":
+            from docpipe_maestro.ingest.pipeline import sync
+
             sres = sync(
                 args.directory,
                 profile=args.profile,
@@ -231,6 +418,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.command == "status":
+            from docpipe_maestro.ingest.pipeline import status
+
             st = status(collection=args.collection, persist_dir=args.persist_dir)
             if args.as_json:
                 print(
@@ -261,6 +450,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.command == "remove":
+            from docpipe_maestro.ingest.pipeline import remove
+
             removed = remove(
                 args.source,
                 collection=args.collection,
@@ -273,6 +464,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.command == "reindex":
+            from docpipe_maestro.ingest.pipeline import reindex
+
             count = reindex(
                 embed_model=args.model,
                 collection=args.collection,
@@ -285,6 +478,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.command == "query":
+            from docpipe_maestro.query.retriever import retrieve
+
             results = retrieve(
                 args.question,
                 collection=args.collection,
@@ -309,24 +504,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.command == "ask":
-            sections = retrieve(
-                args.question,
-                collection=args.collection,
-                persist_dir=args.persist_dir,
-                embed_model=args.embed_model,
-                top_k=args.top_k,
-                threshold=args.threshold,
-                expand_parent=True,
-            )
-            prompt = build_prompt(args.question, sections)
-            reply = answer(
-                prompt,
-                model=args.model,
-                api_base=args.api_base,
-                has_context=bool(sections),
-            )
-            print(reply)
-            return 0
+            return _handle_ask(args)
     except (DocpipeError, ValueError, TypeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

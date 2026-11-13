@@ -1,9 +1,10 @@
-"""Phase 1 intra-document cross-reference detection and cycle-safe resolution."""
+"""Phase 1/2 document cross-reference detection and cycle-safe resolution."""
 
 from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 
 from docpipe_maestro.ingest.intake import ParsedDocument, ParsedSection
 
@@ -14,6 +15,16 @@ _CROSSREF_RE = re.compile(
     r"(§\s*([0-9]+(?:\.[0-9]+)*))",
     re.IGNORECASE,
 )
+_DOC_SCOPED_CROSSREF_RE = re.compile(
+    r"(?:\b(Section|Article|Clause)\s+([0-9]+(?:\.[0-9]+)*)|(§)\s*([0-9]+(?:\.[0-9]+)*))"
+    r"\s+(?:of|in)\s+(?:the\s+)?"
+    r"([A-Za-z0-9_.-]+\.(?:md|markdown|txt|pdf|docx|html)\b|"
+    r"[A-Z][A-Za-z0-9._-]*"
+    r"(?:\s+(?!\b(?:Section|Article|Clause)\s+[0-9])"
+    r"(?:(?:of|and|&|for)\s+(?!\b(?:Section|Article|Clause)\s+[0-9]))?[A-Z][A-Za-z0-9._-]*){0,5})",
+)
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_DOC_PHRASE_STOPWORDS = frozenset({"the", "of", "and", "for", "a", "an", "in", "under"})
 
 _SECTION_NUM_RE = re.compile(
     r"(?:\b(?:Section|Article|Clause)\s+([0-9]+(?:\.[0-9]+)*)\b"
@@ -21,7 +32,7 @@ _SECTION_NUM_RE = re.compile(
     r"|^([0-9]+)\.(?=\s|$))",
     re.IGNORECASE,
 )
-_CLAUSE_LINE_RE = re.compile(r"^([0-9]+(?:\.[0-9]+)+)\s+(.+)$", re.MULTILINE)
+_CLAUSE_START_LINE_RE = re.compile(r"^([0-9]+(?:\.[0-9]+)+)\s+(.+)$")
 
 
 def _extract_section_num(label: str) -> str | None:
@@ -38,7 +49,7 @@ def _extract_section_num(label: str) -> str | None:
     return next((group for group in match.groups() if group is not None), None)
 
 
-def _truncate_excerpt(text: str, max_chars: int = 400) -> str:
+def truncate_excerpt(text: str, max_chars: int = 400) -> str:
     """Truncate text cleanly at a word boundary without chopping words mid-token."""
     clean = text.strip()
     if len(clean) <= max_chars:
@@ -49,20 +60,112 @@ def _truncate_excerpt(text: str, max_chars: int = 400) -> str:
     return clean[:cutoff].rstrip(" ,;:") + "..."
 
 
+def _parse_crossref_match(match: re.Match[str]) -> tuple[list[str], str, str]:
+    """Extract normalized lookup keys, numeric target, and display label from a match."""
+    if match.group(1) and match.group(2):
+        kind = match.group(1).lower()
+        num = match.group(2)
+        return [f"{kind} {num}", num], num, f"{match.group(1)} {num}"
+    num = match.group(4)
+    return [num, f"clause {num}", f"section {num}"], num, f"§{num}"
+
+
+def _iter_clause_blocks(raw_text: str) -> list[tuple[str, str]]:
+    """Extract numbered clause numbers paired with their full wrapped paragraph text."""
+    blocks: list[tuple[str, str]] = []
+    cur_num: str | None = None
+    cur_lines: list[str] = []
+
+    def flush() -> None:
+        if cur_num is not None and cur_lines:
+            blocks.append((cur_num, " ".join(cur_lines)))
+        cur_lines.clear()
+
+    for raw_line in raw_text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("[Crossref "):
+            flush()
+            cur_num = None
+            continue
+        match = _CLAUSE_START_LINE_RE.match(line)
+        if match:
+            flush()
+            cur_num = match.group(1)
+            cur_lines.append(line)
+        elif cur_num is not None:
+            cur_lines.append(line)
+
+    flush()
+    return blocks
+
+
+def index_section_targets(sections: Sequence[tuple[str, str]]) -> dict[str, tuple[str, int]]:
+    """Index normalized section and clause numbers to ``(excerpt_text, section_idx)``."""
+    targets: dict[str, tuple[str, int]] = {}
+    for sec_idx, (section_label, raw_text) in enumerate(sections):
+        num = _extract_section_num(section_label)
+        if num is not None:
+            full = f"{section_label}: {raw_text}"
+            targets.setdefault(num, (full, sec_idx))
+            targets.setdefault(f"section {num}".lower(), (full, sec_idx))
+        for c_num, c_text in _iter_clause_blocks(raw_text):
+            targets.setdefault(c_num, (c_text, sec_idx))
+            targets.setdefault(f"clause {c_num}".lower(), (c_text, sec_idx))
+    return targets
+
+
 def _build_target_index(doc: ParsedDocument) -> dict[str, str]:
     """Index section numbers and clause numbers within a single document."""
-    targets: dict[str, str] = {}
-    for sec in doc.sections:
-        num = _extract_section_num(sec.section_label)
-        if num is not None:
-            targets.setdefault(num, f"{sec.section_label}: {sec.raw_text}")
-            targets.setdefault(f"section {num}".lower(), f"{sec.section_label}: {sec.raw_text}")
-        for c_match in _CLAUSE_LINE_RE.finditer(sec.raw_text):
-            c_num = c_match.group(1)
-            c_text = c_match.group(0).strip()
-            targets.setdefault(c_num, c_text)
-            targets.setdefault(f"clause {c_num}".lower(), c_text)
-    return targets
+    indexed = index_section_targets([(sec.section_label, sec.raw_text) for sec in doc.sections])
+    return {key: val[0] for key, val in indexed.items()}
+
+
+def extract_doc_crossrefs(text: str) -> list[tuple[str, list[str], str]]:
+    """Extract explicit document-scoped cross-references from non-annotation lines."""
+    body_lines = [ln for ln in text.splitlines() if not ln.lstrip().startswith("[Crossref ")]
+    cleaned_body = "\n".join(body_lines)
+    refs: list[tuple[str, list[str], str]] = []
+    seen: set[tuple[str, str]] = set()
+    for match in _DOC_SCOPED_CROSSREF_RE.finditer(cleaned_body):
+        lookup_keys, _num, display = _parse_crossref_match(match)
+        doc_phrase = match.group(5).strip().rstrip(".,;:")
+        dedup_key = (display.lower(), doc_phrase.lower())
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+        refs.append((display, lookup_keys, doc_phrase))
+    return refs
+
+
+def match_source_key(
+    doc_phrase: str,
+    available_sources: Sequence[str],
+    *,
+    current_source: str | None = None,
+) -> str | None:
+    """Resolve a cited document name/filename unambiguously against collection sources."""
+    phrase_lower = doc_phrase.strip().lower()
+    candidates = [src for src in available_sources if src != current_source]
+    if not candidates or not phrase_lower:
+        return None
+
+    for src in candidates:
+        stem = src.rsplit(".", 1)[0].lower()
+        if phrase_lower in {src.lower(), stem}:
+            return src
+
+    phrase_tokens = {
+        tok for tok in _TOKEN_RE.findall(phrase_lower) if tok not in _DOC_PHRASE_STOPWORDS
+    }
+    if len(phrase_tokens) < 2:
+        return None
+
+    matched: list[str] = []
+    for src in candidates:
+        src_tokens = set(_TOKEN_RE.findall(src.lower()))
+        if phrase_tokens.issubset(src_tokens):
+            matched.append(src)
+    return matched[0] if len(matched) == 1 else None
 
 
 def resolve_crossrefs(doc: ParsedDocument) -> ParsedDocument:
@@ -88,15 +191,7 @@ def resolve_crossrefs(doc: ParsedDocument) -> ParsedDocument:
         appended_notes: list[str] = []
 
         for match in _CROSSREF_RE.finditer(sec.raw_text):
-            if match.group(1) and match.group(2):
-                kind = match.group(1).lower()
-                num = match.group(2)
-                lookup_keys = [f"{kind} {num}", num]
-                display = f"{match.group(1)} {num}"
-            else:
-                num = match.group(4)
-                lookup_keys = [num, f"clause {num}", f"section {num}"]
-                display = f"§{num}"
+            lookup_keys, num, display = _parse_crossref_match(match)
 
             if num in self_keys or any(k in self_keys for k in lookup_keys):
                 continue
@@ -112,7 +207,7 @@ def resolve_crossrefs(doc: ParsedDocument) -> ParsedDocument:
                     break
 
             if resolved_text is not None:
-                excerpt = _truncate_excerpt(resolved_text, 400)
+                excerpt = truncate_excerpt(resolved_text, 400)
                 appended_notes.append(f"[Crossref {display}: {excerpt}]")
             else:
                 logger.warning(

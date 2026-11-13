@@ -1,25 +1,26 @@
 # CLI Reference (`docpipe-maestro`)
 
-The `docpipe-maestro` CLI (`docpipe_maestro.cli:main`, also invocable as `python -m docpipe_maestro`) provides subcommands mirroring the two-phase pipeline. It is the **only** component in `docpipe-maestro` permitted to read an optional user configuration file (`--config`).
+The `docpipe-maestro` CLI (`docpipe_maestro.cli:main`, also invocable as `python -m docpipe_maestro`) provides subcommands mirroring the two-phase pipeline. It is the **only** component in `docpipe-maestro` permitted to read an optional user configuration file (`--config` or CWD `./docpipe.toml`).
 
 ---
 
 ## 1. Global Options & Flag Placement
 
 ```text
-usage: docpipe-maestro [-h] [--version] [--config CONFIG]
+usage: docpipe-maestro [-h] [--version] [--config CONFIG] [--no-config]
                        [--collection COLLECTION] [--persist-dir PERSIST_DIR]
                        {ingest,sync,status,remove,reindex,query,ask} ...
 ```
 
 | Flag | Default | Description |
 |---|---|---|
-| `--config <path>` | `None` | Optional TOML file providing CLI defaults |
+| `--config <path>` | `None` | Optional TOML file providing CLI defaults (overrides CWD `./docpipe.toml`) |
+| `--no-config` | `False` | Skip automatic loading of `./docpipe.toml` in the current working directory (also disables `--config` TOML loading while preserving `./.env` discovery) |
 | `--collection <name>` | `"default"` | Target ChromaDB collection & manifest identifier (ChromaDB requires $\ge 3$ characters matching `[a-zA-Z0-9._-]`) |
 | `--persist-dir <path>` | `".docpipe"` | Directory storing `chroma.sqlite3` and `manifests/<collection>.json` |
 | `--version` | — | Print `docpipe-maestro <version>` and exit |
 
-All global options (`--config`, `--collection`, `--persist-dir`) are attached via a shared parent parser so they work identically **before or after** any subcommand:
+All global options (`--config`, `--no-config`, `--collection`, `--persist-dir`) are attached via a shared parent parser so they work identically **before or after** any subcommand:
 
 ```bash
 docpipe-maestro --collection hr status --json
@@ -28,9 +29,9 @@ docpipe-maestro status --json --collection hr
 
 ---
 
-## 2. Optional TOML Configuration (`--config`)
+## 2. Optional TOML Configuration (`--config` / CWD `docpipe.toml`) & Scoped `.env` Discovery
 
-Supported keys in `docpipe.toml` correspond 1-to-1 with CLI option names in `src/docpipe_maestro/cli.py`:
+When `--config` is omitted (and `--no-config` is not set), the CLI automatically checks strictly the current working directory (`./docpipe.toml`, non-recursive) for default settings. Supported keys in `docpipe.toml` correspond 1-to-1 with CLI option names in `src/docpipe_maestro/cli.py`:
 
 ```toml
 collection = "hr_policy"
@@ -38,13 +39,23 @@ persist_dir = "./.docpipe"
 embed_model = "ollama/nomic-embed-text"
 model = "ollama/llama3.2"          # Generation model for `docpipe-maestro ask`
 profile = "POLICY"                 # "DEFAULT" or "POLICY"
-top_k = 5                          # Default candidate child count
+top_k = 5                          # Default parent/candidate count
 threshold = 0.35                   # Optional cosine similarity floor [0.0, 1.0]
+api_base = "https://api.groq.com/openai/v1" # Optional custom/OpenAI-compatible endpoint
+temperature = 0.0                  # Optional sampling temperature (>= 0.0)
+max_tokens = 512                   # Optional completion token limit (>= 1)
+timeout = 60.0                     # Request timeout in seconds (default: 120.0)
+fail_on_truncation = false         # Exit non-zero if `ask` response hits max_tokens (`finish_reason == "length"`)
 ```
 
-**Precedence order**: Explicit CLI flags > `--config` TOML values > Built-in `config.py` defaults.
+**Precedence order**: Explicit CLI flags > Explicit `--config <path>` > CWD `./docpipe.toml` (unless `--no-config`) > Built-in defaults (`config.py` / `120.0`s timeout).
 
-> **Security Rule**: Never place API keys or secrets in `docpipe.toml`. Set provider credentials solely through environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, etc.).
+**Scoped `.env` startup discovery (CLI only)**:
+- When `--config path/to/docpipe.toml` is supplied (without `--no-config`), the CLI loads `path/to/.env` (same directory as the config file) if present.
+- Otherwise (including when `./docpipe.toml` is auto-discovered or `--no-config` is passed), the CLI loads `./.env` from the current working directory if present.
+- It never walks upward into ancestor directories, never overwrites existing shell environment variables (`override=False`), and the core Python API (`answer()`, `answer_detailed()`, `retrieve()`, etc.) never reads `.env` files.
+
+> **Security Rule**: Never place API keys or secrets in `docpipe.toml`. Use exported shell variables or a local `.env` file (`chmod 600 .env`; ignored by Git — see `.env.example`).
 
 ---
 
@@ -191,19 +202,28 @@ docpipe-maestro query [--config CONFIG] [--collection COLLECTION]
 
 ### `docpipe-maestro ask "<question>"`
 
-Retrieve deduplicated parent sections, construct a grounded prompt via `build_prompt()`, and generate an answer via `answer()`.
+Retrieve deduplicated parent sections, construct role-separated messages via `build_chat_messages()`, and generate an answer via `answer_detailed()`.
 
 ```text
-docpipe-maestro ask [--config CONFIG] [--collection COLLECTION]
+docpipe-maestro ask [--config CONFIG] [--no-config] [--collection COLLECTION]
                     [--persist-dir PERSIST_DIR] [--top-k TOP_K]
                     [--threshold THRESHOLD] [--model MODEL]
-                    [--embed-model EMBED_MODEL] [--api-base API_BASE] question
+                    [--embed-model EMBED_MODEL] [--api-base API_BASE]
+                    [--temperature TEMPERATURE] [--max-tokens MAX_TOKENS]
+                    [--timeout TIMEOUT] [--fail-on-truncation]
+                    [--show-context] [--json] question
 ```
 
 - `--top-k`, `--threshold`, `--embed-model`: Same semantics as `docpipe-maestro query` (`expand_parent` is always `True`).
 - `--model`: LLM generation model string (default: `"ollama/llama3.2"` or TOML `model`).
-- `--api-base`: Optional custom OpenAI-compatible server base URL (e.g., `http://localhost:8000/v1`).
-- If zero sections satisfy `--threshold` (or the collection is empty), prints `Not found in the provided context.` without invoking the LLM.
+- `--api-base`: Optional custom OpenAI-compatible server URL (`http://` allowed for loopback hosts such as `http://localhost:8000/v1`; `https://` required for remote gateways).
+- `--temperature`: Optional sampling temperature (`>= 0.0`); omitted when unset for reasoning-model compatibility.
+- `--max-tokens`: Optional maximum completion tokens (`>= 1`); omitted when unset.
+- `--timeout`: Request timeout in seconds (default: `120.0` or TOML `timeout`).
+- `--fail-on-truncation`: Exit non-zero (`1`) with an error if the provider stops with `finish_reason == "length"` (`truncated=True`), overriding the default behavior of printing a `Warning:` to `stderr`. Also configurable via `fail_on_truncation = true` in `docpipe.toml`.
+- `--show-context`: Print retrieved parent section scores and provenance details to `stderr` while keeping `stdout` clean for piping the answer.
+- `--json`: Emit structured JSON on `stdout` containing the generated answer, generation telemetry (`model`, `finish_reason`, `truncated`, token usage, `elapsed_seconds`), and retrieved source citations.
+- If zero sections satisfy `--threshold` (or the collection is empty), prints `Not found in the provided context.` (or JSON equivalent with `--json`) without invoking the LLM.
 
 ---
 

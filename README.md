@@ -158,19 +158,16 @@ pip install "git+https://github.com/ivnmoreno/docpipe-maestro.git"
 
 ### Optional Extras
 
-Install additional document format parsers or cloud LLM generation features as needed:
+Generation (`answer()`, `ask`) is available in the base install — no extra needed. Install optional extras for additional document format parsers:
 
 | Extra | Purpose | Dependencies Installed |
 |---|---|---|
 | `pdf` | Extract text, page numbers, and heuristic section headings (`Section X.Y`) from PDF files | `pypdf>=6.21.3` (BSD-3-Clause) |
 | `docx` | Extract text, style-based headings (`Heading 1`–`Heading 6`), and tables from Word documents | `python-docx>=1.1.0` |
 | `html` | Strip boilerplate and parse `<h1–h6>` headings from web pages / HTML exports | `beautifulsoup4>=4.12.0` |
-| `generation` | Semantic alias for grounded question answering (`litellm` is already installed in core) | `litellm>=1.108.0` |
-| `all` | Installs **all** optional format parsers (`pdf`, `docx`, `html`, `generation`) | `pypdf`, `python-docx`, `beautifulsoup4`, `litellm` |
+| `all` | Installs **all** optional format parsers (`pdf`, `docx`, `html`) | `pypdf`, `python-docx`, `beautifulsoup4` |
 
-> **Note on Structure Extraction & Optional Generation**:
-> - **Structure-awareness across formats**: Markdown, plain text, HTML, DOCX, and PDF extract headings, clauses, and pagination metadata cleanly without external SaaS parsers.
-> - **Generation capability**: Because `litellm` powers both embeddings and completions, `answer()` is available in the base install; the `[generation]` extra is retained as a backwards-compatible alias.
+> **Note on Structure Extraction**: Markdown, plain text, HTML, DOCX, and PDF extract headings, clauses, and pagination metadata cleanly without external SaaS parsers.
 
 Install specific extras (substitute `@ git+https://github.com/ivnmoreno/docpipe-maestro.git` before PyPI publication):
 ```bash
@@ -180,7 +177,7 @@ pip install "docpipe-maestro[pdf] @ git+https://github.com/ivnmoreno/docpipe-mae
 # PDF and DOCX support
 pip install "docpipe-maestro[pdf,docx] @ git+https://github.com/ivnmoreno/docpipe-maestro.git"
 
-# Full installation with all formats and generation
+# Full installation with all document format parsers
 pip install "docpipe-maestro[all] @ git+https://github.com/ivnmoreno/docpipe-maestro.git"
 ```
 
@@ -226,28 +223,33 @@ ollama pull llama3.2
 
 > **Air-gapped / strict zero-egress environments**: By default, `litellm` attempts to download its public model-cost JSON map from GitHub when first imported before falling back to its bundled copy. Set `export LITELLM_LOCAL_MODEL_COST_MAP=true` in your shell to prevent any startup HTTP call on import.
 
-### 2. Cloud Provider API Keys
+### 2. Cloud Provider API Keys (`.env` or Shell Environment)
 
-To use cloud embedding or generation models, set the standard environment variables required by LiteLLM:
+Copy the tracked template `.env.example` to `.env` (git-ignored) and restrict permissions:
 
 ```bash
-# OpenAI
-export OPENAI_API_KEY="sk-..."
-
-# Anthropic (Claude)
-export ANTHROPIC_API_KEY="sk-ant-..."
-
-# Google Gemini
-export GEMINI_API_KEY="..."
-
-# Groq
-export GROQ_API_KEY="gsk_..."
-
-# Together AI
-export TOGETHERAI_API_KEY="..."
+cp .env.example .env && chmod 600 .env
 ```
 
-You can then pass any `provider/model` string directly to `--embed-model` or `--model` (e.g., `openai/text-embedding-3-small`, `openai/gpt-4o-mini`, `gemini/gemini-2.0-flash`, `anthropic/claude-3-5-haiku-20241022`).
+Or export provider environment variables directly in your shell (shell variables always take precedence over `.env`):
+
+```bash
+# Groq serverless inference
+export GROQ_API_KEY="your-groq-api-key"
+
+# Together.ai serverless inference (TOGETHER_API_KEY alias is also recognized by LiteLLM)
+export TOGETHERAI_API_KEY="your-together-api-key"
+
+# OpenAI / Anthropic / Google Gemini
+export OPENAI_API_KEY="your-openai-api-key"
+export ANTHROPIC_API_KEY="your-anthropic-api-key"
+export GEMINI_API_KEY="your-gemini-api-key"
+
+# Air-gapped / offline startup cost-map safety
+export LITELLM_LOCAL_MODEL_COST_MAP="true"
+```
+
+You can then pass any `provider/model` string directly to `--embed-model` or `--model` (e.g., `groq/llama-3.3-70b-versatile`, `together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo`, `openai/gpt-4o-mini`, `gemini/gemini-2.5-flash`). Note that the CLI loads `.env` strictly from the `--config` directory or current working directory (never walking parent directories), while direct Python API callers configure `os.environ`.
 
 ### 3. Local Persistence Storage Directory
 
@@ -263,7 +265,7 @@ Customize the persistence directory with `--persist-dir` on the CLI or `persist_
 
 ### 4. CLI Configuration File (`docpipe.toml`)
 
-You can create an optional TOML configuration file to set default CLI options (never store API keys or secrets here — `--config` flags override TOML values, and TOML values override built-in defaults):
+When `--config` is omitted (and `--no-config` is not passed), the CLI automatically loads `./docpipe.toml` from the current working directory if present (non-recursively; never walking parent directories). Create an optional TOML configuration file to set default CLI options (never store API keys or secrets here — explicit CLI flags override `--config` / `./docpipe.toml`, which override built-in defaults):
 
 ```toml
 # docpipe.toml
@@ -274,11 +276,18 @@ model = "ollama/llama3.2"
 profile = "POLICY"
 top_k = 5
 threshold = 0.4
+# Optional online/gateway defaults for `docpipe-maestro ask` (CLI flags override these):
+# api_base = "https://api.groq.com/openai/v1"
+# temperature = 0.0
+# max_tokens = 512
+# timeout = 60.0
+# fail_on_truncation = false
 ```
 
-Pass it to any CLI command using `--config`:
+Pass an explicit config path with `--config`, or ignore `./docpipe.toml` with `--no-config`:
 ```bash
 docpipe-maestro query "What is the probation period?" --config docpipe.toml
+docpipe-maestro ask "What is the probation period?" --no-config
 ```
 
 ### 5. Chunking Profiles (`DEFAULT`, `POLICY`, and Custom Profiles)
@@ -413,7 +422,12 @@ docpipe-maestro ask "Summarize travel policy." --model openai/my-local-model --a
 
 # Safe thresholding: if no retrieved content matches threshold, short-circuits with a refusal
 docpipe-maestro ask "What is the recipe for lasagna?" --threshold 0.7 --collection hr_policy
+
+# Inspect retrieved context on stderr, request JSON telemetry on stdout, or fail if truncated at max_tokens
+docpipe-maestro ask "Summarize travel limits." --show-context --collection hr_policy
+docpipe-maestro ask "Summarize travel limits." --json --fail-on-truncation --collection hr_policy
 ```
+*(By default, if a provider hits `--max-tokens` and sets `finish_reason == "length"`, `ask` prints a `Warning:` on `stderr`; pass `--fail-on-truncation` to fail non-zero instead.)*
 
 ---
 
@@ -472,7 +486,7 @@ reindexed_count = reindex(
 ### Phase 2: Semantic Retrieval & Grounded RAG Workflow
 
 ```python
-from docpipe_maestro import answer, build_prompt, retrieve
+from docpipe_maestro import answer, build_chat_messages, retrieve
 
 question = "What is the travel meal reimbursement rate?"
 
@@ -489,13 +503,17 @@ for section in retrieved_sections:
     print(f"[{section.score:.2f}] {section.metadata['source']} - {section.metadata['section']}")
     print(section.text)
 
-# 2. Build a grounded prompt (Pure function, zero network calls)
-prompt = build_prompt(question=question, sections=retrieved_sections)
+# 2. Build role-separated ChatML messages (Pure function, zero network calls)
+#    (build_prompt() also remains available for single-string prompts.)
+messages = build_chat_messages(question=question, sections=retrieved_sections)
 
-# 3. Generate a grounded answer (uses local Ollama by default)
+# 3. Generate a grounded answer (use answer_detailed() for finish_reason/token telemetry)
 response = answer(
-    prompt=prompt,
-    model="ollama/llama3.2",  # or "openai/gpt-4o-mini", "anthropic/claude-3-5-haiku", etc.
+    prompt=messages,
+    model="ollama/llama3.2",
+    temperature=0.0,  # Omit (None) for reasoning models that reject temperature
+    max_tokens=512,
+    timeout=60.0,
     has_context=bool(retrieved_sections),  # Short-circuits with refusal if context is empty
 )
 print("Answer:\n", response)
@@ -508,6 +526,7 @@ Exported from `docpipe_maestro` (`docpipe_maestro.types`):
 - `Chunk`: Base unit (`id`, `text`, `parent_id`, `metadata: ChunkMetadata`).
 - `EmbeddedChunk`: `Chunk` with dense embedding (`vector: list[float]`).
 - `RetrievedChunk`: `EmbeddedChunk` with normalized cosine similarity (`score: float` in `[0.0, 1.0]`).
+- `GenerationResult`: Detailed LLM completion result (`text`, `model`, `finish_reason`, `truncated`, `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `total_tokens`, `elapsed_seconds`).
 - `IngestResult`: Summary (`collection`, `embed_model`, `ingested`, `skipped`, `chunks_written`, `parents_written`).
 - `SyncResult`: Summary (`collection`, `embed_model`, `added`, `updated`, `skipped`, `removed`).
 - `CollectionStatus`: Manifest overview (`collection`, `embed_model`, `embed_dim`, `total_sources`, `total_children`, `total_parents`, `sources`).
@@ -519,7 +538,7 @@ Exported from `docpipe_maestro` (`docpipe_maestro.types`):
 ## Security, Privacy & Grounding Notes
 
 - **Trusted local corpus assumption**: Like most local ingestion tools, `docpipe-maestro ingest` processes files inside the target directory you specify. Only ingest trusted documents and avoid pointing `ingest`/`sync` at directories containing symlinks to sensitive files or untrusted HTML/PDF inputs.
-- **Credentials belong in environment variables**: API keys are never accepted in `docpipe.toml`, and `MissingCredentialError` scrubs auth error chains (`from None`) so secrets are not leaked in messages.
+- **Credentials & transport security**: API keys are never accepted in `docpipe.toml`; remote custom endpoints require `https://` (`http://` is permitted only for loopback hosts), and error handlers scrub regex key patterns as well as loaded environment secrets (`from None`) so credentials never leak in exceptions.
 - **Reduce hallucinations with `--threshold`**: Set a similarity `--threshold` (e.g. `0.35`–`0.6` depending on embedding model) on `retrieve()` / `docpipe-maestro ask` so off-topic questions return zero matches and short-circuit deterministically (`"Not found in the provided context."`).
 - **Protect your `.docpipe/` store on shared hosts**: Embedded ChromaDB files store plaintext document sections; keep `persist_dir` on owner-restricted paths (`chmod 700`) and excluded from version control.
 
@@ -554,9 +573,13 @@ uv run pytest -m integration -v
 ```text
 docpipe-maestro/
 ├── .github/                 # CI workflows, issue templates & PR template
+├── .specify/
+│   └── memory/
+│       └── constitution.md  # Non-negotiable architectural & safety principles
 ├── src/docpipe_maestro/
-│   ├── __init__.py          # Public API exports & lazy generation import
+│   ├── __init__.py          # Public API exports & lazy pipeline/answer imports
 │   ├── __main__.py          # Enables `python -m docpipe_maestro` CLI execution
+│   ├── py.typed             # PEP 561 typed package marker
 │   ├── cli.py               # `docpipe-maestro` CLI + TOML config loader
 │   ├── config.py            # Default constants & immutable chunking profiles
 │   ├── embedder.py          # Batched LiteLLM embedding adapter
@@ -569,8 +592,13 @@ docpipe-maestro/
 ├── documents/               # Synthetic sample policy corpus for local demos
 ├── docs/                    # Architecture, API, CLI, dev guide & roadmap
 ├── specs/                   # Feature specification, plan & contracts
+├── .env.example             # Template for local/cloud provider environment variables
+├── .pre-commit-config.yaml  # Commitizen Conventional Commits hook configuration
 ├── CHANGELOG.md             # Release history
 ├── CONTRIBUTING.md          # Contribution workflow & quality gate checklist
+├── LICENSE                  # MIT License
+├── Product.md               # Product description & SpecKit source input
+├── README.md                # Project overview, quickstart & guides
 ├── SECURITY.md              # Vulnerability reporting & privacy model
 └── pyproject.toml           # PEP 621 / 735 packaging, ruff, mypy & pytest config
 ```

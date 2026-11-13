@@ -151,6 +151,7 @@ def retrieve(
     top_k: int = 5,
     threshold: float | None = None,
     expand_parent: bool = True,
+    follow_crossrefs: bool = True,
 ) -> list[RetrievedChunk]
 ```
 
@@ -158,9 +159,10 @@ Read-only semantic retrieval enforcing the collection's embedding model lock:
 
 - Checks `manifest.embed_model` via `check_model_lock()`; raises `ModelMismatchError` if locked to a different model.
 - Returns `[]` immediately without calling the embedder if the collection is empty or `top_k <= 0`.
-- Queries child chunks exclusively (`where={"type": "child"}`), filtering out any uncommitted `doc_version` entries.
+- Queries child chunks exclusively (`where={"type": "child"}`) with `include_embeddings=False` to avoid unnecessary vector deserialization, filtering out any uncommitted `doc_version` entries.
 - Applies optional similarity cutoff `score >= threshold` (`score` is normalized cosine similarity in `[0.0, 1.0]`).
-- When `expand_parent=True`, resolves unique `parent_id` values via `get_by_ids()`, assigns each parent `max(child.score)` across its matched children, and returns sections sorted descending by `score`.
+- When `expand_parent=True`, over-fetches `top_k * 3` child candidates, assigns each unique `parent_id` `max(child.score)` across its matched children, resolves the top `top_k` parent sections via `get_by_ids(..., include_embeddings=False)`, and returns up to `top_k` unique parents sorted descending by `score`.
+- When `expand_parent=True` and `follow_crossrefs=True`, resolves explicit cross-document section/clause citations (e.g., `Section 4.1 of the Compliance Policy`) in one non-recursive pass when the target section is absent from top-`k` results.
 - When `expand_parent=False`, returns matched child chunks sorted descending by `score`.
 
 **Raises**: `ModelMismatchError`, `MissingCredentialError`, `DocpipeError`.
@@ -180,27 +182,96 @@ Pure, deterministic function (zero disk I/O, zero network calls) constructing a 
 
 - Formats each retrieved section with `[1] Source: ... | Section: ...` plus `| Clause: ...` and `| Page: ...` when non-`None`.
 - Separates sections with `---`.
-- Instructs the LLM to answer *only* from provided context, cite source/section/page, and state explicitly when the answer is absent. If `sections` is empty, inserts `(No relevant context sections retrieved.)`.
+- Instructs the LLM to answer *only* from provided context, preserve conditional exceptions and carve-outs (`unless`, `except`, `subject to`, `provided that`, `until`, emergency overrides), cite source/section (and page only when `Page:` is present in context), and state explicitly when the answer is absent. If `sections` is empty, inserts `(No relevant context sections retrieved.)`.
 
 ---
 
-### `answer(...) -> str`
+### `build_chat_messages(...) -> list[dict[str, str]]`
+
+```python
+def build_chat_messages(
+    question: str,
+    sections: Sequence[RetrievedChunk],
+) -> list[dict[str, str]]
+```
+
+Pure, deterministic function (zero disk I/O, zero network calls) returning a two-element ChatML structure:
+
+- `[{"role": "system", "content": ...}, {"role": "user", "content": ...}]`
+- Isolates grounding instructions inside the `system` role and keeps untrusted document chunks plus the user question inside the `user` role.
+- Shares the exact same provenance block formatter as `build_prompt()`.
+
+---
+
+### `answer(...) -> str` & `answer_detailed(...) -> GenerationResult`
 
 ```python
 def answer(
-    prompt: str,
+    prompt: str | Sequence[Mapping[str, str]],
     *,
     model: str = "ollama/llama3.2",
     api_base: str | None = None,
     has_context: bool = True,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    timeout: float = 120.0,
+    model_kwargs: Mapping[str, Any] | None = None,
+    fail_on_truncation: bool = False,
 ) -> str
+
+
+def answer_detailed(
+    prompt: str | Sequence[Mapping[str, str]],
+    *,
+    model: str = "ollama/llama3.2",
+    api_base: str | None = None,
+    has_context: bool = True,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    timeout: float = 120.0,
+    model_kwargs: Mapping[str, Any] | None = None,
+    fail_on_truncation: bool = False,
+) -> GenerationResult
 ```
 
-Lazily loaded (`__getattr__` on `docpipe_maestro`) completion wrapper powered by `litellm.completion`:
+Lazily loaded (`__getattr__` on `docpipe_maestro`) completion wrappers powered by `litellm.completion` (`answer()` delegates to `answer_detailed().text`):
 
-- **Empty Context Refusal**: When `has_context=False`, immediately returns `EMPTY_CONTEXT_REFUSAL` (`"Not found in the provided context."`) with zero LLM network calls.
-- **Custom Endpoints**: Pass `api_base="http://localhost:8000/v1"` for vLLM, LM Studio, or private OpenAI-compatible servers.
-- **Credential Hygiene**: LiteLLM reads provider API keys directly from environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, etc.); missing credentials raise `MissingCredentialError` without logging key values.
+- **Empty Context Refusal**: Validates inputs first, then immediately returns `EMPTY_CONTEXT_REFUSAL` (`"Not found in the provided context."`) — or a `GenerationResult` carrying it with zero token telemetry — with zero LLM calls when `has_context=False`.
+- **Truncation Guard & Telemetry**: `answer_detailed()` captures `finish_reason`, `truncated` (`finish_reason == "length"`), `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `total_tokens`, and wall `elapsed_seconds`. Passing `fail_on_truncation=True` raises `DocpipeError` when the provider stops due to token limit (`finish_reason == "length"`).
+- **Reasoning-Model Parameter Safety**: `temperature` (`>= 0.0`) and `max_tokens` (`>= 1`) are omitted completely from the LiteLLM request when `None` (while explicit `temperature=0.0` is preserved verbatim). `timeout` defaults to `120.0` seconds.
+- **Extra Generation Controls (`model_kwargs`)**: Forwarded to `litellm.completion` (e.g., `top_p`, `frequency_penalty`), excluding reserved/conflicting keys (`model`, `messages`, `prompt`, `api_base`, `base_url`, `api_key`, `temperature`, `max_tokens`, `timeout`, `num_retries`) which raise `DocpipeError`.
+- **Transport Security (`api_base`)**: Plain `http://` is permitted only for loopback hosts (`localhost`, `127.0.0.0/8`, `::1`); remote endpoints must use `https://`.
+- **Provider Examples**:
+
+```python
+from docpipe_maestro import answer, answer_detailed, build_chat_messages, retrieve
+
+sections = retrieve("What is the leave policy?", top_k=5)
+messages = build_chat_messages("What is the leave policy?", sections)
+
+# Groq serverless inference (reads GROQ_API_KEY from environment)
+groq_reply = answer(
+    messages,
+    model="groq/llama-3.3-70b-versatile",
+    temperature=0.0,
+    max_tokens=512,
+    timeout=30.0,
+    has_context=bool(sections),
+)
+
+# Detailed result with token telemetry and strict truncation checking
+detailed = answer_detailed(
+    messages,
+    model="together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    temperature=0.2,
+    model_kwargs={"top_p": 0.9},
+    has_context=bool(sections),
+    fail_on_truncation=True,
+)
+print(detailed.text, detailed.total_tokens, detailed.elapsed_seconds)
+```
+
+- **Fail-Fast Resilience & Privacy**: Passes `num_retries=0` so HTTP `429` fails fast with a sanitized `DocpipeError`; HTTP `401`/`403` raise `MissingCredentialError`; empty `choices`, populated `message.refusal`, or `None`/whitespace-only `content` raise `DocpipeError`; active env secrets and token patterns are scrubbed from error chains.
 
 **Raises**: `MissingExtraError` (if import fails), `MissingCredentialError`, `DocpipeError`.
 
@@ -266,8 +337,9 @@ ingest("./manual.md", profile=custom, collection="manuals")
 - `EmbeddedChunk(Chunk)`: adds `vector: list[float]`.
 - `RetrievedChunk(EmbeddedChunk)`: adds `score: float` in `[0.0, 1.0]`.
 
-### Operation & Manifest Records
+### Generation, Operation & Manifest Records
 
+- `GenerationResult`: `text: str`, `model: str`, `finish_reason: str | None`, `truncated: bool`, `prompt_tokens: int | None`, `completion_tokens: int | None`, `reasoning_tokens: int | None`, `total_tokens: int | None`, `elapsed_seconds: float`
 - `IngestResult`: `collection: str`, `embed_model: str`, `ingested: list[str]`, `skipped: list[str]`, `chunks_written: int`, `parents_written: int`
 - `SyncResult`: `collection: str`, `embed_model: str`, `added: list[str]`, `updated: list[str]`, `skipped: list[str]`, `removed: list[str]`
 - `CollectionStatus`: `collection: str`, `embed_model: str | None`, `embed_dim: int | None`, `total_sources: int`, `total_children: int`, `total_parents: int`, `sources: list[SourceRecord]`

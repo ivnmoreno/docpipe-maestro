@@ -1190,21 +1190,18 @@ dependencies = [
     { name = "chromadb" },
     { name = "langchain-text-splitters" },
     { name = "litellm" },
+    { name = "python-dotenv" },
     { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
 
 [package.optional-dependencies]
 all = [
     { name = "beautifulsoup4" },
-    { name = "litellm" },
     { name = "pypdf" },
     { name = "python-docx" },
 ]
 docx = [
     { name = "python-docx" },
-]
-generation = [
-    { name = "litellm" },
 ]
 html = [
     { name = "beautifulsoup4" },
@@ -1233,15 +1230,14 @@ requires-dist = [
     { name = "chromadb", specifier = ">=1.5.9" },
     { name = "langchain-text-splitters", specifier = ">=0.3.0" },
     { name = "litellm", specifier = ">=1.108.0" },
-    { name = "litellm", marker = "extra == 'all'", specifier = ">=1.108.0" },
-    { name = "litellm", marker = "extra == 'generation'", specifier = ">=1.108.0" },
     { name = "pypdf", marker = "extra == 'all'", specifier = ">=6.21.3" },
     { name = "pypdf", marker = "extra == 'pdf'", specifier = ">=6.21.3" },
     { name = "python-docx", marker = "extra == 'all'", specifier = ">=1.1.0" },
     { name = "python-docx", marker = "extra == 'docx'", specifier = ">=1.1.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0.0" },
 ]
-provides-extras = ["all", "docx", "generation", "html", "pdf"]
+provides-extras = ["all", "docx", "html", "pdf"]
 
 [package.metadata.requires-dev]
 dev = [
