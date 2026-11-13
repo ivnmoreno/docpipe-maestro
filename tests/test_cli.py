@@ -554,3 +554,140 @@ def test_cli_lazy_imports_avoid_heavy_deps_on_parser_init() -> None:
         text=True,
     )
     assert proc.returncode == 0, proc.stderr
+
+
+def test_cli_query_json_envelope_child_empty_flags_and_errors(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_litellm_offline: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    corpus = tmp_path / "docs"
+    corpus.mkdir()
+    doc = corpus / "leave.md"
+    doc.write_text(
+        "## Section 1: Annual Leave\n\n"
+        "1.1 Full-time employees accrue 20 days annual leave except probationary hires.\n",
+        encoding="utf-8",
+    )
+    cfg = tmp_path / "docpipe.toml"
+    cfg.write_text(
+        f'collection = "q_json_col"\n'
+        f'persist_dir = "{tmp_persist_dir.as_posix()}"\n'
+        f'profile = "POLICY"\n'
+        f"top_k = 3\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    assert main(["--config", str(cfg), "ingest", str(doc)]) == 0
+    capsys.readouterr()
+
+    # 1. Parent-expanded --json (--config before subcommand)
+    rc_parent = main(["--config", str(cfg), "query", "annual leave", "--json"])
+    assert rc_parent == 0
+    cap_parent = capsys.readouterr()
+    assert cap_parent.err == ""
+    payload = json.loads(cap_parent.out)
+    assert payload["query"] == "annual leave"
+    assert payload["collection"] == "q_json_col"
+    assert payload["expand_parent"] is True
+    assert len(payload["results"]) >= 1
+    first = payload["results"][0]
+    assert set(first) == {"id", "parent_id", "score", "text", "metadata"}
+    assert len(first["id"]) == 16
+    assert first["parent_id"] is None
+    assert isinstance(first["score"], float)
+    assert 0.0 <= first["score"] <= 1.0
+    assert "probationary hires" in first["text"]
+    assert first["metadata"]["type"] == "parent"
+    assert first["metadata"]["source"] == "leave.md"
+    assert first["metadata"]["page"] is None
+
+    # 2. Global flags (--config) placed AFTER query produce identical JSON structure
+    rc_after = main(["query", "annual leave", "--json", "--config", str(cfg)])
+    assert rc_after == 0
+    assert json.loads(capsys.readouterr().out) == payload
+
+    # 3. Raw child mode (--no-expand-parent --json)
+    rc_child = main(
+        [
+            "--no-config",
+            "--collection",
+            "q_json_col",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "query",
+            "annual leave",
+            "--no-expand-parent",
+            "--json",
+        ]
+    )
+    assert rc_child == 0
+    child_payload = json.loads(capsys.readouterr().out)
+    assert child_payload["expand_parent"] is False
+    child_item = child_payload["results"][0]
+    assert isinstance(child_item["parent_id"], str) and len(child_item["parent_id"]) == 16
+    assert child_item["metadata"]["type"] == "child"
+
+    # 4. Zero matches (empty collection and impossible threshold) -> valid JSON with results=[]
+    rc_empty_thresh = main(
+        ["--config", str(cfg), "query", "annual leave", "--threshold", "0.99999", "--json"]
+    )
+    assert rc_empty_thresh == 0
+    cap_empty = capsys.readouterr()
+    assert cap_empty.err == ""
+    assert "No matching sections found." not in cap_empty.out
+    assert json.loads(cap_empty.out) == {
+        "query": "annual leave",
+        "collection": "q_json_col",
+        "expand_parent": True,
+        "results": [],
+    }
+
+    rc_empty_col = main(
+        [
+            "--no-config",
+            "--collection",
+            "empty_col",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "query",
+            "anything",
+            "--json",
+        ]
+    )
+    assert rc_empty_col == 0
+    assert json.loads(capsys.readouterr().out)["results"] == []
+
+    # 5. Default non-JSON text mode preserved
+    assert main(["--config", str(cfg), "query", "annual leave"]) == 0
+    assert "[1] score=" in capsys.readouterr().out
+    assert main(["--config", str(cfg), "query", "annual leave", "--threshold", "0.99999"]) == 0
+    assert "No matching sections found." in capsys.readouterr().out
+
+    # 6. Validation / runtime failures emit Error: on stderr, empty stdout, and exit 1
+    rc_bad_thresh = main(
+        ["--config", str(cfg), "query", "annual leave", "--threshold", "1.5", "--json"]
+    )
+    assert rc_bad_thresh == 1
+    cap_bad = capsys.readouterr()
+    assert cap_bad.out == ""
+    assert "Error:" in cap_bad.err
+
+    rc_mismatch = main(
+        [
+            "--config",
+            str(cfg),
+            "query",
+            "annual leave",
+            "--embed-model",
+            "openai/wrong-model",
+            "--json",
+        ]
+    )
+    assert rc_mismatch == 1
+    cap_mis = capsys.readouterr()
+    assert cap_mis.out == ""
+    assert "Error:" in cap_mis.err

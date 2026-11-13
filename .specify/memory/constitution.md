@@ -1,14 +1,15 @@
 <!--
 # Sync Impact Report
-- Version change: 1.0.0 -> 1.1.0
-- Rationale: Incorporate explicit corpus update & synchronization rules (content-hash manifest, delete-then-reinsert replacement, transactional staging/version flip, 3-way reconciliation, and embedding model lock) to prevent orphaned clauses on shrinking documents and half-deleted documents on ingestion failures, directly upholding Principles V and VII.
-- Migration Note: No existing runtime code affected (pre-implementation phase). Expands public API and CLI contracts to expose corpus lifecycle functions (`sync`, `status`, `remove`, `reindex`) alongside `ingest`, `retrieve`, `build_prompt`, and `answer`.
+- Version change: 1.1.0 -> 1.2.0
+- Rationale: Reconcile baseline governance before modular registry refactoring — clarify Principle I ("minimal" bounds scope, not engineering rigor), designate the reverse exception-preservation suite as mandatory Release Gate #1 while reserving Release Gate #2 for future PII safety, align Quality Gates' public API contract list with all shipped 001/002 exports, and remove the stale "[generation] is an optional extra" claim from Footprint while retaining core local CPU constraints.
+- Migration Note: Documentation and governance alignment only; zero breaking changes to existing Python APIs, CLI behavior, stored collections, or runtime dependencies.
 - List of modified principles:
-  - Principle II (Two-Phase Architecture): Added `manifest` to shared state alongside `types`, `config`, and `store`.
+  - Principle I (Scope Discipline): Clarified that minimal scope never means minimal engineering rigor or testing discipline.
+  - Principle V (Exception Preservation): Numbered the reverse test as mandatory Release Gate #1 and reserved Release Gate #2 for planned PII safety.
 - Modified sections:
-  - Additional Constraints -> Data and Privacy (expanded incremental ingestion rules: manifest, delete-then-reinsert, staging, model lock)
-  - Additional Constraints -> Quality Gates (expanded public API surface contract to include corpus lifecycle operations)
-- Follow-up TODOs: None
+  - Additional Constraints -> Quality Gates (numbered Release Gate #1 and reserved Release Gate #2; synced full public API surface contract)
+  - Additional Constraints -> Footprint (removed obsolete "[generation] is an optional extra" claim while preserving 16 GB RAM CPU-only local constraint)
+- Follow-up TODOs: Implement and activate Release Gate #2 (`@pytest.mark.pii`) in the dedicated PII Protection stage (Stage 4).
 -->
 
 # docpipe-maestro Constitution
@@ -18,9 +19,11 @@
 ### I. Scope Discipline (NON-NEGOTIABLE)
 
 The product is a minimal RAG pipeline library — not an application, not a framework,
-not a platform. Anything that assumes "a user is waiting" (UI, HTTP API, sessions,
-auth, streaming, deployment) belongs to the consuming application. Anything that
-cannot be reached through the public API surface does not belong in the core.
+not a platform. "Minimal" applies strictly to feature surface and scope promise,
+never to engineering rigor, correctness guarantees, or safety discipline
+(*minimal in promise, not in rigor*). Anything that assumes "a user is waiting" (UI, HTTP API,
+sessions, auth, streaming, deployment) belongs to the consuming application. Anything
+that cannot be reached through the public API surface does not belong in the core.
 Every feature proposal must pass the one-sentence positioning test:
 
 > "A minimal RAG pipeline: it is the engine — not the app, not the framework."
@@ -56,9 +59,10 @@ before being returned. This principle exists because incomplete retrieval can
 Any retrieval context containing a rule with an exception marker (`except`,
 `unless`, `not entitled`, `subject to`, `provided that`) must also contain that
 exception. This is enforced by the reverse test against a fixture policy corpus,
-and the reverse test is a **release gate**. A release that fails the reverse test
+which serves as mandatory **Release Gate #1**. A release that fails Release Gate #1
 must not be published, regardless of other passing tests. The safety claim is only
-credible if it is tested.
+credible if it is tested. **Release Gate #2** (PII protection safety gate) is reserved
+for enforcement in the dedicated PII Protection stage.
 
 ### VI. Provider Agnosticism and Local-First Default
 
@@ -100,18 +104,27 @@ across modules is prohibited.
 
 - Every behavioral change ships with tests. CI runs linting, static type checking,
   and the full suite; a red CI blocks release.
-- The reverse test is a mandatory release gate, not an optional check.
+- **Release Gate #1 (mandatory)**: The exception-preservation reverse test
+  (`@pytest.mark.reverse`) must pass prior to every release.
+- **Release Gate #2 (reserved)**: Dedicated PII protection safety gate (`@pytest.mark.pii`),
+  reserved for activation in the PII Protection stage.
 - The package must install from TestPyPI in a clean environment before any PyPI
   release, and publishing uses trusted publishing rather than long-lived tokens.
 - The public API surface is the contract: `ingest`, `sync`, `remove`, `status`,
-  `reindex`, `retrieve`, `build_prompt`, optional `answer`, and the shared types.
+  `reindex`, `retrieve`, `build_prompt`, `build_chat_messages`, optional `answer`,
+  `answer_detailed`, shared data/result shapes (`Chunk`, `EmbeddedChunk`,
+  `RetrievedChunk`, `SourceRecord`, `IngestResult`, `SyncResult`, `CollectionStatus`,
+  `GenerationResult`), public exceptions (`DocpipeError`, `MissingExtraError`,
+  `UnsupportedFormatError`, `EmptyDocumentError`, `ModelMismatchError`,
+  `MissingCredentialError`, `IngestionError`, `GenerationError`), and `__version__`.
   If a feature cannot be reached through that surface, it does not belong in the core.
 
 ### Footprint
 
 - The default local configuration must run comfortably on 16 GB RAM with no GPU.
-- The core install stays small; generation is an optional extra, not a core
-  dependency.
+- The core install stays lean; generation is **optional to invoke** at runtime (Phase 1
+  ingestion and Phase 2 retrieval work offline with zero LLM completion calls), while
+  the unified client library handles both embeddings and completions in the core install.
 - A new file format or storage backend must be additive — no existing module should
   need modification beyond registration.
 
@@ -130,4 +143,4 @@ across modules is prohibited.
 > correctly, embeds it, stores it, retrieves the right sections, and optionally
 > generates a grounded answer. It is the engine — not the app, not the framework."
 
-**Version**: 1.1.0 | **Ratified**: 2026-11-12 | **Last Amended**: 2026-11-12
+**Version**: 1.2.0 | **Ratified**: 2026-11-12 | **Last Amended**: 2026-11-13

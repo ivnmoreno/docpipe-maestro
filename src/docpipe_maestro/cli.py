@@ -221,6 +221,13 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         default=True,
         help="Expand matched children to parent sections",
     )
+    p_query.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        default=False,
+        help="Emit structured JSON output with query context and retrieved records",
+    )
 
     # Phase 2: ask
     p_ask = subparsers.add_parser(
@@ -480,6 +487,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "query":
             from docpipe_maestro.query.retriever import retrieve
 
+            if args.threshold is not None and (
+                not math.isfinite(args.threshold) or not 0.0 <= args.threshold <= 1.0
+            ):
+                raise ValueError("--threshold must be finite and between 0.0 and 1.0")
+
             results = retrieve(
                 args.question,
                 collection=args.collection,
@@ -489,6 +501,28 @@ def main(argv: Sequence[str] | None = None) -> int:
                 threshold=args.threshold,
                 expand_parent=args.expand_parent,
             )
+            if args.as_json:
+                print(
+                    json.dumps(
+                        {
+                            "query": args.question,
+                            "collection": args.collection,
+                            "expand_parent": args.expand_parent,
+                            "results": [
+                                {
+                                    "id": item.id,
+                                    "parent_id": item.parent_id,
+                                    "score": float(item.score),
+                                    "text": item.text,
+                                    "metadata": dict(item.metadata),
+                                }
+                                for item in results
+                            ],
+                        },
+                        indent=2,
+                    )
+                )
+                return 0
             if not results:
                 print("No matching sections found.")
                 return 0

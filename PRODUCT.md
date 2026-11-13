@@ -246,7 +246,7 @@ The system shall manage file updates, deletions, and model consistency through a
 ### 7.3 Phase 2 — Optional Generation
 
 - The system shall optionally generate an answer by sending a constructed prompt to a language model.
-- Generation shall be an **optional capability**, not part of the core install.
+- Generation shall be an **optional capability to invoke** at runtime (Phase 1 ingestion and Phase 2 retrieval work without calling an LLM), with unified client support included in the core install rather than as a separate installation extra.
 - The system shall use a provider-agnostic generation interface.
 - The system shall support local providers (e.g., Ollama) and cloud providers (OpenAI, Anthropic, Google Gemini, Groq, Together AI, and others) through `provider/model` string addressing.
 - The system shall read provider credentials exclusively from environment variables. No credential shall ever be read from a file, hardcoded, or logged.
@@ -264,19 +264,19 @@ The system shall provide a CLI aligned with the two-phase model, offering ingest
 | `docpipe-maestro status` | Phase 1 / 2 | Inspect the manifest: indexed files, hashes, embedding model, and record counts |
 | `docpipe-maestro remove <path>` | Phase 1 | Delete all records and manifest entry for a specific source document |
 | `docpipe-maestro reindex --model <m>` | Phase 1 | Re-embed and re-ingest all tracked corpus sources under a new embedding model |
-| `docpipe-maestro query "<question>"` | Phase 2 (retrieval only) | Return relevant sections without generating an answer |
+| `docpipe-maestro query "<question>"` | Phase 2 (retrieval only) | Return relevant sections without generating an answer (supports `--json`) |
 | `docpipe-maestro ask "<question>"` | Phase 2 (full RAG) | Generate an answer using retrieved sections |
 
 - `ingest` and `sync` shall accept a `--profile` flag selecting a chunking profile.
 - All commands shall accept a `--collection` flag selecting the target collection.
 - `query` and `ask` shall accept a `--top-k` flag.
-- `query` shall accept `--expand-parent` / `--no-expand-parent` flags.
+- `query` shall accept `--expand-parent` / `--no-expand-parent` and `--json` flags.
 - `ask` shall accept a `--model` flag taking a `provider/model` string.
 - The CLI shall be the **only** component permitted to read a user configuration file, if the user supplies one. All library modules shall take configuration via arguments.
 
 ### 7.5 Public Library API
 
-The library shall expose a deliberately minimal public surface. Anything not reachable through this surface does not belong in the core.
+The library shall expose a deliberately minimal public surface (`docpipe_maestro.__all__`). Anything not reachable through this surface does not belong in the core.
 
 | Symbol | Kind | Purpose |
 |---|---|---|
@@ -286,11 +286,24 @@ The library shall expose a deliberately minimal public surface. Anything not rea
 | `status` | function | Phase 1 / 2 inspection: collection → manifest status summary |
 | `reindex` | function | Phase 1 model migration: collection + new embed model → re-embedded store |
 | `retrieve` | function | Phase 2 retrieval: question → list of retrieved sections |
-| `build_prompt` | function | Phase 2 prompt construction: question + sections → prompt string |
-| `answer` | function (optional extra) | Phase 2 generation: prompt → answer string |
-| `Chunk` | type | The base data shape |
-| `EmbeddedChunk` | type | A chunk with a vector |
-| `RetrievedChunk` | type | An embedded chunk with a similarity score |
+| `build_prompt` | function | Phase 2 plain prompt construction: question + sections → prompt string |
+| `build_chat_messages` | function | Phase 2 structured prompt construction: question + sections → role-separated chat messages |
+| `answer` | function (optional call) | Phase 2 generation: prompt/messages → answer string |
+| `answer_detailed` | function (optional call) | Phase 2 generation with telemetry: prompt/messages → `GenerationResult` |
+| `Chunk` | type | Base chunk unit (`id`, `text`, `parent_id`, `metadata`) |
+| `EmbeddedChunk` | type | A `Chunk` paired with an embedding vector |
+| `RetrievedChunk` | type | An `EmbeddedChunk` paired with a similarity score |
+| `SourceRecord` | type | Per-document manifest metadata record stored alongside the collection |
+| `IngestResult` | type | Structured summary returned by `ingest()` |
+| `SyncResult` | type | Structured reconciliation summary returned by `sync()` |
+| `CollectionStatus` | type | Read-only collection and source manifest summary returned by `status()` |
+| `GenerationResult` | type | Structured answer text, finish reason, truncation flag, token usage, and latency returned by `answer_detailed()` |
+| `DocpipeError` | exception | Base exception class for all library errors |
+| `UnsupportedFormatError` | exception | Raised when a file extension is unsupported or contents cannot be parsed |
+| `MissingExtraError` | exception | Raised when an optional format parser dependency is missing |
+| `ModelMismatchError` | exception | Raised when query/ingest embedding model mismatches the collection lock |
+| `MissingCredentialError` | exception | Raised when a required provider credential environment variable is absent |
+| `__version__` | constant | Installed package distribution version string |
 
 ---
 
@@ -496,15 +509,13 @@ The project shall use a modern build backend with versioning derived from versio
 
 **Core runtime dependencies:**
 
-- A unified provider client library (for embeddings and generation)
+- A unified provider client library (powering both embeddings and optional completion generation)
 - A text-splitting library with structure-aware capabilities
-- A document parsing library capable of handling multiple formats
-- A local vector database
+- A local vector database and environment configuration loader
 
 **Optional extras:**
 
-- An extra enabling the optional generation capability
-- Per-format extras for document parsing, so that users install only the parsers they need
+- Per-format extras for document parsing (`pdf`, `docx`, `html`, or `all`), so that users install only the parsers they need
 
 **Development dependencies:**
 
@@ -549,7 +560,7 @@ The following decisions have been made and shall be preserved in the specificati
 | 7 | No provider registry in code | The unified client already resolves provider strings; a registry would duplicate and stale |
 | 8 | Credentials from environment variables only | Prevents secret leakage via source control or logs |
 | 9 | Default model is local | Zero-friction first run; no third-party account required |
-| 10 | Generation is an optional extra | Keeps the core install small and the library's promise honest |
+| 10 | Generation is optional to invoke (core install) | Keeps runtime LLM calls strictly opt-in while avoiding redundant optional extras (`litellm` powers both embeddings and completions) |
 | 11 | Reverse test as a release gate | The product's safety claim is only credible if it is tested |
 | 12 | The library reads no config file; the CLI may | Preserves library purity and app-layer flexibility |
 
@@ -612,7 +623,7 @@ The v0.1 release shall be accepted when all of the following hold.
 **Packaging**
 17. The package installs from TestPyPI in a clean virtual environment.
 18. The CLI is available as `docpipe-maestro` after installation.
-19. The optional generation extra installs and enables `answer` without affecting the core install.
+19. Invoking `answer` (or `answer_detailed`) generates grounded answers with citations without requiring any separate optional extra beyond the core package.
 
 ---
 
@@ -639,20 +650,22 @@ These are explicitly **out of scope for v0.1** but noted for continuity.
 
 | Module | Phase | Responsibility |
 |---|---|---|
-| `types.py` | both | Shared data shapes |
-| `config.py` | both | Chunking profiles as Python constants |
+| `__init__.py` | both | Public package exports (`__all__`) |
+| `__main__.py` | both | `python -m docpipe_maestro` entrypoint |
+| `types.py` | both | Shared data shapes and typed exceptions |
+| `config.py` | both | Chunking profiles and settings defaults as Python constants |
 | `manifest.py` | 1 and 2 | Database-collocated ingestion manifest: hash tracking, `mtime` fast path, 3-way reconciliation, and model lock |
-| `intake.py` | 1 | File → raw text + structure metadata |
-| `clean.py` | 1 | Raw text → clean text |
-| `crossrefs.py` | 1 | Detect and resolve internal references |
-| `chunker.py` | 1 | Clean text → child chunks + parent sections |
-| `embedder.py` | 1 | Chunks → vectors |
+| `embedder.py` | 1 and 2 | Chunks and queries → vectors |
 | `store.py` | 1 and 2 | Persist and fetch chunks, vectors, metadata, and transactional version cleanup |
-| `ingest.py` | 1 | Orchestrate Phase 1 (`ingest`, `sync`, `remove`, `status`, `reindex`) |
-| `retriever.py` | 2 | Question → parent sections |
-| `prompts.py` | 2 | Sections + question → prompt string |
-| `answer.py` | 2 | Prompt → answer (optional extra) |
 | `cli.py` | both | Command-line interface; the only module permitted to read a user config file |
+| `ingest/intake.py` | 1 | File → raw text + structure metadata |
+| `ingest/clean.py` | 1 | Raw text → clean text |
+| `ingest/crossrefs.py` | 1 | Detect and resolve internal references |
+| `ingest/chunker.py` | 1 | Clean text → child chunks + parent sections |
+| `ingest/pipeline.py` | 1 | Orchestrate Phase 1 (`ingest`, `sync`, `remove`, `status`, `reindex`) |
+| `query/retriever.py` | 2 | Question → parent sections or matched child chunks |
+| `query/prompts.py` | 2 | Sections + question → prompt / chat messages |
+| `query/answer.py` | 2 | Prompt + sections → answer / `GenerationResult` (optional to invoke; included in core deps) |
 
 ### 20.2 The One-Sentence Positioning
 

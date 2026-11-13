@@ -3,7 +3,7 @@
 > **Scope Guardrail & Alignment Principle:**  
 > In accordance with the `docpipe-maestro` Constitution (Principle I: *"The engine — not the app, not the framework"*), any feature proposed for the core library must be accessible through the public library API and CLI without turning `docpipe-maestro` into an application server or framework. Features that require long-lived servers, authentication, or GUI layers belong in companion repositories or example wrappers.
 
-This document aggregates all architectural suggestions, deferred backlog items, and future upgrade proposals identified across `Product.md`, the v0.1 specification (`specs/001-core-rag-pipeline/`), architectural research, and initial implementation.
+This document aggregates all architectural suggestions, deferred backlog items, and future upgrade proposals identified across `PRODUCT.md`, the v0.1 specification (`specs/001-core-rag-pipeline/`), architectural research, and initial implementation.
 
 ---
 

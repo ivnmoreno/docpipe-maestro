@@ -299,9 +299,11 @@ Built-in profiles are immutable presets (`docpipe_maestro.config`) calibrated fo
 | **Intended For** | Notes, general prose, articles, documentation | Handbooks, compliance policies, HR manuals, contracts |
 | **Target Chunk Size** | ~512 tokens | ~1000 tokens |
 | **Chunk Overlap** | ~64 tokens (scoped within section) | ~80 tokens (scoped within section) |
-| **Clause Preservation** | Disabled (splits on sentences/paragraphs) | **Enabled** (never splits inside numbered clauses) |
+| **Clause Preservation** | Disabled (splits on sentences/paragraphs) | **Enabled** (never splits inside detected numbered clauses; PDF clause detection is heuristic) |
 | **Cross-Reference Resolution** | Disabled | **Enabled** (resolves `§2.1`, `Section 4`, `Clause 3.2`) |
 | **Parent-Child Expansion** | Enabled | **Enabled** |
+
+> **Note on PDF Clause Detection**: Markdown, DOCX, and HTML headings/numbering provide explicit structural boundaries, whereas PDF clause detection uses extracted-text heuristics (`1.1`, `Clause 2`, `(a)` layout cues) and depends on clean PDF text extraction order.
 
 In Python, you can also pass a custom [`ChunkingProfile`](docs/api-reference.md) instance directly to `ingest(..., profile=custom_profile)` or `sync(...)`.
 
@@ -396,6 +398,9 @@ docpipe-maestro query "What is the flight reimbursement policy?" --top-k 3 --thr
 
 # Return raw child chunks instead of expanded parent sections
 docpipe-maestro query "annual leave" --no-expand-parent --collection hr_policy
+
+# Emit structured JSON (for evaluation fixtures and scripts)
+docpipe-maestro query "annual leave" --json --collection hr_policy
 ```
 
 **Example output**:
@@ -597,7 +602,7 @@ docpipe-maestro/
 ├── CHANGELOG.md             # Release history
 ├── CONTRIBUTING.md          # Contribution workflow & quality gate checklist
 ├── LICENSE                  # MIT License
-├── Product.md               # Product description & SpecKit source input
+├── PRODUCT.md               # Product specification & requirements baseline
 ├── README.md                # Project overview, quickstart & guides
 ├── SECURITY.md              # Vulnerability reporting & privacy model
 └── pyproject.toml           # PEP 621 / 735 packaging, ruff, mypy & pytest config

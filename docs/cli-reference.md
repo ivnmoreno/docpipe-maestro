@@ -179,17 +179,18 @@ docpipe-maestro reindex [--config CONFIG] [--collection COLLECTION]
 Run semantic search without invoking an LLM.
 
 ```text
-docpipe-maestro query [--config CONFIG] [--collection COLLECTION]
+docpipe-maestro query [--config CONFIG] [--no-config] [--collection COLLECTION]
                       [--persist-dir PERSIST_DIR] [--top-k TOP_K]
                       [--threshold THRESHOLD] [--embed-model EMBED_MODEL]
-                      [--expand-parent | --no-expand-parent] question
+                      [--expand-parent | --no-expand-parent] [--json] question
 ```
 
 - `--top-k`: Maximum child chunk hits prior to parent deduplication (default: `5`).
 - `--threshold`: Minimum cosine similarity in `[0.0, 1.0]` (default: `None`).
 - `--embed-model`: Embedding model string matching the collection lock (default: `"ollama/nomic-embed-text"`).
 - `--expand-parent` / `--no-expand-parent`: Return deduplicated parent sections (`True`, default) or raw matched child chunks (`False`).
-- **Example output**:
+- `--json`: Emit structured JSON on `stdout` (`{"query", "collection", "expand_parent", "results"}`) where each element of `"results"` exposes `"id"`, `"parent_id"` (`null` for expanded parents, non-empty string for raw child chunks), `"score"` (numeric float in `[0.0, 1.0]`), `"text"`, and `"metadata"` (`type`, `source`, `doc_version`, `section`, `clause`, `page`, `chunk_index`, `embed_model`). When zero results match or satisfy `--threshold`, emits `"results": []` and exits `0` with no plain-text prose. Validation or runtime failures follow the CLI-wide convention (`Error: ...` on `stderr`, empty `stdout`, exit `1`).
+- **Example text output** (when `--json` is omitted):
   ```text
   [1] score=0.8421 | Source: hr_leave_policy.md | Section: 3. Annual Leave | Page: 2
   3.1 Full-time employees accrue 20 days of paid annual leave per calendar year.
@@ -197,6 +198,32 @@ docpipe-maestro query [--config CONFIG] [--collection COLLECTION]
   ------------------------------------------------------------
   ```
   (The ` | Page: <n>` suffix appears only for paginated formats such as PDF; when no results pass `--threshold`, prints `No matching sections found.` and exits `0`.)
+- **Example `--json` output**:
+  ```json
+  {
+    "query": "annual leave",
+    "collection": "hr_policy",
+    "expand_parent": true,
+    "results": [
+      {
+        "id": "a1b2c3d4e5f60718",
+        "parent_id": null,
+        "score": 0.842137,
+        "text": "3.1 Full-time employees accrue 20 days of paid annual leave per calendar year.",
+        "metadata": {
+          "type": "parent",
+          "source": "hr_leave_policy.md",
+          "doc_version": "4f1a29b01c3d",
+          "section": "3. Annual Leave",
+          "clause": null,
+          "page": 2,
+          "chunk_index": 0,
+          "embed_model": "ollama/nomic-embed-text"
+        }
+      }
+    ]
+  }
+  ```
 
 ---
 

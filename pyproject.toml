@@ -79,7 +79,7 @@ packages = ["src/docpipe_maestro"]
 include = [
     "src/",
     "tests/",
-    "Product.md",
+    "PRODUCT.md",
     ".specify/memory/constitution.md",
     "docs/",
     "README.md",
