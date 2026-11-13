@@ -1,0 +1,227 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+2 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+3 0 obj
+<< /Type /Pages /Kids [5 0 R 7 0 R 9 0 R 11 0 R] /Count 4 >>
+endobj
+4 0 obj
+<< /Length 1142 >>
+stream
+BT
+/F1 10 Tf
+1 0 0 1 54 750 Tm
+(CONFIDENTIAL - ACME CLOUD CORP MASTER SERVICES AGREEMENT) Tj
+/F2 12 Tf
+1 0 0 1 54 736 Tm
+(MASTER SERVICES AND DATA PROCESSING AGREEMENT) Tj
+/F1 10 Tf
+1 0 0 1 54 720 Tm
+(Effective Date: January 15, 2026 | Contract Ref: MSA-2026-014) Tj
+/F1 10 Tf
+1 0 0 1 54 706 Tm
+() Tj
+/F2 12 Tf
+1 0 0 1 54 692 Tm
+(Article 1: Definitions and Interpretation) Tj
+/F1 10 Tf
+1 0 0 1 54 676 Tm
+(1.1 Confidential Information means all non-public technical, financial, or business) Tj
+/F1 10 Tf
+1 0 0 1 54 662 Tm
+(data disclosed by either party, except information that is publicly available) Tj
+/F1 10 Tf
+1 0 0 1 54 648 Tm
+(without breach of this Agreement or independently developed.) Tj
+/F1 10 Tf
+1 0 0 1 54 634 Tm
+(1.2 Service Level Objective \(SLO\) means 99.95% monthly uptime availability,) Tj
+/F1 10 Tf
+1 0 0 1 54 620 Tm
+(measured excluding Scheduled Maintenance Windows defined in Section 3.2.) Tj
+/F1 10 Tf
+1 0 0 1 54 606 Tm
+(1.3 Customer Data means any electronic data, records, or documents uploaded by) Tj
+/F1 10 Tf
+1 0 0 1 54 592 Tm
+(Customer into the hosted platform.) Tj
+/F1 10 Tf
+1 0 0 1 54 578 Tm
+(Page 1 of 4) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 3 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R /F2 2 0 R >> >> /Contents 4 0 R >>
+endobj
+6 0 obj
+<< /Length 1471 >>
+stream
+BT
+/F1 10 Tf
+1 0 0 1 54 750 Tm
+(CONFIDENTIAL - ACME CLOUD CORP MASTER SERVICES AGREEMENT) Tj
+/F2 12 Tf
+1 0 0 1 54 736 Tm
+(Article 2: Fees, Invoicing, and Payment Terms) Tj
+/F1 10 Tf
+1 0 0 1 54 720 Tm
+(2.1 Customer shall pay all undisputed fees within thirty \(30\) calendar days of) Tj
+/F1 10 Tf
+1 0 0 1 54 706 Tm
+(invoice receipt. Late balances accrue interest at 1.5% per month unless) Tj
+/F1 10 Tf
+1 0 0 1 54 692 Tm
+(disputed in good faith prior to the due date.) Tj
+/F1 10 Tf
+1 0 0 1 54 678 Tm
+(2.2 Overdue accounts exceeding forty-five \(45\) days may be suspended upon ten) Tj
+/F1 10 Tf
+1 0 0 1 54 664 Tm
+(\(10\) business days written notice, provided that Acme shall not suspend) Tj
+/F1 10 Tf
+1 0 0 1 54 650 Tm
+(access while a bona fide billing dispute is under joint review.) Tj
+/F1 10 Tf
+1 0 0 1 54 636 Tm
+() Tj
+/F2 12 Tf
+1 0 0 1 54 622 Tm
+(Article 3: Service Levels and Support Credits) Tj
+/F1 10 Tf
+1 0 0 1 54 606 Tm
+(3.1 If monthly uptime falls below 99.95%, Customer is eligible for a 10% credit,) Tj
+/F1 10 Tf
+1 0 0 1 54 592 Tm
+(and if uptime falls below 99.0%, a 25% credit, subject to Clause 3.2.) Tj
+/F1 10 Tf
+1 0 0 1 54 578 Tm
+(3.2 Scheduled Maintenance Windows occur Sundays 02:00-06:00 UTC with 72 hours) Tj
+/F1 10 Tf
+1 0 0 1 54 564 Tm
+(advance notice. Customer is not entitled to service credits for downtime) Tj
+/F1 10 Tf
+1 0 0 1 54 550 Tm
+(caused by Scheduled Maintenance or force majeure events.) Tj
+/F1 10 Tf
+1 0 0 1 54 536 Tm
+(Page 2 of 4) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 3 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R /F2 2 0 R >> >> /Contents 6 0 R >>
+endobj
+8 0 obj
+<< /Length 963 >>
+stream
+BT
+/F1 10 Tf
+1 0 0 1 54 750 Tm
+(CONFIDENTIAL - ACME CLOUD CORP MASTER SERVICES AGREEMENT) Tj
+/F2 12 Tf
+1 0 0 1 54 736 Tm
+(Article 4: Data Protection, Security, and Subprocessors) Tj
+/F1 10 Tf
+1 0 0 1 54 720 Tm
+(4.1 Provider shall maintain SOC 2 Type II certification and encrypt all Customer) Tj
+/F1 10 Tf
+1 0 0 1 54 706 Tm
+(Data at rest using AES-256 and in transit using TLS 1.3.) Tj
+/F1 10 Tf
+1 0 0 1 54 692 Tm
+(4.2 Security Incident Notification: Provider must notify Customer within) Tj
+/F1 10 Tf
+1 0 0 1 54 678 Tm
+(twenty-four \(24\) hours of confirming any unauthorized access to Customer Data,) Tj
+/F1 10 Tf
+1 0 0 1 54 664 Tm
+(and shall preserve forensic logs for at least ninety \(90\) days.) Tj
+/F1 10 Tf
+1 0 0 1 54 650 Tm
+(4.3 Subprocessors may only be engaged pursuant to Section 4.1 security) Tj
+/F1 10 Tf
+1 0 0 1 54 636 Tm
+(standards and after fifteen \(15\) days prior written notice to Customer.) Tj
+/F1 10 Tf
+1 0 0 1 54 622 Tm
+(Page 3 of 4) Tj
+ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 3 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R /F2 2 0 R >> >> /Contents 8 0 R >>
+endobj
+10 0 obj
+<< /Length 1215 >>
+stream
+BT
+/F1 10 Tf
+1 0 0 1 54 750 Tm
+(CONFIDENTIAL - ACME CLOUD CORP MASTER SERVICES AGREEMENT) Tj
+/F2 12 Tf
+1 0 0 1 54 736 Tm
+(Article 5: Limitation of Liability and Termination) Tj
+/F1 10 Tf
+1 0 0 1 54 720 Tm
+(5.1 Except for breaches of Section 1.1 \(Confidentiality\) or Section 4.2) Tj
+/F1 10 Tf
+1 0 0 1 54 706 Tm
+(\(Security Incident Notification\), each party's aggregate liability shall not) Tj
+/F1 10 Tf
+1 0 0 1 54 692 Tm
+(exceed the total fees paid by Customer in the preceding twelve \(12\) months.) Tj
+/F1 10 Tf
+1 0 0 1 54 678 Tm
+(5.2 Either party may terminate for material breach if uncured thirty \(30\) days) Tj
+/F1 10 Tf
+1 0 0 1 54 664 Tm
+(after written notice. Upon termination, Provider shall export Customer Data) Tj
+/F1 10 Tf
+1 0 0 1 54 650 Tm
+(within thirty \(30\) days and permanently purge all copies within sixty \(60\) days.) Tj
+/F1 10 Tf
+1 0 0 1 54 636 Tm
+(5.3 Governing Law: This Agreement is governed by the laws of the State of) Tj
+/F1 10 Tf
+1 0 0 1 54 622 Tm
+(Delaware, without regard to conflict-of-law principles, and subject to) Tj
+/F1 10 Tf
+1 0 0 1 54 608 Tm
+(mandatory arbitration under Section 99.4 of the External Arbitration Rules.) Tj
+/F1 10 Tf
+1 0 0 1 54 594 Tm
+(Page 4 of 4) Tj
+ET
+endstream
+endobj
+11 0 obj
+<< /Type /Page /Parent 3 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R /F2 2 0 R >> >> /Contents 10 0 R >>
+endobj
+12 0 obj
+<< /Type /Catalog /Pages 3 0 R >>
+endobj
+xref
+0 13
+0000000000 65535 f 
+0000000015 00000 n 
+0000000085 00000 n 
+0000000160 00000 n 
+0000000236 00000 n 
+0000001430 00000 n 
+0000001566 00000 n 
+0000003089 00000 n 
+0000003225 00000 n 
+0000004239 00000 n 
+0000004375 00000 n 
+0000005643 00000 n 
+0000005781 00000 n 
+trailer
+<< /Size 13 /Root 12 0 R >>
+startxref
+5831
+%%EOF

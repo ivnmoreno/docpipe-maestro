@@ -1,0 +1,15 @@
+IT ACCEPTABLE USE GUIDELINES
+Document: IT-AUP-2026 | Review Cycle: Annual
+
+1. Purpose
+1.1 These guidelines define acceptable use of corporate laptops, cloud accounts, email, and network resources.
+
+2. Permitted and Prohibited Use
+2.1 Incidental personal use of company devices is permitted outside core working hours, provided that it does not interfere with job duties, consume excessive bandwidth, or violate Section 2.2.
+2.2 Users must not disable endpoint security agents, install unauthorized browser extensions, or share individual API tokens or SSH private keys.
+2.3 Users are not entitled to any expectation of privacy on corporate-managed devices or email accounts, except as required by applicable local labor law.
+
+3. Enforcement
+3.1 Suspected violations are investigated jointly by IT Security and Human Resources and may lead to access revocation or disciplinary action.
+
+4. Extra Information
