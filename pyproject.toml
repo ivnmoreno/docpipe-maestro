@@ -38,13 +38,10 @@ dependencies = [
 pdf = ["pypdf>=6.21.3"]
 docx = ["python-docx>=1.1.0"]
 html = ["beautifulsoup4>=4.12.0"]
-# Semantic alias retained for backwards compatibility (litellm is included in core dependencies)
-generation = ["litellm>=1.108.0"]
 all = [
     "docpipe-maestro[pdf]",
     "docpipe-maestro[docx]",
     "docpipe-maestro[html]",
-    "docpipe-maestro[generation]",
 ]
 
 [project.scripts]

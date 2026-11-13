@@ -80,17 +80,11 @@ _PIPELINE_EXPORTS = frozenset({"ingest", "reindex", "remove", "status", "sync"})
 def __getattr__(name: str) -> Any:
     """Lazily expose heavy vector/LLM pipeline helpers on attribute access."""
     if name in {"answer", "answer_detailed"}:
-        try:
-            from docpipe_maestro.query import answer as _answer_mod
+        from docpipe_maestro.query import answer as _answer_mod
 
-            obj = getattr(_answer_mod, name)
-            globals()[name] = obj
-            return obj
-        except ImportError as exc:
-            raise MissingExtraError(
-                "Generation support requires the 'generation' extra: "
-                "pip install docpipe-maestro[generation]"
-            ) from exc
+        obj = getattr(_answer_mod, name)
+        globals()[name] = obj
+        return obj
     if name in _PIPELINE_EXPORTS:
         from docpipe_maestro.ingest import pipeline as _pipeline_mod
 

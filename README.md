@@ -158,19 +158,16 @@ pip install "git+https://github.com/ivnmoreno/docpipe-maestro.git"
 
 ### Optional Extras
 
-Install additional document format parsers or cloud LLM generation features as needed:
+Generation (`answer()`, `ask`) is available in the base install — no extra needed. Install optional extras for additional document format parsers:
 
 | Extra | Purpose | Dependencies Installed |
 |---|---|---|
 | `pdf` | Extract text, page numbers, and heuristic section headings (`Section X.Y`) from PDF files | `pypdf>=6.21.3` (BSD-3-Clause) |
 | `docx` | Extract text, style-based headings (`Heading 1`–`Heading 6`), and tables from Word documents | `python-docx>=1.1.0` |
 | `html` | Strip boilerplate and parse `<h1–h6>` headings from web pages / HTML exports | `beautifulsoup4>=4.12.0` |
-| `generation` | Semantic alias for grounded question answering (`litellm` is already installed in core) | `litellm>=1.108.0` |
-| `all` | Installs **all** optional format parsers (`pdf`, `docx`, `html`, `generation`) | `pypdf`, `python-docx`, `beautifulsoup4`, `litellm` |
+| `all` | Installs **all** optional format parsers (`pdf`, `docx`, `html`) | `pypdf`, `python-docx`, `beautifulsoup4` |
 
-> **Note on Structure Extraction & Optional Generation**:
-> - **Structure-awareness across formats**: Markdown, plain text, HTML, DOCX, and PDF extract headings, clauses, and pagination metadata cleanly without external SaaS parsers.
-> - **Generation capability**: Because `litellm` powers both embeddings and completions, `answer()` is available in the base install; the `[generation]` extra is retained as a backwards-compatible alias.
+> **Note on Structure Extraction**: Markdown, plain text, HTML, DOCX, and PDF extract headings, clauses, and pagination metadata cleanly without external SaaS parsers.
 
 Install specific extras (substitute `@ git+https://github.com/ivnmoreno/docpipe-maestro.git` before PyPI publication):
 ```bash
@@ -180,7 +177,7 @@ pip install "docpipe-maestro[pdf] @ git+https://github.com/ivnmoreno/docpipe-mae
 # PDF and DOCX support
 pip install "docpipe-maestro[pdf,docx] @ git+https://github.com/ivnmoreno/docpipe-maestro.git"
 
-# Full installation with all formats and generation
+# Full installation with all document format parsers
 pip install "docpipe-maestro[all] @ git+https://github.com/ivnmoreno/docpipe-maestro.git"
 ```
 
@@ -576,9 +573,13 @@ uv run pytest -m integration -v
 ```text
 docpipe-maestro/
 ├── .github/                 # CI workflows, issue templates & PR template
+├── .specify/
+│   └── memory/
+│       └── constitution.md  # Non-negotiable architectural & safety principles
 ├── src/docpipe_maestro/
-│   ├── __init__.py          # Public API exports & lazy generation import
+│   ├── __init__.py          # Public API exports & lazy pipeline/answer imports
 │   ├── __main__.py          # Enables `python -m docpipe_maestro` CLI execution
+│   ├── py.typed             # PEP 561 typed package marker
 │   ├── cli.py               # `docpipe-maestro` CLI + TOML config loader
 │   ├── config.py            # Default constants & immutable chunking profiles
 │   ├── embedder.py          # Batched LiteLLM embedding adapter
@@ -591,8 +592,13 @@ docpipe-maestro/
 ├── documents/               # Synthetic sample policy corpus for local demos
 ├── docs/                    # Architecture, API, CLI, dev guide & roadmap
 ├── specs/                   # Feature specification, plan & contracts
+├── .env.example             # Template for local/cloud provider environment variables
+├── .pre-commit-config.yaml  # Commitizen Conventional Commits hook configuration
 ├── CHANGELOG.md             # Release history
 ├── CONTRIBUTING.md          # Contribution workflow & quality gate checklist
+├── LICENSE                  # MIT License
+├── Product.md               # Product description & SpecKit source input
+├── README.md                # Project overview, quickstart & guides
 ├── SECURITY.md              # Vulnerability reporting & privacy model
 └── pyproject.toml           # PEP 621 / 735 packaging, ruff, mypy & pytest config
 ```
