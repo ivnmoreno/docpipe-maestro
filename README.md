@@ -93,12 +93,11 @@ flowchart LR
         C --> D[Crossref Resolution]
         D --> E[Structure-Aware Chunker]
         E --> F[Batched Embeddings]
-        F --> G[(ChromaDB + JSON Manifest)]
+        F --> G[(ChromaDB + FTS5 + JSON Manifest)]
     end
 
     subgraph P2["Phase 2: Online Query (Read-Only)"]
-        Q[Question] --> QE[Embed Query]
-        QE --> S["Child Search where type=child"]
+        Q[Question] --> S["Child Search (Dense or fts5_hybrid RRF)"]
         S --> PE["Parent Expansion & max(score) Dedupe"]
         PE --> BP["Pure build_prompt()"]
         BP -->|results > 0| LLM["Optional answer() via LiteLLM"]
@@ -258,6 +257,8 @@ By default, data is stored in `./.docpipe`:
 .docpipe/
 ├── chroma.sqlite3          # ChromaDB embedded vector database
 ├── <uuid>/                 # ChromaDB vector segments and HNSW index files
+├── lexical/
+│   └── <collection>.db     # Collocated SQLite FTS5 BM25 lexical index (`fts5_hybrid`)
 └── manifests/
     └── <collection>.json   # Atomic JSON manifest tracking file hashes, versions, and locked model
 ```
@@ -276,6 +277,7 @@ model = "ollama/llama3.2"
 profile = "POLICY"
 top_k = 5
 threshold = 0.4
+searcher = "default"               # "default" (dense vector) or "fts5_hybrid" (dense + SQLite FTS5 RRF)
 # Optional online/gateway defaults for `docpipe-maestro ask` (CLI flags override these):
 # api_base = "https://api.groq.com/openai/v1"
 # temperature = 0.0
@@ -396,6 +398,10 @@ docpipe-maestro query "How many vacation days do full-time employees accrue?" --
 # Restrict to top 3 sections with a minimum similarity threshold (0.0 to 1.0)
 docpipe-maestro query "What is the flight reimbursement policy?" --top-k 3 --threshold 0.5 --collection hr_policy
 
+# Combine dense vector similarity with SQLite FTS5 BM25 via Reciprocal Rank Fusion
+# (ideal for exact error codes, identifiers, or clauses like "SEV-1" or "AES-256")
+docpipe-maestro query "SEV-1 escalation window" --searcher fts5_hybrid --collection hr_policy
+
 # Return raw child chunks instead of expanded parent sections
 docpipe-maestro query "annual leave" --no-expand-parent --collection hr_policy
 
@@ -430,6 +436,7 @@ docpipe-maestro ask "What is the recipe for lasagna?" --threshold 0.7 --collecti
 
 # Inspect retrieved context on stderr, request JSON telemetry on stdout, or fail if truncated at max_tokens
 docpipe-maestro ask "Summarize travel limits." --show-context --collection hr_policy
+docpipe-maestro ask "What is the SEV-1 escalation window?" --searcher fts5_hybrid --collection hr_policy
 docpipe-maestro ask "Summarize travel limits." --json --fail-on-truncation --collection hr_policy
 ```
 *(By default, if a provider hits `--max-tokens` and sets `finish_reason == "length"`, `ask` prints a `Warning:` on `stderr`; pass `--fail-on-truncation` to fail non-zero instead.)*
@@ -495,13 +502,14 @@ from docpipe_maestro import answer, build_chat_messages, retrieve
 
 question = "What is the travel meal reimbursement rate?"
 
-# 1. Retrieve deduplicated parent sections
+# 1. Retrieve deduplicated parent sections (pass searcher="fts5_hybrid" for dense + BM25 RRF)
 retrieved_sections = retrieve(
     question=question,
     collection="handbook",
     top_k=5,
-    threshold=0.35,  # Normalized cosine similarity [0.0, 1.0]
+    threshold=0.35,  # Normalized similarity / RRF score [0.0, 1.0]
     expand_parent=True,  # Expand child matches to full parent section
+    searcher="default",  # "default" or "fts5_hybrid"
 )
 
 for section in retrieved_sections:
@@ -530,13 +538,13 @@ Exported from `docpipe_maestro` (`docpipe_maestro.types`):
 
 - `Chunk`: Base unit (`id`, `text`, `parent_id`, `metadata: ChunkMetadata`).
 - `EmbeddedChunk`: `Chunk` with dense embedding (`vector: list[float]`).
-- `RetrievedChunk`: `EmbeddedChunk` with normalized cosine similarity (`score: float` in `[0.0, 1.0]`).
+- `RetrievedChunk`: `EmbeddedChunk` with normalized similarity or RRF score (`score: float` in `[0.0, 1.0]`).
 - `GenerationResult`: Detailed LLM completion result (`text`, `model`, `finish_reason`, `truncated`, `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `total_tokens`, `elapsed_seconds`).
 - `IngestResult`: Summary (`collection`, `embed_model`, `ingested`, `skipped`, `chunks_written`, `parents_written`).
 - `SyncResult`: Summary (`collection`, `embed_model`, `added`, `updated`, `skipped`, `removed`).
 - `CollectionStatus`: Manifest overview (`collection`, `embed_model`, `embed_dim`, `total_sources`, `total_children`, `total_parents`, `sources`).
 - `SourceRecord`: Per-file manifest tracking record (`source`, `content_hash`, `doc_version`, `size`, `mtime`, `ingested_at`, `embed_model`, `profile`, `chunk_ids`, `parent_ids`).
-- Exceptions: `DocpipeError` (base) with `UnsupportedFormatError`, `MissingExtraError`, `ModelMismatchError`, and `MissingCredentialError`.
+- Exceptions: `DocpipeError` (base) with `UnsupportedFormatError`, `MissingExtraError`, `ModelMismatchError`, `MissingCredentialError`, and `RegistryError`.
 
 ---
 
@@ -587,12 +595,12 @@ docpipe-maestro/
 │   ├── py.typed             # PEP 561 typed package marker
 │   ├── cli.py               # `docpipe-maestro` CLI + TOML config loader
 │   ├── config.py            # Default constants & immutable chunking profiles
-│   ├── embedder.py          # Batched LiteLLM embedding adapter
+│   ├── embedder/            # Batched LiteLLM embedding adapter & registry
 │   ├── manifest.py          # Atomic sha256/mtime JSON manifest & model lock
-│   ├── store.py             # Embedded ChromaDB PersistentClient adapter
+│   ├── store/               # ChromaDB vector store (`chroma.py`) & SQLite FTS5 (`lexical.py`)
 │   ├── types.py             # Dataclasses, TypedDicts & DocpipeError hierarchy
-│   ├── ingest/              # Phase 1: intake, clean, crossrefs, chunker, pipeline
-│   └── query/               # Phase 2: retriever, prompts, answer
+│   ├── ingest/              # Phase 1: intake/, clean/, crossrefs, chunker/, enricher/, pipeline
+│   └── query/               # Phase 2: searcher/ (`default`, `fts5_hybrid`), reranker/, retriever, prompts, answer
 ├── tests/                   # Unit, integration, security & reverse-safety suites
 ├── documents/               # Synthetic sample policy corpus for local demos
 ├── docs/                    # Architecture, API, CLI, dev guide & roadmap

@@ -12,23 +12,23 @@ This document explains how **`docpipe-maestro`** processes documents from raw fi
 flowchart LR
     subgraph P1["Phase 1: Offline Ingestion & Sync (ingest/)"]
         direction LR
-        F["Files (.md, .txt, .pdf, .docx, .html)"] --> I["intake.py\n(Format + Headings)"]
-        I --> C["clean.py\n(HTML/Whitespace/Boilerplate)"]
+        F["Files (.md, .txt, .pdf, .docx, .html)"] --> I["intake/\n(Format + Headings)"]
+        I --> C["clean/\n(HTML/Whitespace/Boilerplate)"]
         C --> X["crossrefs.py\n(POLICY: Intra-Doc Resolution)"]
-        X --> K["chunker.py\n(Parents + Linked Children)"]
-        K --> E1["embedder.py\n(Batch Child Vectors Only)"]
-        E1 --> S1["store.py + manifest.py\n(Staged Insert -> Atomic Swap -> Purge)"]
+        X --> K["chunker/\n(Parents + Linked Children)"]
+        K --> E1["embedder/\n(Batch Child Vectors Only)"]
+        E1 --> S1["store/ (Chroma + FTS5) + manifest.py\n(Staged Insert -> Atomic Swap -> Purge)"]
     end
 
     subgraph P2["Phase 2: Online Read-Only Query (query/)"]
         direction LR
-        Q["Question"] --> E2["embedder.py\n(Match Locked Model)"]
-        E2 --> R["retriever.py\n(Child Search -> Parent Expansion)"]
+        Q["Question"] --> E2["embedder/\n(Match Locked Model)"]
+        E2 --> R["retriever.py + searcher/\n(Dense or FTS5 Hybrid RRF -> Parent Expansion)"]
         R --> P["prompts.py\n(Pure Grounded Prompt)"]
         P --> A["answer.py\n(Optional LLM / Empty Refusal)"]
     end
 
-    S1 -. "ChromaDB + JSON Manifest\n(Read-Only in Phase 2)" .-> R
+    S1 -. "ChromaDB + FTS5 DB + JSON Manifest\n(Read-Only in Phase 2)" .-> R
 ```
 
 ### Module Layout & Phase Boundaries
@@ -39,15 +39,18 @@ Every file's execution role is visible from the package layout under `src/docpip
 |---|---|---|
 | [`types.py`](../src/docpipe_maestro/types.py) | Shared | Single source of truth for chunks, metadata, profiles, manifest records, results, and `DocpipeError` hierarchy |
 | [`config.py`](../src/docpipe_maestro/config.py) | Shared | Static constants (`DEFAULT_*`) and immutable chunking profiles (`DEFAULT`, `POLICY`, `resolve_profile`) |
-| [`embedder.py`](../src/docpipe_maestro/embedder.py) | Shared | Batched provider-agnostic embeddings via `litellm.embedding` (`batch_size=64`) and auth error normalization |
+| [`_registry.py`](../src/docpipe_maestro/_registry.py) | Shared | Lazy Strategy + Registry core with collision/lookup `RegistryError` guards |
+| [`embedder/`](../src/docpipe_maestro/embedder/__init__.py) | Shared | Batched provider-agnostic embeddings via `litellm.embedding` (`batch_size=64`) and auth error normalization |
 | [`manifest.py`](../src/docpipe_maestro/manifest.py) | Shared | Atomic DB-collocated JSON manifest (`sha256`, `mtime`/`size` fast-path, collection model lock) |
-| [`store.py`](../src/docpipe_maestro/store.py) | Shared | Embedded `chromadb.PersistentClient` wrapper (`cosine` space, `None` metadata bridge, staging cleanup) |
-| [`ingest/intake.py`](../src/docpipe_maestro/ingest/intake.py) | Phase 1 | Format dispatch, magic-byte fallback, fenced-block-safe Markdown, PDF/DOCX/HTML structural parsing |
-| [`ingest/clean.py`](../src/docpipe_maestro/ingest/clean.py) | Phase 1 | Allow-listed HTML stripping, whitespace normalization, and 3+ page header/footer boilerplate removal |
+| [`store/chroma.py`](../src/docpipe_maestro/store/chroma.py) | Shared | Embedded `chromadb.PersistentClient` wrapper (`cosine` space, `None` metadata bridge, staging cleanup) |
+| [`store/lexical.py`](../src/docpipe_maestro/store/lexical.py) | Shared | Collocated SQLite FTS5 `LexicalIndex` (`unicode61` BM25, technical token sanitizer, strict `mode=ro` reads) |
+| [`ingest/intake/`](../src/docpipe_maestro/ingest/intake/__init__.py) | Phase 1 | Format dispatch, magic-byte fallback, fenced-block-safe Markdown, PDF/DOCX/HTML structural parsing |
+| [`ingest/clean/`](../src/docpipe_maestro/ingest/clean/__init__.py) | Phase 1 | Allow-listed HTML stripping, whitespace normalization, and 3+ page header/footer boilerplate removal |
 | [`ingest/crossrefs.py`](../src/docpipe_maestro/ingest/crossrefs.py) | Phase 1 | Intra-document `Section`/`Article`/`Clause`/`§` detection, cycle-safe excerpt injection, unresolved warnings |
-| [`ingest/chunker.py`](../src/docpipe_maestro/ingest/chunker.py) | Phase 1 | Structure-aware parent sections & linked child chunks, offline token estimation, section-scoped overlap |
-| [`ingest/pipeline.py`](../src/docpipe_maestro/ingest/pipeline.py) | Phase 1 | Public `ingest`, `sync`, `remove`, `status`, and `reindex` orchestration with atomic batch staging |
-| [`query/retriever.py`](../src/docpipe_maestro/query/retriever.py) | Phase 2 | Read-only child similarity search, `doc_version` guard, threshold filter, parent expansion & dedup |
+| [`ingest/chunker/`](../src/docpipe_maestro/ingest/chunker/__init__.py) | Phase 1 | Structure-aware parent sections & linked child chunks, offline token estimation, section-scoped overlap |
+| [`ingest/pipeline.py`](../src/docpipe_maestro/ingest/pipeline.py) | Phase 1 | Public `ingest`, `sync`, `remove`, `status`, and `reindex` orchestration syncing ChromaDB, FTS5, and manifest |
+| [`query/searcher/`](../src/docpipe_maestro/query/searcher/__init__.py) | Phase 2 | Built-in `DenseSearcher` (`"default"`) and `Fts5HybridSearcher` (`"fts5_hybrid"` with RRF fusion) |
+| [`query/retriever.py`](../src/docpipe_maestro/query/retriever.py) | Phase 2 | Read-only child retrieval orchestration, threshold filter, parent expansion & cross-doc citation pass |
 | [`query/prompts.py`](../src/docpipe_maestro/query/prompts.py) | Phase 2 | Pure zero-I/O prompt constructor preserving citation metadata (`Source`, `Section`, `Clause`, `Page`) |
 | [`query/answer.py`](../src/docpipe_maestro/query/answer.py) | Phase 2 | Optional grounded completion via `litellm.completion` with deterministic empty-context refusal |
 | [`cli.py`](../src/docpipe_maestro/cli.py) | Both | `docpipe-maestro` CLI entry point and **sole** module permitted to read user TOML config files (`--config`) |
@@ -113,38 +116,38 @@ Each cleaned `ParsedSection` becomes **one `"parent"` section chunk** (`parent_i
 
 ## 3. Storage, Synchronization & Crash Safety
 
-### Single-Collection Storage Model (`store.py`)
+### Vector & Lexical Storage Model (`store/chroma.py`, `store/lexical.py`)
 
-For v0.1, child chunks and parent sections live in a single embedded ChromaDB collection configured with `hnsw:space: cosine`:
+For child/parent retrieval, ChromaDB stores both `"child"` and `"parent"` records in a single collection (`hnsw:space: cosine`), while `LexicalIndex` maintains a collocated SQLite FTS5 index (`<persist_dir>/lexical/<collection>.db`, `tokenize='unicode61'`) over child chunks (with section weight `1.5`, clause weight `2.0`, content weight `1.0`):
 
 | Field / Record Type | `metadata["type"]` | `parent_id` | Stored Vector | Searchable? |
 |---|---|---|---|---|
-| **Child chunk** | `"child"` | `<parent.id>` | Dense vector from `embed_model` | **Yes** (`where={"type": "child"}`) |
+| **Child chunk** | `"child"` | `<parent.id>` | Dense vector from `embed_model` | **Yes** (dense `where={"type": "child"}` & FTS5 `chunks_fts`) |
 | **Parent section** | `"parent"` | *(omitted -> `None`)* | Zero placeholder `[0.0] * dim` | **No** (fetched only by ID) |
 
 - **Null Metadata Bridge**: ChromaDB rejects `None` metadata values; `_serialize_metadata()` omits `clause`, `page`, and `parent_id` when `None`, and `_deserialize_metadata()` restores `None` on read.
-- **Similarity Normalization**: Chroma cosine distance (`1 - cosine_similarity`) is clamped onto `[0.0, 1.0]` as `score = max(0.0, min(1.0, 1.0 - distance))` where higher means closer match.
+- **Similarity Normalization**: Under `"default"`, Chroma cosine distance (`1 - cosine_similarity`) is clamped onto `[0.0, 1.0]`. Under `"fts5_hybrid"`, Reciprocal Rank Fusion (`k = 60`, weights `0.5` / `0.5`) divides raw RRF by the theoretical maximum `1 / 61` onto `[0.0, 1.0]` (`1.0` for rank-1 in both signals; `<= 0.5` for single-signal matches).
 
 ### Crash-Safe Transactional Update Protocol (`manifest.py`, `pipeline.py`)
 
-Never mutating ChromaDB via partial ID-only upserts prevents orphaned clauses when edited files shrink:
+Never mutating stores via partial ID-only upserts prevents orphaned clauses when edited files shrink:
 
 ```text
 1. Inspect Disk & Manifest (mtime/size fast-path -> sha256 check)
 2. Atomic Batch Validation:
    Parse -> Clean -> Crossref -> Chunk -> Embed ALL changed files in memory
    (Any format error, missing extra, or provider/auth failure aborts BEFORE DB init)
-3. Open VectorStore & sweep_uncommitted(active_versions) from prior interrupted runs
+3. Open VectorStore + LexicalIndex & sweep_uncommitted(active_versions) from prior interrupted runs
 4. Per changed source document:
-   a. Add new records tagged with doc_version = sha256_hex[:12]
+   a. Stage new child/parent records in ChromaDB and child rows in SQLite FTS5 tagged with doc_version = sha256_hex[:12]
    b. Atomically write manifest (<persist_dir>/manifests/<collection>.json)
       via tempfile.mkstemp -> flush -> os.fsync -> os.replace
-   c. store.delete_stale_versions(source, doc_version)
+   c. Delete prior doc_version rows from both ChromaDB and SQLite FTS5
 ```
 
 If the process crashes between steps `4a` and `4b`:
-- Phase 2 `retrieve()` verifies every candidate chunk's `(source, doc_version)` against the committed manifest (and over-fetches `2x` during `query_children`), ignoring uncommitted records so the prior version stays 100% queryable.
-- The next Phase 1 run invokes `sweep_uncommitted()` to clean up uncommitted debris.
+- Phase 2 `retrieve()` verifies every candidate chunk's `(source, doc_version)` against the committed manifest (both in dense `Store` and read-only SQLite URI `mode=ro` in `LexicalIndex`), ignoring uncommitted records so the prior version stays 100% queryable.
+- The next Phase 1 run invokes `sweep_uncommitted()` across both stores to clean up uncommitted debris.
 
 ### Model Lock & Self-Exclusion
 
@@ -157,7 +160,7 @@ If the process crashes between steps `4a` and `4b`:
 ## 4. Phase 2: Exception Preservation & "Search Small, Return Big"
 
 ```text
-Question ──► embed_query() ──► query_children(where={"type": "child"}, top_k)
+Question ──► searcher (Dense or FTS5 Hybrid RRF) over committed child chunks
                                      │
                                      ▼ (filter uncommitted doc_version & score >= threshold)
                           ┌──────────┴──────────┐

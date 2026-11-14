@@ -17,7 +17,7 @@ usage: docpipe-maestro [-h] [--version] [--config CONFIG] [--no-config]
 | `--config <path>` | `None` | Optional TOML file providing CLI defaults (overrides CWD `./docpipe.toml`) |
 | `--no-config` | `False` | Skip automatic loading of `./docpipe.toml` in the current working directory (also disables `--config` TOML loading while preserving `./.env` discovery) |
 | `--collection <name>` | `"default"` | Target ChromaDB collection & manifest identifier (ChromaDB requires $\ge 3$ characters matching `[a-zA-Z0-9._-]`) |
-| `--persist-dir <path>` | `".docpipe"` | Directory storing `chroma.sqlite3` and `manifests/<collection>.json` |
+| `--persist-dir <path>` | `".docpipe"` | Directory storing `chroma.sqlite3`, `manifests/<collection>.json`, and `lexical/<collection>.db` |
 | `--version` | — | Print `docpipe-maestro <version>` and exit |
 
 All global options (`--config`, `--no-config`, `--collection`, `--persist-dir`) are attached via a shared parent parser so they work identically **before or after** any subcommand:
@@ -40,7 +40,8 @@ embed_model = "ollama/nomic-embed-text"
 model = "ollama/llama3.2"          # Generation model for `docpipe-maestro ask`
 profile = "POLICY"                 # "DEFAULT" or "POLICY"
 top_k = 5                          # Default parent/candidate count
-threshold = 0.35                   # Optional cosine similarity floor [0.0, 1.0]
+threshold = 0.35                   # Optional minimum normalized score [0.0, 1.0]
+searcher = "default"               # "default" (dense vector) or "fts5_hybrid" (dense + SQLite FTS5 RRF)
 api_base = "https://api.groq.com/openai/v1" # Optional custom/OpenAI-compatible endpoint
 temperature = 0.0                  # Optional sampling temperature (>= 0.0)
 max_tokens = 512                   # Optional completion token limit (>= 1)
@@ -157,14 +158,14 @@ docpipe-maestro remove [--config CONFIG] [--collection COLLECTION]
 
 ### `docpipe-maestro reindex --model <provider/model>`
 
-Re-embed all existing child chunks stored in ChromaDB under a new embedding model, update parent zero-vector dimensions, rebuild the vector index cleanly, and re-lock the manifest.
+Re-embed all existing child chunks stored in ChromaDB under a new embedding model, update parent zero-vector dimensions, rebuild both the ChromaDB vector index and the collocated SQLite FTS5 lexical index (`lexical/<collection>.db`), and re-lock the manifest.
 
 ```text
 docpipe-maestro reindex [--config CONFIG] [--collection COLLECTION]
                         [--persist-dir PERSIST_DIR] --model MODEL
 ```
 
-- **Note**: `reindex` uses `--model` (required) rather than `--embed-model`.
+- **Note**: `reindex` uses `--model` (required) rather than `--embed-model`. Collections ingested prior to hybrid search support must run `reindex` (or `ingest --force`) once before querying with `--searcher fts5_hybrid`.
 - **Example output**:
   ```text
   Reindexed 42 child chunk(s) in collection 'hr_policy' with model 'openai/text-embedding-3-small'.
@@ -176,18 +177,20 @@ docpipe-maestro reindex [--config CONFIG] [--collection COLLECTION]
 
 ### `docpipe-maestro query "<question>"`
 
-Run semantic search without invoking an LLM.
+Run Phase 2 search (`"default"` dense vector similarity or `"fts5_hybrid"` dense + SQLite FTS5 BM25 via RRF) without invoking an LLM.
 
 ```text
 docpipe-maestro query [--config CONFIG] [--no-config] [--collection COLLECTION]
                       [--persist-dir PERSIST_DIR] [--top-k TOP_K]
                       [--threshold THRESHOLD] [--embed-model EMBED_MODEL]
+                      [--searcher SEARCHER]
                       [--expand-parent | --no-expand-parent] [--json] question
 ```
 
 - `--top-k`: Maximum child chunk hits prior to parent deduplication (default: `5`).
-- `--threshold`: Minimum cosine similarity in `[0.0, 1.0]` (default: `None`).
+- `--threshold`: Minimum normalized score in `[0.0, 1.0]` (default: `None`). Under `--searcher default`, scores reflect cosine similarity; under `--searcher fts5_hybrid`, scores use theoretical-max RRF normalization (`1.0` for dual rank-1 agreement, `<= 0.5` for single-signal matches).
 - `--embed-model`: Embedding model string matching the collection lock (default: `"ollama/nomic-embed-text"`).
+- `--searcher`: Registered searcher strategy (default: `"default"` or TOML `searcher`). Built-in strategies are `"default"` (dense vector similarity) and `"fts5_hybrid"` (dense + SQLite FTS5 BM25 fused via Reciprocal Rank Fusion).
 - `--expand-parent` / `--no-expand-parent`: Return deduplicated parent sections (`True`, default) or raw matched child chunks (`False`).
 - `--json`: Emit structured JSON on `stdout` (`{"query", "collection", "expand_parent", "results"}`) where each element of `"results"` exposes `"id"`, `"parent_id"` (`null` for expanded parents, non-empty string for raw child chunks), `"score"` (numeric float in `[0.0, 1.0]`), `"text"`, and `"metadata"` (`type`, `source`, `doc_version`, `section`, `clause`, `page`, `chunk_index`, `embed_model`). When zero results match or satisfy `--threshold`, emits `"results": []` and exits `0` with no plain-text prose. Validation or runtime failures follow the CLI-wide convention (`Error: ...` on `stderr`, empty `stdout`, exit `1`).
 - **Example text output** (when `--json` is omitted):
@@ -235,13 +238,13 @@ Retrieve deduplicated parent sections, construct role-separated messages via `bu
 docpipe-maestro ask [--config CONFIG] [--no-config] [--collection COLLECTION]
                     [--persist-dir PERSIST_DIR] [--top-k TOP_K]
                     [--threshold THRESHOLD] [--model MODEL]
-                    [--embed-model EMBED_MODEL] [--api-base API_BASE]
-                    [--temperature TEMPERATURE] [--max-tokens MAX_TOKENS]
-                    [--timeout TIMEOUT] [--fail-on-truncation]
-                    [--show-context] [--json] question
+                    [--embed-model EMBED_MODEL] [--searcher SEARCHER]
+                    [--api-base API_BASE] [--temperature TEMPERATURE]
+                    [--max-tokens MAX_TOKENS] [--timeout TIMEOUT]
+                    [--fail-on-truncation] [--show-context] [--json] question
 ```
 
-- `--top-k`, `--threshold`, `--embed-model`: Same semantics as `docpipe-maestro query` (`expand_parent` is always `True`).
+- `--top-k`, `--threshold`, `--embed-model`, `--searcher`: Same semantics as `docpipe-maestro query` (`expand_parent` is always `True`).
 - `--model`: LLM generation model string (default: `"ollama/llama3.2"` or TOML `model`).
 - `--api-base`: Optional custom OpenAI-compatible server URL (`http://` allowed for loopback hosts such as `http://localhost:8000/v1`; `https://` required for remote gateways).
 - `--temperature`: Optional sampling temperature (`>= 0.0`); omitted when unset for reasoning-model compatibility.
@@ -265,6 +268,8 @@ docpipe-maestro ask [--config CONFIG] [--no-config] [--collection COLLECTION]
 
 Common runtime fixes:
 - **`ModelMismatchError`**: Your `--embed-model` differs from the locked model shown by `docpipe-maestro status`. Query with the locked model or migrate via `docpipe-maestro reindex --model <new_model>`.
+- **`Collection ... does not have a lexical index yet`**: Pre-hybrid collections need a one-time index rebuild via `docpipe-maestro reindex --model <locked_model> --collection <name>` (or `ingest --force`) before running `--searcher fts5_hybrid`.
+- **`RegistryError`**: Unregistered `--searcher` strategy name; use `"default"` or `"fts5_hybrid"` (or a registered custom searcher key).
 - **`MissingExtraError`**: Install the missing format parser extra: `pip install "docpipe-maestro[pdf]"` (or `docx`, `html`, `all`).
 - **`Invalid or unusable collection`**: ChromaDB collection names must be at least 3 characters long and contain only `[a-zA-Z0-9._-]`.
 - **`Error: Config file not found`**: Check the relative or absolute path passed to `--config`.

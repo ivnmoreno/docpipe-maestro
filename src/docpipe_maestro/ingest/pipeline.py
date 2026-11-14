@@ -25,7 +25,7 @@ from docpipe_maestro.manifest import (
     load_manifest,
     save_manifest,
 )
-from docpipe_maestro.store import STORES
+from docpipe_maestro.store import STORES, LexicalIndex
 from docpipe_maestro.types import (
     Chunk,
     ChunkingProfile,
@@ -223,8 +223,10 @@ def ingest(
         save_manifest(persist_path, manifest)
 
     store_obj: Store = store_cls(persist_path, collection)
+    lexical = LexicalIndex(persist_path, collection)
     active_versions = {k: v.doc_version for k, v in manifest.sources.items()}
     store_obj.sweep_uncommitted(active_versions)
+    lexical.sweep_uncommitted(active_versions)
 
     ingested: list[str] = []
     chunks_written = 0
@@ -232,6 +234,7 @@ def ingest(
 
     for source_key, content_hash, doc_version, size, mtime, embedded, dim in staged_docs:
         store_obj.add_chunks(embedded)
+        lexical.add_chunks(embedded)
 
         child_ids = [c.id for c in embedded if c.metadata["type"] == "child"]
         parent_ids = [c.id for c in embedded if c.metadata["type"] == "parent"]
@@ -255,6 +258,7 @@ def ingest(
         )
         save_manifest(persist_path, manifest)
         store_obj.delete_stale_versions(source_key, doc_version)
+        lexical.delete_stale_versions(source_key, doc_version)
 
         ingested.append(source_key)
         chunks_written += len(child_ids)
@@ -369,8 +373,10 @@ def sync(
         )
 
     store_obj: Store = store_cls(persist_path, collection)
+    lexical = LexicalIndex(persist_path, collection)
     active_versions = {k: v.doc_version for k, v in manifest.sources.items()}
     store_obj.sweep_uncommitted(active_versions)
+    lexical.sweep_uncommitted(active_versions)
 
     added: list[str] = []
     updated: list[str] = []
@@ -386,6 +392,7 @@ def sync(
         dim,
     ) in staged_docs:
         store_obj.add_chunks(embedded)
+        lexical.add_chunks(embedded)
         child_ids = [c.id for c in embedded if c.metadata["type"] == "child"]
         parent_ids = [c.id for c in embedded if c.metadata["type"] == "parent"]
 
@@ -408,6 +415,7 @@ def sync(
         )
         save_manifest(persist_path, manifest)
         store_obj.delete_stale_versions(source_key, doc_version)
+        lexical.delete_stale_versions(source_key, doc_version)
 
         if doc_status == "new":
             added.append(source_key)
@@ -416,6 +424,8 @@ def sync(
 
     for source_key in removed_keys:
         store_obj.delete_by_source(source_key)
+        if lexical.exists():
+            lexical.delete_by_source(source_key)
         manifest.sources.pop(source_key, None)
         manifest_dirty = True
 
@@ -460,6 +470,9 @@ def remove(
 
     store_obj: Store = STORES.resolve(store)(persist_path, collection)
     store_obj.delete_by_source(source_key)
+    lexical = LexicalIndex(persist_path, collection)
+    if lexical.exists():
+        lexical.delete_by_source(source_key)
     manifest.sources.pop(source_key)
     save_manifest(persist_path, manifest)
     return True
@@ -590,6 +603,9 @@ def reindex(
 
     store_obj.reset_collection()
     store_obj.add_chunks(rebuilt)
+    lexical = LexicalIndex(persist_path, collection)
+    lexical.reset()
+    lexical.add_chunks(rebuilt)
 
     manifest.embed_model = embed_model
     manifest.embed_dim = new_dim

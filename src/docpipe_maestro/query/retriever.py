@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 
-from docpipe_maestro._stages import Embedder, Store
+from docpipe_maestro._stages import Store
 from docpipe_maestro.config import (
     DEFAULT_COLLECTION,
     DEFAULT_EMBED_MODEL,
@@ -19,6 +20,8 @@ from docpipe_maestro.ingest.crossrefs import (
     truncate_excerpt,
 )
 from docpipe_maestro.manifest import check_model_lock, load_manifest
+from docpipe_maestro.query.searcher import SEARCHERS
+from docpipe_maestro.query.stages import Searcher
 from docpipe_maestro.store import STORES
 from docpipe_maestro.types import EmbeddedChunk, RetrievedChunk
 
@@ -113,13 +116,14 @@ def retrieve(
     follow_crossrefs: bool = True,
     embedder: str = "default",
     store: str = "default",
+    searcher: str = "default",
 ) -> list[RetrievedChunk]:
     """Retrieve relevant parent sections (or child chunks) for a question.
 
     Treats both the vector store and manifest as strictly read-only. Searches
-    only committed ``"child"`` chunks, optionally filters by normalized cosine
-    similarity (``[0.0, 1.0]``), and when ``expand_parent`` is ``True`` fetches
-    unique parent sections scored by ``max(child.score)``.
+    only committed ``"child"`` chunks, optionally filters by normalized score
+    (``[0.0, 1.0]``), and when ``expand_parent`` is ``True`` fetches unique
+    parent sections scored by ``max(child.score)``.
 
     Args:
         question: Natural-language search query.
@@ -127,7 +131,7 @@ def retrieve(
         persist_dir: Local persistence directory.
         embed_model: Embedding ``provider/model`` matching the collection lock.
         top_k: Maximum matched child chunks queried before parent deduplication.
-        threshold: Optional minimum normalized similarity score in ``[0.0, 1.0]``.
+        threshold: Optional minimum normalized similarity/RRF score in ``[0.0, 1.0]``.
         expand_parent: If ``True``, expand matched children to deduplicated
             parent sections; if ``False``, return matched child chunks directly.
         follow_crossrefs: When ``expand_parent`` and ``follow_crossrefs`` are
@@ -136,6 +140,7 @@ def retrieve(
             section is absent from top-k results.
         embedder: Registered ``EMBEDDERS`` key (defaults to ``"default"``).
         store: Registered ``STORES`` key (defaults to ``"default"``).
+        searcher: Registered ``SEARCHERS`` key (defaults to ``"default"``).
 
     Returns:
         Matched ``RetrievedChunk`` objects ordered by descending ``score``.
@@ -143,13 +148,14 @@ def retrieve(
     Raises:
         ModelMismatchError: If ``embed_model`` mismatches the collection lock.
         MissingCredentialError: If provider credentials are missing or invalid.
-        RegistryError: If ``embedder`` or ``store`` is unregistered.
+        RegistryError: If ``embedder``, ``store``, or ``searcher`` is unregistered.
         DocpipeError: If embedding or store lookup fails.
     """
     if embedder != "default":
         EMBEDDERS.resolve(embedder)
     if store != "default":
         STORES.resolve(store)
+    searcher_cls: type[Searcher] = SEARCHERS.resolve(searcher)
 
     persist_path = Path(persist_dir)
     manifest = load_manifest(persist_path, collection)
@@ -158,18 +164,21 @@ def retrieve(
     if not manifest.sources or top_k <= 0:
         return []
 
-    embedder_inst: Embedder = EMBEDDERS.resolve(embedder)()
-    store_cls: type[Store] = STORES.resolve(store)
-    query_vec = embedder_inst.embed_query(question, model=embed_model)
-    store_obj: Store = store_cls(persist_path, collection)
-    active_versions = {k: v.doc_version for k, v in manifest.sources.items()}
+    if (embedder != "default" or store != "default") and getattr(
+        searcher_cls, "_supports_backend_selectors", False
+    ):
+        searcher_inst: Searcher = cast(Any, searcher_cls)(embedder=embedder, store=store)
+    else:
+        searcher_inst = searcher_cls()
 
+    active_versions = {k: v.doc_version for k, v in manifest.sources.items()}
     child_top_k = top_k * 3 if expand_parent else top_k
-    child_matches = store_obj.query_children(
-        query_vec,
+    child_matches = searcher_inst.search(
+        question,
         top_k=child_top_k,
-        active_versions=active_versions,
-        include_embeddings=False,
+        collection=collection,
+        persist_dir=str(persist_path),
+        embed_model=embed_model,
     )
 
     if threshold is not None:
@@ -197,6 +206,7 @@ def retrieve(
         key=lambda pid: parent_scores[pid],
         reverse=True,
     )[:top_k]
+    store_obj: Store = STORES.resolve(store)(persist_path, collection)
     parents = store_obj.get_by_ids(top_parent_ids, include_embeddings=False)
     retrieved_parents = [
         RetrievedChunk(

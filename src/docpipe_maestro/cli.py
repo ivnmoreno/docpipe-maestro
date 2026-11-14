@@ -43,8 +43,8 @@ def _load_toml_config(config_path: str | None, *, no_config: bool = False) -> di
     When ``config_path`` is omitted and ``no_config`` is ``False``, checks strictly
     for ``docpipe.toml`` in the current working directory (never walking upward
     into parent directories). Supported keys include ``collection``, ``persist_dir``,
-    ``embed_model``, ``model``, ``profile``, ``top_k``, ``threshold``, ``api_base``,
-    ``temperature``, ``max_tokens``, ``timeout``, and ``fail_on_truncation``.
+    ``embed_model``, ``model``, ``profile``, ``top_k``, ``threshold``, ``searcher``,
+    ``api_base``, ``temperature``, ``max_tokens``, ``timeout``, and ``fail_on_truncation``.
     Credentials must never be stored here; use environment variables or ``.env``.
     """
     if no_config:
@@ -134,6 +134,7 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     default_profile = _cfg_str(cfg, "profile", "DEFAULT")
     default_top_k = _cfg_int(cfg, "top_k", DEFAULT_TOP_K)
     default_threshold = _cfg_opt_float(cfg, "threshold")
+    default_searcher = _cfg_str(cfg, "searcher", "default")
     default_api_base = _cfg_opt_str(cfg, "api_base")
     default_temperature = _cfg_opt_float(cfg, "temperature")
     default_max_tokens = _cfg_opt_int(cfg, "max_tokens")
@@ -216,6 +217,11 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     )
     p_query.add_argument("--embed-model", default=default_embed_model, help="Embedding model")
     p_query.add_argument(
+        "--searcher",
+        default=default_searcher,
+        help="Registered retrieval searcher strategy (e.g., default, fts5_hybrid)",
+    )
+    p_query.add_argument(
         "--expand-parent",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -240,6 +246,11 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     )
     p_ask.add_argument("--model", default=default_gen_model, help="LLM provider/model")
     p_ask.add_argument("--embed-model", default=default_embed_model, help="Embedding model")
+    p_ask.add_argument(
+        "--searcher",
+        default=default_searcher,
+        help="Registered retrieval searcher strategy (e.g., default, fts5_hybrid)",
+    )
     p_ask.add_argument(
         "--api-base", default=default_api_base, help="Optional OpenAI-compatible base URL"
     )
@@ -298,6 +309,7 @@ def _handle_ask(args: argparse.Namespace) -> int:
         top_k=args.top_k,
         threshold=args.threshold,
         expand_parent=True,
+        searcher=args.searcher,
     )
     retrieval_elapsed = time.perf_counter() - t_ret
 
@@ -500,6 +512,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 top_k=args.top_k,
                 threshold=args.threshold,
                 expand_parent=args.expand_parent,
+                searcher=args.searcher,
             )
             if args.as_json:
                 print(
