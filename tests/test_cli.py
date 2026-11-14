@@ -988,3 +988,302 @@ def test_cli_eval_errors_emit_single_line_stderr_and_exit_one(
         assert cap.out == ""
         assert cap.err.startswith("Error:")
         assert len(cap.err.strip().splitlines()) == 1
+
+
+def test_cli_query_ask_rerank_flags_toml_precedence_and_errors(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from docpipe_maestro import ingest
+    from docpipe_maestro.query.reranker import RERANKERS, register_reranker
+
+    docs_dir = tmp_path / "cli_rr_docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    (docs_dir / "leave.md").write_text(
+        "# Annual Leave\n\nEmployees receive 20 paid leave days except probationary staff.\n",
+        encoding="utf-8",
+    )
+    ingest(docs_dir, profile="POLICY", collection="cli_rr", persist_dir=tmp_persist_dir)
+
+    default_parsed_q = build_parser().parse_args(["query", "leave"])
+    assert default_parsed_q.rerank is False
+    assert default_parsed_q.reranker == "cross_encoder"
+    assert default_parsed_q.rerank_top_n == 20
+
+    default_parsed_a = build_parser().parse_args(["ask", "leave"])
+    assert default_parsed_a.rerank is False
+    assert default_parsed_a.reranker == "cross_encoder"
+    assert default_parsed_a.rerank_top_n == 20
+
+    cfg_override = tmp_path / "rerank.toml"
+    cfg_override.write_text(
+        f'collection = "cli_rr"\n'
+        f'persist_dir = "{tmp_persist_dir.as_posix()}"\n'
+        f"rerank = true\n"
+        f'reranker = "cli_spy_reranker"\n'
+        f"rerank_top_n = 7\n",
+        encoding="utf-8",
+    )
+
+    entries_snap = dict(RERANKERS._entries)
+    lazy_snap = dict(RERANKERS._lazy_builtins)
+    rerank_calls: list[int] = []
+    try:
+
+        @register_reranker("cli_spy_reranker")
+        class CliSpyReranker:
+            name = "cli_spy_reranker"
+
+            def rerank(self, query: str, chunks: list[Any], *, top_k: int) -> list[Any]:
+                _ = query
+                rerank_calls.append(top_k)
+                return chunks[:top_k]
+
+        # TOML defaults apply cleanly across query & ask.
+        assert main(["--config", str(cfg_override), "query", "leave", "--json"]) == 0
+        _ = capsys.readouterr()
+        assert len(rerank_calls) == 1
+
+        assert main(["--config", str(cfg_override), "ask", "leave", "--json"]) == 0
+        _ = capsys.readouterr()
+        assert len(rerank_calls) == 2
+
+        # Explicit --no-rerank overrides TOML rerank = true without invoking reranker.
+        assert main(["--config", str(cfg_override), "query", "leave", "--no-rerank", "--json"]) == 0
+        _ = capsys.readouterr()
+        assert main(["--config", str(cfg_override), "ask", "leave", "--no-rerank", "--json"]) == 0
+        _ = capsys.readouterr()
+        assert len(rerank_calls) == 2
+    finally:
+        RERANKERS._entries = entries_snap
+        RERANKERS._lazy_builtins = lazy_snap
+
+    # TOML rerank_top_n = 0 must NOT block unrelated commands like status --json,
+    # while query and ask fail with single-line Error: and exit 1.
+    bad_topn_cfg = tmp_path / "bad_topn.toml"
+    bad_topn_cfg.write_text(
+        f'collection = "cli_rr"\npersist_dir = "{tmp_persist_dir.as_posix()}"\nrerank_top_n = 0\n',
+        encoding="utf-8",
+    )
+    assert main(["--config", str(bad_topn_cfg), "status", "--json"]) == 0
+    _ = capsys.readouterr()
+
+    for sub_args in (
+        ["--config", str(bad_topn_cfg), "query", "leave"],
+        ["--config", str(bad_topn_cfg), "ask", "leave"],
+        ["--config", str(cfg_override), "query", "leave", "--rerank-top-n", "0"],
+        ["--config", str(cfg_override), "ask", "leave", "--reranker", "ghost_reranker"],
+    ):
+        rc = main(sub_args)
+        assert rc == 1
+        cap = capsys.readouterr()
+        assert cap.out == ""
+        assert cap.err.startswith("Error:")
+        assert len(cap.err.strip().splitlines()) == 1
+
+    # Invalid TOML types (boolean where int expected / string where bool expected) fail cleanly.
+    bad_type_cfg = tmp_path / "bad_type.toml"
+    bad_type_cfg.write_text('rerank = "yes"\n', encoding="utf-8")
+    assert main(["--config", str(bad_type_cfg), "query", "leave"]) == 1
+    cap_type = capsys.readouterr()
+    assert cap_type.out == ""
+    assert cap_type.err.startswith("Error:")
+
+    # Missing [rerank] emits single-line installation Error: on stderr and exit 1.
+    monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+    for subcmd in ("query", "ask"):
+        rc_miss = main(
+            [
+                "--no-config",
+                "--collection",
+                "cli_rr",
+                "--persist-dir",
+                str(tmp_persist_dir),
+                subcmd,
+                "leave",
+                "--rerank",
+            ]
+        )
+        assert rc_miss == 1
+        cap_miss = capsys.readouterr()
+        assert cap_miss.out == ""
+        assert cap_miss.err.startswith("Error:")
+        assert "docpipe-maestro[rerank]" in cap_miss.err
+        assert len(cap_miss.err.strip().splitlines()) == 1
+
+
+def test_cli_eval_rerank_flags_toml_header_and_errors(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from dataclasses import replace
+
+    from docpipe_maestro.query.reranker import RERANKERS, register_reranker
+    from docpipe_maestro.types import RetrievedChunk
+
+    seeded = _seed_cli_eval_collections(tmp_path, tmp_persist_dir)
+    pid = seeded["fixture_col"]["parent"]
+
+    fixture_path = tmp_path / "eval_rerank_fixture.json"
+    fixture_path.write_text(
+        json.dumps(
+            {
+                "collection": "fixture_col",
+                "profile": "POLICY",
+                "queries": [
+                    {
+                        "question": "What encryption applies to KMS-401 production backups?",
+                        "relevant_ids": [pid],
+                        "notes": "exact_identifier",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    saved_entries = dict(RERANKERS._entries)
+    saved_lazy = dict(RERANKERS._lazy_builtins)
+    try:
+
+        @register_reranker("_test_cli_eval_rr")
+        class _CliEvalReranker:
+            name = "_test_cli_eval_rr"
+
+            def rerank(
+                self,
+                query: str,
+                chunks: list[RetrievedChunk],
+                *,
+                top_k: int,
+            ) -> list[RetrievedChunk]:
+                rescored = [
+                    replace(chunk, score=0.91 if "KMS-401" in chunk.text else 0.21)
+                    for chunk in chunks
+                ]
+                rescored.sort(key=lambda c: c.score, reverse=True)
+                return rescored[:top_k]
+
+        cfg = tmp_path / "eval_rerank.toml"
+        cfg.write_text(
+            f'persist_dir = "{tmp_persist_dir.as_posix()}"\n'
+            "rerank = true\n"
+            'reranker = "_test_cli_eval_rr"\n'
+            "rerank_top_n = 9\n",
+            encoding="utf-8",
+        )
+
+        # 1. TOML defaults apply to eval --json
+        rc_toml = main(["--config", str(cfg), "eval", "--fixture", str(fixture_path), "--json"])
+        assert rc_toml == 0
+        rep_toml = json.loads(capsys.readouterr().out)
+        assert rep_toml["config"]["rerank"] is True
+        assert rep_toml["config"]["reranker"] == "_test_cli_eval_rr"
+        assert rep_toml["config"]["rerank_top_n"] == 9
+
+        # 2. --no-rerank overrides TOML and omits all rerank keys from EvalConfig JSON
+        rc_no = main(
+            [
+                "--config",
+                str(cfg),
+                "eval",
+                "--fixture",
+                str(fixture_path),
+                "--no-rerank",
+                "--json",
+            ]
+        )
+        assert rc_no == 0
+        rep_no = json.loads(capsys.readouterr().out)
+        assert "rerank" not in rep_no["config"]
+        assert "reranker" not in rep_no["config"]
+        assert "rerank_top_n" not in rep_no["config"]
+
+        # 3. Text header includes Reranker ONLY when rerank=True
+        rc_text_off = main(
+            ["--config", str(cfg), "eval", "--fixture", str(fixture_path), "--no-rerank"]
+        )
+        assert rc_text_off == 0
+        out_off = capsys.readouterr().out
+        assert "Reranker:" not in out_off
+
+        rc_text_on = main(
+            [
+                "--config",
+                str(cfg),
+                "eval",
+                "--fixture",
+                str(fixture_path),
+                "--rerank",
+                "--reranker",
+                "_test_cli_eval_rr",
+                "--rerank-top-n",
+                "6",
+            ]
+        )
+        assert rc_text_on == 0
+        out_on = capsys.readouterr().out
+        first_line = out_on.splitlines()[0]
+        assert "| Reranker: _test_cli_eval_rr (top_n=6)" in first_line
+
+        # 4. Exit-1 single-line stderr diagnostics for eval error cases
+        bad_cfg = tmp_path / "eval_bad_topn.toml"
+        bad_cfg.write_text(
+            f'persist_dir = "{tmp_persist_dir.as_posix()}"\nrerank = true\nrerank_top_n = 0\n',
+            encoding="utf-8",
+        )
+        for bad_args in (
+            ["--config", str(bad_cfg), "eval", "--fixture", str(fixture_path)],
+            [
+                "--config",
+                str(cfg),
+                "eval",
+                "--fixture",
+                str(fixture_path),
+                "--rerank-top-n",
+                "0",
+            ],
+            [
+                "--config",
+                str(cfg),
+                "eval",
+                "--fixture",
+                str(fixture_path),
+                "--reranker",
+                "ghost_reranker",
+            ],
+        ):
+            assert main(bad_args) == 1
+            cap_bad = capsys.readouterr()
+            assert cap_bad.out == ""
+            assert cap_bad.err.startswith("Error:")
+            assert len(cap_bad.err.strip().splitlines()) == 1
+
+        monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+        assert (
+            main(
+                [
+                    "--no-config",
+                    "--persist-dir",
+                    str(tmp_persist_dir),
+                    "eval",
+                    "--fixture",
+                    str(fixture_path),
+                    "--rerank",
+                ]
+            )
+            == 1
+        )
+        cap_miss = capsys.readouterr()
+        assert cap_miss.out == ""
+        assert "docpipe-maestro[rerank]" in cap_miss.err
+        assert len(cap_miss.err.strip().splitlines()) == 1
+    finally:
+        RERANKERS._entries = saved_entries
+        RERANKERS._lazy_builtins = saved_lazy

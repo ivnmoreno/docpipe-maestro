@@ -527,7 +527,6 @@ def test_top_level_eight_registries_empty_defaults_and_protocol_conformance(
 
     empty_registries: list[tuple[Registry[Any], Any, str]] = [
         (ENRICHERS, register_enricher, "enricher"),
-        (RERANKERS, register_reranker, "reranker"),
     ]
     for reg, decorator, empty_msg_name in empty_registries:
         assert reg.keys() == []
@@ -544,6 +543,14 @@ def test_top_level_eight_registries_empty_defaults_and_protocol_conformance(
         match=r"registry 'searcher' has no entry 'missing' \(available: default, fts5_hybrid\)",
     ):
         SEARCHERS.resolve("missing")
+
+    assert RERANKERS.keys() == ["cross_encoder"]
+    with pytest.raises(
+        root.RegistryError,
+        match=r"registry 'reranker' has no entry 'missing' \(available: cross_encoder\)",
+    ):
+        RERANKERS.resolve("missing")
+    assert callable(register_reranker)
 
     with (
         _restore_registry(ENRICHERS),
@@ -600,6 +607,9 @@ def test_top_level_eight_registries_empty_defaults_and_protocol_conformance(
     searcher_keys = SEARCHERS.keys()
     for key in searcher_keys:
         assert isinstance(SEARCHERS.resolve(key)(), Searcher)
+    reranker_keys = RERANKERS.keys()
+    for key in reranker_keys:
+        assert isinstance(RERANKERS.resolve(key)(), Reranker)
     assert isinstance(CLEANERS.resolve("default")(), Cleaner)
     assert isinstance(CHUNKERS.resolve("default")(), Chunker)
     assert isinstance(EMBEDDERS.resolve("default")(), Embedder)

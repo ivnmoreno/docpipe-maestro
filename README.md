@@ -100,7 +100,8 @@ flowchart LR
 
     subgraph P2["Phase 2: Online Query (Read-Only)"]
         Q[Question] --> S["Child Search (Dense or fts5_hybrid RRF)"]
-        S --> PE["Parent Expansion & max(score) Dedupe"]
+        S --> RR["Optional Rerank (Cross-Encoder Sigmoid)"]
+        RR --> PE["Parent Expansion & max(score) Dedupe"]
         PE --> BP["Pure build_prompt()"]
         BP -->|results > 0| LLM["Optional answer() via LiteLLM"]
         BP -->|empty results| REF["Deterministic Refusal (No LLM Call)"]
@@ -166,9 +167,10 @@ Generation (`answer()`, `ask`) is available in the base install — no extra nee
 | `pdf` | Extract text, page numbers, and heuristic section headings (`Section X.Y`) from PDF files | `pypdf>=6.21.3` (BSD-3-Clause) |
 | `docx` | Extract text, style-based headings (`Heading 1`–`Heading 6`), and tables from Word documents | `python-docx>=1.1.0` |
 | `html` | Strip boilerplate and parse `<h1–h6>` headings from web pages / HTML exports | `beautifulsoup4>=4.12.0` |
-| `all` | Installs **all** optional format parsers (`pdf`, `docx`, `html`) | `pypdf`, `python-docx`, `beautifulsoup4` |
+| `all` | Installs **all** optional document format parsers (`pdf`, `docx`, `html`) | `pypdf`, `python-docx`, `beautifulsoup4` |
+| `rerank` | Second-stage local neural cross-encoder reranking (`BAAI/bge-reranker-base` default) | `sentence-transformers>=3.0.0` |
 
-> **Note on Structure Extraction**: Markdown, plain text, HTML, DOCX, and PDF extract headings, clauses, and pagination metadata cleanly without external SaaS parsers.
+> **Note on Structure Extraction**: Markdown, plain text, HTML, DOCX, and PDF extract headings, clauses, and pagination metadata cleanly without external SaaS parsers. Note that `[all]` installs document parsers only; include `[rerank]` alongside it (`[all,rerank]`) when enabling `--rerank` / `rerank=True`.
 
 Install specific extras (substitute `@ git+https://github.com/ivnmoreno/docpipe-maestro.git` before PyPI publication):
 ```bash
@@ -180,6 +182,9 @@ pip install "docpipe-maestro[pdf,docx] @ git+https://github.com/ivnmoreno/docpip
 
 # Full installation with all document format parsers
 pip install "docpipe-maestro[all] @ git+https://github.com/ivnmoreno/docpipe-maestro.git"
+
+# Parsers + local cross-encoder reranking support
+pip install "docpipe-maestro[all,rerank] @ git+https://github.com/ivnmoreno/docpipe-maestro.git"
 ```
 
 ### Development Setup
@@ -280,6 +285,10 @@ profile = "POLICY"
 top_k = 5
 threshold = 0.4
 searcher = "default"               # "default" (dense vector) or "fts5_hybrid" (dense + SQLite FTS5 RRF)
+# Optional second-stage cross-encoder reranking (requires `[rerank]` extra):
+# rerank = false
+# reranker = "cross_encoder"
+# rerank_top_n = 20
 # Optional online/gateway defaults for `docpipe-maestro ask` (CLI flags override these):
 # api_base = "https://api.groq.com/openai/v1"
 # temperature = 0.0
@@ -404,6 +413,10 @@ docpipe-maestro query "What is the flight reimbursement policy?" --top-k 3 --thr
 # (ideal for exact error codes, identifiers, or clauses like "SEV-1" or "AES-256")
 docpipe-maestro query "SEV-1 escalation window" --searcher fts5_hybrid --collection hr_policy
 
+# Apply optional second-stage cross-encoder reranking over top candidate child chunks
+# (requires `docpipe-maestro[rerank]`)
+docpipe-maestro query "SEV-1 escalation window" --searcher fts5_hybrid --rerank --rerank-top-n 20 --collection hr_policy
+
 # Return raw child chunks instead of expanded parent sections
 docpipe-maestro query "annual leave" --no-expand-parent --collection hr_policy
 
@@ -438,7 +451,7 @@ docpipe-maestro ask "What is the recipe for lasagna?" --threshold 0.7 --collecti
 
 # Inspect retrieved context on stderr, request JSON telemetry on stdout, or fail if truncated at max_tokens
 docpipe-maestro ask "Summarize travel limits." --show-context --collection hr_policy
-docpipe-maestro ask "What is the SEV-1 escalation window?" --searcher fts5_hybrid --collection hr_policy
+docpipe-maestro ask "What is the SEV-1 escalation window?" --searcher fts5_hybrid --rerank --collection hr_policy
 docpipe-maestro ask "Summarize travel limits." --json --fail-on-truncation --collection hr_policy
 ```
 *(By default, if a provider hits `--max-tokens` and sets `finish_reason == "length"`, `ask` prints a `Warning:` on `stderr`; pass `--fail-on-truncation` to fail non-zero instead.)*
@@ -450,6 +463,9 @@ Benchmark Phase 2 retrieval (`Precision@K`, `Recall@K`, `MRR`) against a labeled
 ```bash
 # Run curated 24-query policy benchmark with hybrid lexical + dense search
 docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --searcher fts5_hybrid
+
+# Benchmark with local cross-encoder reranking enabled
+docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --searcher fts5_hybrid --rerank
 
 # Customize cutoff values, inspect raw child chunks, or emit machine-readable JSON
 docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --k 1 3 5 --no-expand-parent --json
@@ -526,6 +542,7 @@ retrieved_sections = retrieve(
     threshold=0.35,  # Normalized similarity / RRF score [0.0, 1.0]
     expand_parent=True,  # Expand child matches to full parent section
     searcher="default",  # "default" or "fts5_hybrid"
+    rerank=False,  # Set True (with `[rerank]` extra installed) for cross-encoder rescoring
 )
 
 for section in retrieved_sections:
@@ -631,7 +648,7 @@ docpipe-maestro/
 │   ├── store/               # ChromaDB vector store (`chroma.py`) & SQLite FTS5 (`lexical.py`)
 │   ├── types.py             # Dataclasses, TypedDicts & DocpipeError hierarchy
 │   ├── ingest/              # Phase 1: intake/, clean/, crossrefs, chunker/, enricher/, pipeline
-│   ├── query/               # Phase 2: searcher/ (`default`, `fts5_hybrid`), reranker/, retriever, prompts, answer
+│   ├── query/               # Phase 2: searcher/ (`default`, `fts5_hybrid`), reranker/ (`cross_encoder`), retriever, prompts, answer
 │   └── eval/                # Phase 2: offline metrics (`metrics.py`) & read-only runner (`harness.py`)
 ├── tests/                   # Unit, integration, security & reverse-safety suites
 ├── documents/               # Synthetic sample policy corpus for local demos

@@ -98,13 +98,20 @@ def test_top_level_register_exports_and_cli_avoid_heavy_deps() -> None:
         "dp.register_searcher, dp.register_reranker]; "
         "assert all(callable(r) for r in regs); "
         "assert callable(dp.ingest); "
+        "import docpipe_maestro.query.reranker as rr; "
+        "assert rr.validate_rerank_options("
+        "rerank=False, reranker='cross_encoder', rerank_top_n=20) is None; "
         "import docpipe_maestro.cli as cli; "
         "cli.build_parser(); "
         "assert 'chromadb' not in sys.modules, 'chromadb loaded eagerly'; "
         "assert 'litellm' not in sys.modules, 'litellm loaded eagerly'; "
         "assert 'pypdf' not in sys.modules, 'pypdf loaded eagerly'; "
         "assert 'docx' not in sys.modules, 'docx loaded eagerly'; "
-        "assert 'bs4' not in sys.modules, 'bs4 loaded eagerly'"
+        "assert 'bs4' not in sys.modules, 'bs4 loaded eagerly'; "
+        "assert 'sentence_transformers' not in sys.modules, "
+        "'sentence_transformers loaded eagerly'; "
+        "assert 'torch' not in sys.modules, 'torch loaded eagerly'; "
+        "assert 'docpipe_maestro.query.reranker.cross_encoder' not in sys.modules"
     )
     proc = subprocess.run([sys.executable, "-c", code], check=False, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr

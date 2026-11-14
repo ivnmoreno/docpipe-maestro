@@ -421,8 +421,8 @@ class EvalFixture(_EvalFixtureRequired, total=False):
     profile: str
 
 
-class EvalConfig(TypedDict):
-    """Resolved evaluation run configuration captured in every ``EvalReport``."""
+class _EvalConfigRequired(TypedDict):
+    """Required baseline evaluation run configuration fields."""
 
     collection: str
     persist_dir: str
@@ -434,6 +434,14 @@ class EvalConfig(TypedDict):
     embedder: str
     store: str
     threshold: float | None
+
+
+class EvalConfig(_EvalConfigRequired, total=False):
+    """Resolved evaluation run configuration captured in every ``EvalReport``."""
+
+    rerank: bool
+    reranker: str
+    rerank_top_n: int
 
 
 class PerQueryResult(TypedDict):
