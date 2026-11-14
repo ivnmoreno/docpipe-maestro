@@ -36,9 +36,11 @@
   - [5. Migrate Embedding Models (`docpipe-maestro reindex`)](#5-migrate-embedding-models-docpipe-maestro-reindex)
   - [6. Semantic Search Without an LLM (`docpipe-maestro query`)](#6-semantic-search-without-an-llm-docpipe-maestro-query)
   - [7. Grounded Question Answering (`docpipe-maestro ask`)](#7-grounded-question-answering-docpipe-maestro-ask)
+  - [8. Offline Retrieval Evaluation (`docpipe-maestro eval`)](#8-offline-retrieval-evaluation-docpipe-maestro-eval)
 - [Python Library API Guide](#python-library-api-guide)
   - [Phase 1: Ingestion & Lifecycle Workflow](#phase-1-ingestion--lifecycle-workflow)
   - [Phase 2: Semantic Retrieval & Grounded RAG Workflow](#phase-2-semantic-retrieval--grounded-rag-workflow)
+  - [Retrieval Evaluation (`docpipe_maestro.eval`)](#retrieval-evaluation-docpipe_maestroeval)
   - [Core Data Shapes & Exceptions](#core-data-shapes--exceptions)
 - [Security, Privacy & Grounding Notes](#security-privacy--grounding-notes)
 - [Safety & Verification](#safety--verification)
@@ -441,6 +443,20 @@ docpipe-maestro ask "Summarize travel limits." --json --fail-on-truncation --col
 ```
 *(By default, if a provider hits `--max-tokens` and sets `finish_reason == "length"`, `ask` prints a `Warning:` on `stderr`; pass `--fail-on-truncation` to fail non-zero instead.)*
 
+### 8. Offline Retrieval Evaluation (`docpipe-maestro eval`)
+
+Benchmark Phase 2 retrieval (`Precision@K`, `Recall@K`, `MRR`) against a labeled JSON fixture without mutating persisted manifests or indexes (see [Retrieval Evaluation Baselines](docs/eval-baseline.md)):
+
+```bash
+# Run curated 24-query policy benchmark with hybrid lexical + dense search
+docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --searcher fts5_hybrid
+
+# Customize cutoff values, inspect raw child chunks, or emit machine-readable JSON
+docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --k 1 3 5 --no-expand-parent --json
+```
+
+*(Target collection resolves in order: explicit `--collection` > fixture `collection` > `docpipe.toml` `collection` > `"default"`.)*
+
 ---
 
 ## Python Library API Guide
@@ -532,6 +548,21 @@ response = answer(
 print("Answer:\n", response)
 ```
 
+### Retrieval Evaluation (`docpipe_maestro.eval`)
+
+```python
+from docpipe_maestro.eval import evaluate, normalize_k_values, precision_at_k, recall_at_k
+
+report = evaluate(
+    "tests/fixtures/eval_policy_corpus.json",
+    collection="eval_policy",
+    persist_dir=".docpipe",
+    k_values=normalize_k_values([10, 3, 3, 1]),  # -> (1, 3, 10)
+    searcher="fts5_hybrid",
+)
+print(report["aggregate"]["mrr"], report["aggregate"]["recall_at_k"])
+```
+
 ### Core Data Shapes & Exceptions
 
 Exported from `docpipe_maestro` (`docpipe_maestro.types`):
@@ -600,10 +631,11 @@ docpipe-maestro/
 │   ├── store/               # ChromaDB vector store (`chroma.py`) & SQLite FTS5 (`lexical.py`)
 │   ├── types.py             # Dataclasses, TypedDicts & DocpipeError hierarchy
 │   ├── ingest/              # Phase 1: intake/, clean/, crossrefs, chunker/, enricher/, pipeline
-│   └── query/               # Phase 2: searcher/ (`default`, `fts5_hybrid`), reranker/, retriever, prompts, answer
+│   ├── query/               # Phase 2: searcher/ (`default`, `fts5_hybrid`), reranker/, retriever, prompts, answer
+│   └── eval/                # Phase 2: offline metrics (`metrics.py`) & read-only runner (`harness.py`)
 ├── tests/                   # Unit, integration, security & reverse-safety suites
 ├── documents/               # Synthetic sample policy corpus for local demos
-├── docs/                    # Architecture, API, CLI, dev guide & roadmap
+├── docs/                    # Architecture, API, CLI, baselines, dev guide & roadmap
 ├── specs/                   # Feature specification, plan & contracts
 ├── .env.example             # Template for local/cloud provider environment variables
 ├── .pre-commit-config.yaml  # Commitizen Conventional Commits hook configuration
@@ -636,6 +668,7 @@ For security vulnerabilities, see [SECURITY.md](SECURITY.md).
 - **[Architecture & Internals](docs/architecture.md)** — Two-phase pipeline flow, intake, crossref resolution, chunking, and transactional staging
 - **[Python API Reference](docs/api-reference.md)** — Signatures, profiles, data shapes, and error handling
 - **[CLI Reference](docs/cli-reference.md)** — `docpipe-maestro` commands, TOML config, outputs, and troubleshooting
+- **[Retrieval Evaluation Baselines](docs/eval-baseline.md)** — Offline dense vs `fts5_hybrid` comparison metrics ([JSON](docs/eval-baseline.json))
 - **[Development & Testing Guide](docs/development.md)** — Setup, quality gates, offline test doubles, and Ollama live runs
 - **[Future Features Backlog](docs/future-features.md)** — Post-v0.1 roadmap
 - **[Changelog](CHANGELOG.md)** — Release history
