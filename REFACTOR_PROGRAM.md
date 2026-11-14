@@ -37,7 +37,7 @@ Each stage (`0` through `8`) MUST be executed in isolation:
 4. **Preserve content-addressed `doc_version` (`sha256_hex[:12]`).** Never replace `doc_version: str` with sequential integers.
 5. **Preserve lazy CLI startup imports.** Importing `docpipe_maestro` or initializing the CLI parser (`--help`) must never eagerly import `chromadb` or `litellm` (guarded by `tests/test_cli.py`).
 6. **Preserve public API signatures & backward compatibility.** New parameters on public functions (`ingest`, `sync`, `remove`, `status`, `reindex`, `retrieve`, `build_prompt`, `build_chat_messages`, `answer`, `answer_detailed`) must be **keyword-only with defaults** preserving current behavior. Internal module restructures (e.g., `store.py` → `store/`) must provide re-export shims so existing imports pass unmodified.
-7. **Pass all CI quality gates on every stage.** `uv run ruff format --check .`, `uv run ruff check .`, `uv run ruff check --select S src/`, `uv run mypy src tests` (`strict = true`), `uv run pytest -m reverse -v`, and `uv run pytest -v --cov` (`>= 80%` branch coverage) across Python `3.10–3.13`.
+7. **Run all tests after implementation and pass every CI quality gate on every stage.** Running all tests across the repository after implementation completes is a mandatory requirement—100% of tests must pass (`0` failures) before a stage is considered done: `uv run ruff format --check .`, `uv run ruff check .`, `uv run ruff check --select S src/`, `uv run mypy src tests` (`strict = true`), `uv run pytest -m reverse -v`, and `uv run pytest -v --cov` (`>= 80%` branch coverage) across Python `3.10–3.13`.
 8. **Amend the constitution *before* writing conflicting code.** Never silently bypass a principle.
 9. **Enforce the one-sentence positioning test:**
 
@@ -533,6 +533,7 @@ Success Criteria:
 - Repeated runs of `eval` on the same collection produce identical metric outputs.
 - Evaluation runs cause zero file modifications inside `.docpipe/`.
 - Pure metric unit tests and offline deterministic harness integration tests (using a self-contained test fixture collection seeded with `mock_litellm_offline`) pass with strict typing (`mypy --strict`).
+- Running all tests across the entire test suite after implementation completes is mandatory; 100% of tests must pass with zero failures.
 
 Out of scope: LLM-as-a-judge answer evaluation, faithfulness scoring, or automatic CI downloads of live embedding models.
 ```
@@ -546,6 +547,7 @@ Out of scope: LLM-as-a-judge answer evaluation, faithfulness scoring, or automat
   - Modify `src/docpipe_maestro/cli.py` to add `eval` subcommand; update `docs/cli-reference.md`.
   - Create `tests/fixtures/eval_policy_corpus.json` + `tests/test_eval.py` (with self-contained `tmp_persist_dir` + `mock_litellm_offline` ingestion rather than assuming an undefined global fixture!).
   - Create `docs/eval-baseline.json` (queried programmatically by Stage 5/6) + `docs/eval-baseline.md`.
+  - Mandatory final verification: run the entire test suite after implementation (`uv run pytest -m reverse -v && uv run pytest -v --cov`); all tests must pass.
 - **Reference Commit**: `feat(eval): add read-only retrieval evaluation harness and baseline`
 
 ---

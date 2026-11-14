@@ -393,3 +393,74 @@ class GenerationResult:
     reasoning_tokens: int | None = None
     total_tokens: int | None = None
     elapsed_seconds: float = 0.0
+
+
+class _EvalQueryRequired(TypedDict):
+    """Required fields for a single labeled benchmark query."""
+
+    question: str
+    relevant_ids: list[str]
+
+
+class EvalQuery(_EvalQueryRequired, total=False):
+    """Canonical schema for one evaluation query entry inside a fixture."""
+
+    notes: str
+
+
+class _EvalFixtureRequired(TypedDict):
+    """Required fields for a structured retrieval evaluation fixture."""
+
+    queries: list[EvalQuery]
+
+
+class EvalFixture(_EvalFixtureRequired, total=False):
+    """Canonical schema for a retrieval evaluation benchmark fixture."""
+
+    collection: str
+    profile: str
+
+
+class EvalConfig(TypedDict):
+    """Resolved evaluation run configuration captured in every ``EvalReport``."""
+
+    collection: str
+    persist_dir: str
+    embed_model: str
+    k_values: list[int]
+    expand_parent: bool
+    follow_crossrefs: bool
+    searcher: str
+    embedder: str
+    store: str
+    threshold: float | None
+
+
+class PerQueryResult(TypedDict):
+    """Diagnostic retrieval metrics and hits for a single evaluation query."""
+
+    question: str
+    notes: str
+    relevant_ids: list[str]
+    retrieved_ids: list[str]
+    retrieved_scores: list[float]
+    precision_at_k: dict[str, float]
+    recall_at_k: dict[str, float]
+    reciprocal_rank: float
+
+
+class EvalMetricsSummary(TypedDict):
+    """Aggregate ranking metrics averaged across all fixture queries."""
+
+    num_queries: int
+    mrr: float
+    precision_at_k: dict[str, float]
+    recall_at_k: dict[str, float]
+
+
+class EvalReport(TypedDict):
+    """Structured output returned by ``evaluate()`` and ``docpipe-maestro eval --json``."""
+
+    config: EvalConfig
+    aggregate: EvalMetricsSummary
+    per_query: list[PerQueryResult]

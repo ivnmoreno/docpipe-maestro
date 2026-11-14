@@ -13,7 +13,8 @@ Welcome to the documentation for **`docpipe-maestro`** — a minimal, provider-a
 | **[README](../README.md)** | Everyone | Quickstart, installation extras, provider setup, and high-level workflow examples |
 | **[Architecture & Internals](architecture.md)** | Engineers & Architects | Two-phase pipeline data flow, format parsing heuristics, crossref resolution, structure-aware chunking, ChromaDB + SQLite FTS5 storage, and crash-safe staging |
 | **[Python API Reference](api-reference.md)** | Application Developers | Exact signatures, defaults, stage registries, searcher strategies, data models, constants, and exception hierarchy |
-| **[CLI Reference (`docpipe-maestro`)](cli-reference.md)** | CLI Users & Ops | Global flags, `docpipe.toml` schema, all 7 subcommands, `--searcher` modes, exact output formats, exit codes, and troubleshooting |
+| **[CLI Reference (`docpipe-maestro`)](cli-reference.md)** | CLI Users & Ops | Global flags, `docpipe.toml` schema, all 8 subcommands (including `eval`), `--searcher` modes, exact output formats, exit codes, and troubleshooting |
+| **[Retrieval Evaluation Baselines](eval-baseline.md)** | Engineers & Maintainers | Side-by-side offline retrieval benchmark (`default` dense vs `fts5_hybrid`) on the curated policy corpus ([eval-baseline.json](eval-baseline.json)) |
 | **[Development & Testing Guide](development.md)** | Contributors | Dev setup, `ruff`/`mypy --strict`/`pytest` quality gates, mandatory reverse safety gate, live Ollama testing, and extension guidelines |
 | **[Future Features Backlog](future-features.md)** | Maintainers & Roadmap | Deferred post-v0.1 enhancements aligned with scope discipline (`LEGAL` profile, differential re-embedding, hybrid search, storage adapters) |
 

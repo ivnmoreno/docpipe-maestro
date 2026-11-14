@@ -129,13 +129,12 @@ This document aggregates all architectural suggestions, deferred backlog items, 
 
 ## 7. Quality, Safety & Tooling
 
-### 7.1 Automated Answer Evaluation Harness
-- **Problem**: Ensuring ongoing answer quality across model upgrades requires continuous quantitative measurement.
-- **Proposed Upgrade**:
-  - Build an evaluation module measuring:
-    - **Faithfulness** (does the answer contain claims not in the context?).
-    - **Context Recall** (were all necessary sections retrieved?).
-    - **Negative Rejection** (did the model refuse to answer when context was absent?).
+### 7.1 Automated Retrieval & Answer Evaluation Harness — *Retrieval Implemented; Answer Judge Post-v0.1*
+- **Implemented (`006-eval-harness`)**: Deterministic, read-only retrieval evaluation (`docpipe_maestro.eval`, `docpipe-maestro eval`, `Precision@K`, standard IR `Recall@K`, `MRR`) with a 24-query curated policy suite (`tests/fixtures/eval_policy_corpus.json`) and offline `default` vs `fts5_hybrid` baselines (`docs/eval-baseline.{json,md}`).
+- **Remaining Proposed Upgrade (Post-v0.1)**:
+  - Build optional answer-synthesis checks measuring:
+    - **Faithfulness** (does the generated answer contain claims absent from retrieved context?).
+    - **Negative Rejection** (does `answer()` refuse cleanly when context is insufficient?).
 
 ### 7.2 Multi-Language & Stress-Testing Reverse Safety Corpus
 - **Problem**: Current reverse safety tests focus on English exception markers (`except`, `unless`, `not entitled`, `subject to`, `provided that`).
@@ -176,4 +175,4 @@ This document aggregates all architectural suggestions, deferred backlog items, 
 | **Additional Parsers (XLSX, PPTX)** | Intake | Post-v0.1 | Medium (Coverage) | Low |
 | **Two-Collection Split** | Storage | Post-v0.1 | Medium (Scale) | High |
 | **Storage Adapters (Qdrant, LanceDB)** | Storage | Post-v0.1 | Medium (Flexibility) | Medium |
-| **Evaluation Harness** | QA / Safety | Post-v0.1 | High (Verification) | Medium |
+| **Evaluation Harness (Retrieval)** | Retrieval / QA | *Implemented* (`006-eval-harness`; Answer Eval Post-v0.1) | High (Verification) | Medium |

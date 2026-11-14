@@ -691,3 +691,300 @@ def test_cli_query_json_envelope_child_empty_flags_and_errors(
     cap_mis = capsys.readouterr()
     assert cap_mis.out == ""
     assert "Error:" in cap_mis.err
+
+
+def _seed_cli_eval_collections(
+    tmp_path: Path,
+    persist_dir: Path,
+) -> dict[str, dict[str, str]]:
+    """Seed two isolated collections and return parent IDs per collection."""
+    from docpipe_maestro import ingest, status
+
+    docs_dir = tmp_path / "cli_eval_docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    (docs_dir / "policy.md").write_text(
+        (
+            "# Backup Policy\n\n"
+            "Production backups MUST use KMS-401 keys and AES-256 encryption.\n"
+            "Legacy tapes are excluded except under CFO sign-off.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    seeded: dict[str, dict[str, str]] = {}
+    for col_name in ("fixture_col", "toml_col", "explicit_col", "default"):
+        ingest(docs_dir, profile="POLICY", collection=col_name, persist_dir=persist_dir)
+        st = status(collection=col_name, persist_dir=persist_dir)
+        rec = next(item for item in st.sources if item.source.endswith("policy.md"))
+        seeded[col_name] = {"parent": rec.parent_ids[0], "child": rec.chunk_ids[0]}
+    return seeded
+
+
+def test_cli_eval_startup_purity_and_help() -> None:
+    code = (
+        "import sys; "
+        "import docpipe_maestro.cli as cli; "
+        "p = cli.build_parser(); "
+        "assert 'docpipe_maestro.eval.harness' not in sys.modules; "
+        "assert 'chromadb' not in sys.modules; "
+        "assert 'litellm' not in sys.modules"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], check=False, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+    help_proc = subprocess.run(
+        [sys.executable, "-m", "docpipe_maestro.cli", "eval", "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert help_proc.returncode == 0
+    assert "--fixture" in help_proc.stdout
+    assert "--k" in help_proc.stdout
+    assert "--searcher" in help_proc.stdout
+    assert "--expand-parent" in help_proc.stdout
+
+
+def test_cli_eval_json_and_human_output_and_precedence(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    seeded = _seed_cli_eval_collections(tmp_path, tmp_persist_dir)
+    pid = seeded["fixture_col"]["parent"]
+    cid = seeded["explicit_col"]["child"]
+
+    fixture_with_col = tmp_path / "fixture_with_col.json"
+    fixture_with_col.write_text(
+        json.dumps(
+            {
+                "collection": "fixture_col",
+                "profile": "POLICY",
+                "queries": [
+                    {
+                        "question": "What encryption applies to KMS-401 production backups?",
+                        "relevant_ids": [pid],
+                        "notes": "exact_identifier",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    fixture_empty_col = tmp_path / "fixture_empty_col.json"
+    fixture_empty_col.write_text(
+        json.dumps(
+            {
+                "collection": "",
+                "queries": [
+                    {
+                        "question": "What encryption applies to KMS-401 production backups?",
+                        "relevant_ids": [seeded["toml_col"]["parent"]],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = tmp_path / "docpipe.toml"
+    cfg.write_text(
+        f'collection = "toml_col"\npersist_dir = "{tmp_persist_dir.as_posix()}"\n',
+        encoding="utf-8",
+    )
+
+    # 1. Explicit --collection BEFORE eval overrides fixture and TOML
+    rc = main(
+        [
+            "--config",
+            str(cfg),
+            "--collection",
+            "explicit_col",
+            "eval",
+            "--fixture",
+            str(fixture_with_col),
+            "--json",
+        ]
+    )
+    assert rc == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["config"]["collection"] == "explicit_col"
+    assert report["aggregate"]["num_queries"] == 1
+
+    # 2. Explicit --collection AFTER eval overrides fixture and TOML
+    rc_after = main(
+        [
+            "eval",
+            "--config",
+            str(cfg),
+            "--collection",
+            "explicit_col",
+            "--fixture",
+            str(fixture_with_col),
+            "--k",
+            "10",
+            "3",
+            "--k",
+            "3",
+            "--searcher",
+            "fts5_hybrid",
+            "--no-expand-parent",
+            "--json",
+        ]
+    )
+    assert rc_after == 0
+    rep_after = json.loads(capsys.readouterr().out)
+    assert rep_after["config"]["collection"] == "explicit_col"
+    assert rep_after["config"]["k_values"] == [3, 10]
+    assert rep_after["config"]["searcher"] == "fts5_hybrid"
+    assert rep_after["config"]["expand_parent"] is False
+    assert cid in rep_after["per_query"][0]["retrieved_ids"]
+
+    # 3. Omitted --collection selects fixture["collection"] ahead of docpipe.toml
+    rc_fixture = main(["--config", str(cfg), "eval", "--fixture", str(fixture_with_col), "--json"])
+    assert rc_fixture == 0
+    rep_fix = json.loads(capsys.readouterr().out)
+    assert rep_fix["config"]["collection"] == "fixture_col"
+    assert rep_fix["aggregate"]["mrr"] == pytest.approx(1.0)
+
+    # 4. Empty fixture["collection"] falls back to docpipe.toml, else "default" with --no-config
+    rc_toml = main(["--config", str(cfg), "eval", "--fixture", str(fixture_empty_col), "--json"])
+    assert rc_toml == 0
+    rep_toml = json.loads(capsys.readouterr().out)
+    assert rep_toml["config"]["collection"] == "toml_col"
+    assert rep_toml["aggregate"]["mrr"] == pytest.approx(1.0)
+
+    rc_global_default = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "eval",
+            "--fixture",
+            str(fixture_empty_col),
+            "--json",
+        ]
+    )
+    assert rc_global_default == 0
+    assert json.loads(capsys.readouterr().out)["config"]["collection"] == "default"
+
+    # 5. Human-readable summary output mode exits 0 and includes expected sections
+    rc_text = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "eval",
+            "--fixture",
+            str(fixture_with_col),
+            "--k",
+            "1",
+            "3",
+            "5",
+        ]
+    )
+    assert rc_text == 0
+    cap_text = capsys.readouterr()
+    assert cap_text.err == ""
+    for required in (
+        "Collection:",
+        "Model:",
+        "Searcher:",
+        "Expand Parent:",
+        "Queries:",
+        "MRR:",
+        "K",
+        "Precision@K",
+        "Recall@K",
+    ):
+        assert required in cap_text.out
+
+
+def test_cli_eval_errors_emit_single_line_stderr_and_exit_one(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    seeded = _seed_cli_eval_collections(tmp_path, tmp_persist_dir)
+    valid_fix = tmp_path / "ok.json"
+    valid_fix.write_text(
+        json.dumps(
+            {
+                "collection": "fixture_col",
+                "queries": [
+                    {"question": "KMS-401?", "relevant_ids": [seeded["fixture_col"]["parent"]]}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    bad_json_fix = tmp_path / "bad.json"
+    bad_json_fix.write_text("{bad", encoding="utf-8")
+
+    error_invocations: list[list[str]] = [
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "eval",
+            "--fixture",
+            str(tmp_path / "missing.json"),
+        ],
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "eval",
+            "--fixture",
+            str(bad_json_fix),
+        ],
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "eval",
+            "--fixture",
+            str(valid_fix),
+            "--k",
+            "0",
+        ],
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "--collection",
+            "does_not_exist",
+            "eval",
+            "--fixture",
+            str(valid_fix),
+        ],
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "eval",
+            "--fixture",
+            str(valid_fix),
+            "--embed-model",
+            "openai/mismatched",
+        ],
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "eval",
+            "--fixture",
+            str(valid_fix),
+            "--searcher",
+            "ghost",
+        ],
+    ]
+    for argv in error_invocations:
+        rc = main(argv)
+        assert rc == 1
+        cap = capsys.readouterr()
+        assert cap.out == ""
+        assert cap.err.startswith("Error:")
+        assert len(cap.err.strip().splitlines()) == 1

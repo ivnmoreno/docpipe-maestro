@@ -1,11 +1,11 @@
 <!--
 # Sync Impact Report
-- Version change: 1.2.0 -> 1.2.1
-- Rationale: Sync Quality Gates' public API contract enumeration with the Stage 1 004-registry-refactor extension surface (`RegistryError` and the eight lazy `register_*` public extension decorators) while preserving Release Gate #2 reservation for Stage 4 (`v1.3.0`).
-- Migration Note: Governance enumeration sync only; zero breaking changes to existing Python APIs, CLI behavior, stored collections, or runtime dependencies.
+- Version change: 1.2.1 -> 1.2.2
+- Rationale: Formalize running the full test suite after implementation with 100% passing tests as a mandatory Quality Gate requirement across every feature/stage.
+- Migration Note: Governance clarification only; zero breaking changes to existing Python APIs, CLI behavior, stored collections, or runtime dependencies.
 - List of modified principles: None
 - Modified sections:
-  - Additional Constraints -> Quality Gates (added `RegistryError` and `register_parser`, `register_cleaner`, `register_enricher`, `register_chunker`, `register_embedder`, `register_store`, `register_searcher`, `register_reranker` to the public API surface contract)
+  - Additional Constraints -> Quality Gates (explicit requirement to run all tests after implementation with zero failures allowed)
 - Follow-up TODOs: Implement and activate Release Gate #2 (`@pytest.mark.pii`) in the dedicated PII Protection stage (Stage 4 / v1.3.0).
 -->
 
@@ -99,8 +99,10 @@ across modules is prohibited.
 
 ### Quality Gates
 
-- Every behavioral change ships with tests. CI runs linting, static type checking,
-  and the full suite; a red CI blocks release.
+- Every behavioral change ships with tests. Running **all tests** across the entire
+  suite after implementation is mandatory, and **all tests must pass** (zero
+  failures). CI runs linting, static type checking, and the full suite; any
+  failing test or red CI blocks completion and release.
 - **Release Gate #1 (mandatory)**: The exception-preservation reverse test
   (`@pytest.mark.reverse`) must pass prior to every release.
 - **Release Gate #2 (reserved)**: Dedicated PII protection safety gate (`@pytest.mark.pii`),
@@ -143,4 +145,4 @@ across modules is prohibited.
 > correctly, embeds it, stores it, retrieves the right sections, and optionally
 > generates a grounded answer. It is the engine — not the app, not the framework."
 
-**Version**: 1.2.1 | **Ratified**: 2026-11-12 | **Last Amended**: 2026-11-13
+**Version**: 1.2.2 | **Ratified**: 2026-11-12 | **Last Amended**: 2026-11-14

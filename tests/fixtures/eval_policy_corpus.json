@@ -1,0 +1,126 @@
+{
+  "collection": "eval_policy",
+  "profile": "POLICY",
+  "queries": [
+    {
+      "question": "How many days of paid annual leave do full-time employees receive each calendar year?",
+      "relevant_ids": ["1a6c12c4e9f7bdb6"],
+      "notes": "direct_lookup"
+    },
+    {
+      "question": "What is the standard maximum nightly hotel reimbursement rate for business travel?",
+      "relevant_ids": ["03bcea6e41488c5e"],
+      "notes": "direct_lookup"
+    },
+    {
+      "question": "What TLS protocol version and certificate rotation interval apply to public and partner networks?",
+      "relevant_ids": ["7126cc03ba483155"],
+      "notes": "direct_lookup"
+    },
+    {
+      "question": "What is the acknowledgment SLA for SEV-2 partial service degradation incidents?",
+      "relevant_ids": ["017cf4b71945ad14"],
+      "notes": "direct_lookup"
+    },
+    {
+      "question": "Within how many business days must every SEV-1 and SEV-2 incident publish a blameless postmortem?",
+      "relevant_ids": ["c59a7d99b8d1d344"],
+      "notes": "direct_lookup"
+    },
+    {
+      "question": "What is the annual gift limit for employees participating in vendor evaluations?",
+      "relevant_ids": ["8fad5bb26cc02766"],
+      "notes": "direct_lookup"
+    },
+    {
+      "question": "How much workspace hardware allowance can staff claim yearly for working remotely?",
+      "relevant_ids": ["6cdb8a119cac7942"],
+      "notes": "paraphrased"
+    },
+    {
+      "question": "How many competing quotes are needed to justify waiving airfare or hotel cost limits?",
+      "relevant_ids": ["abe47264d7c28509"],
+      "notes": "paraphrased"
+    },
+    {
+      "question": "Are temporary staff without managed device enrollment allowed administrator access or VPN logins?",
+      "relevant_ids": ["94b6de503c05fc7c"],
+      "notes": "paraphrased"
+    },
+    {
+      "question": "How long must immutable security audit telemetry logs remain retained in cold archival storage?",
+      "relevant_ids": ["cc639836b615ce7f"],
+      "notes": "paraphrased"
+    },
+    {
+      "question": "Who is permitted to issue public advisories or share incident logs externally during a security event?",
+      "relevant_ids": ["09eb968a73cb587c"],
+      "notes": "paraphrased"
+    },
+    {
+      "question": "How far ahead of automatic contract renewal must pricey software subscriptions undergo value review?",
+      "relevant_ids": ["55c0bf8d9c5fca2e"],
+      "notes": "paraphrased"
+    },
+    {
+      "question": "Control SEC-101 AES-256 KMS-401 encryption requirements for confidential datasets",
+      "relevant_ids": ["7126cc03ba483155"],
+      "notes": "exact_identifier"
+    },
+    {
+      "question": "PAM-08 privilege elevation duration and BREAKGLASS-99 session rotation protocol",
+      "relevant_ids": ["dece03e7b5805589"],
+      "notes": "exact_identifier"
+    },
+    {
+      "question": "Playbook IR-RB-012 IR-15M SLA and CHANGE-404 maintenance window rule",
+      "relevant_ids": ["017cf4b71945ad14"],
+      "notes": "exact_identifier"
+    },
+    {
+      "question": "DPO-24H escalation and REG-72H supervisory notification timelines",
+      "relevant_ids": ["5917eb3e8474052b"],
+      "notes": "exact_identifier"
+    },
+    {
+      "question": "Control PROC-204 SOC2-II attestation and SEC-REV-30 vendor onboarding",
+      "relevant_ids": ["fb2c4aae62cee946"],
+      "notes": "exact_identifier"
+    },
+    {
+      "question": "Fast-track EMERG-PO-09 cloud capacity authorization during active IR-RB-012 SEV-1 outage",
+      "relevant_ids": ["1506654ac74de210"],
+      "notes": "exact_identifier"
+    },
+    {
+      "question": "Are new employees during their initial 90-day probationary period entitled to 20 days annual leave, and what is the seasonal contract carry-over exception?",
+      "relevant_ids": ["1a6c12c4e9f7bdb6"],
+      "notes": "rule_and_exception"
+    },
+    {
+      "question": "Are part-time contractors working fewer than 15 hours per week entitled to paid sabbatical leave, and what approval exception applies in medical emergencies?",
+      "relevant_ids": ["8de82bd300b883d4", "192aedc969801a01"],
+      "notes": "rule_and_exception"
+    },
+    {
+      "question": "Under what medical accommodation exception can domestic flights bypass economy class airfare rules?",
+      "relevant_ids": ["03bcea6e41488c5e"],
+      "notes": "rule_and_exception"
+    },
+    {
+      "question": "Can new software vendors access pilot environments before full SEC-REV-30 onboarding when compensating network isolation is active?",
+      "relevant_ids": ["effc54501452ddbc"],
+      "notes": "rule_and_exception"
+    },
+    {
+      "question": "When rotating KMS-401 keys under KEY-ROT-4H, what condition applies regarding PAM-08 active session tokens?",
+      "relevant_ids": ["843192a5c228c101"],
+      "notes": "rule_and_exception"
+    },
+    {
+      "question": "When do expenditures above PO-5000 and PO-25000 bypass three competitive vendor bids under PROC-101?",
+      "relevant_ids": ["93959a8727ad6fcb"],
+      "notes": "rule_and_exception"
+    }
+  ]
+}

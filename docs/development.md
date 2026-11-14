@@ -55,6 +55,7 @@ Configured in `pyproject.toml`:
 - `reverse` (`tests/test_reverse_safety.py`): Release-gating property tests verifying that queries targeting any policy clause with exception markers (`except`, `unless`, `not entitled`, `subject to`, `provided that`) retrieve parent context preserving both rule and exception.
 - `integration` (`tests/test_extended_complex.py`): Large-corpus (`> 64` chunks testing multi-batch embedding), multi-page PDF boilerplate detection, complex DOCX/HTML table extraction, nested directory sync/rename/truncation, and atomic abort guarantees.
 - `slow`: Reserved for long-running benchmarks or large stress runs.
+- Baseline replay (`tests/test_eval.py`): Replays `tests/fixtures/eval_policy_corpus.json` strictly offline under `mock_litellm_offline` and verifies exact equivalence with `docs/eval-baseline.json` (`default` and `fts5_hybrid`).
 
 ### Offline Test Doubles (`tests/conftest.py`)
 
@@ -76,6 +77,7 @@ uv run docpipe-maestro status --collection live_demo
 uv run docpipe-maestro query "annual leave probationary period" --collection live_demo
 uv run docpipe-maestro ask "How many days of annual leave do employees get, and what is the exception?" \
   --model ollama/qwen2.5:1.5b-instruct --collection live_demo
+uv run docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --collection live_demo --searcher fts5_hybrid
 ```
 
 ---
@@ -85,7 +87,7 @@ uv run docpipe-maestro ask "How many days of annual leave do employees get, and 
 Before adding features, verify compliance with [`.specify/memory/constitution.md`](../.specify/memory/constitution.md):
 
 1. **Scope Discipline**: Every core feature must be reachable via the minimal public API or `docpipe-maestro` CLI — no HTTP server, auth middleware, session memory, or UI code inside `docpipe_maestro`.
-2. **Two-Phase Separation**: Keep Phase 1 write logic inside `src/docpipe_maestro/ingest/` and read-only Phase 2 logic inside `src/docpipe_maestro/query/`.
+2. **Two-Phase Separation**: Keep Phase 1 write logic inside `src/docpipe_maestro/ingest/` and read-only Phase 2 logic inside `src/docpipe_maestro/query/` (and `src/docpipe_maestro/eval/`).
 3. **Library Purity**: Never read config files inside library modules (TOML loading belongs solely in `cli.py`). Never add a hardcoded provider registry; delegate `provider/model` resolution directly to `litellm`.
 4. **Schema Single Source**: Add or modify shared dataclasses/types only in `src/docpipe_maestro/types.py`.
 5. **Additive Format Extensions**: To add a new parser (e.g., `.rst` or `.xlsx`):

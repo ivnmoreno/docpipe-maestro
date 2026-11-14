@@ -9,7 +9,7 @@ The `docpipe-maestro` CLI (`docpipe_maestro.cli:main`, also invocable as `python
 ```text
 usage: docpipe-maestro [-h] [--version] [--config CONFIG] [--no-config]
                        [--collection COLLECTION] [--persist-dir PERSIST_DIR]
-                       {ingest,sync,status,remove,reindex,query,ask} ...
+                       {ingest,sync,status,remove,reindex,query,ask,eval} ...
 ```
 
 | Flag | Default | Description |
@@ -254,6 +254,34 @@ docpipe-maestro ask [--config CONFIG] [--no-config] [--collection COLLECTION]
 - `--show-context`: Print retrieved parent section scores and provenance details to `stderr` while keeping `stdout` clean for piping the answer.
 - `--json`: Emit structured JSON on `stdout` containing the generated answer, generation telemetry (`model`, `finish_reason`, `truncated`, token usage, `elapsed_seconds`), and retrieved source citations.
 - If zero sections satisfy `--threshold` (or the collection is empty), prints `Not found in the provided context.` (or JSON equivalent with `--json`) without invoking the LLM.
+
+---
+
+### `docpipe-maestro eval --fixture <path>`
+
+Evaluate Phase 2 retrieval ranking (`Precision@K`, `Recall@K`, and `MRR`) strictly read-only against a structured JSON fixture without mutating persisted indexes or manifests.
+
+```text
+docpipe-maestro eval [--config CONFIG] [--no-config] [--collection COLLECTION]
+                     [--persist-dir PERSIST_DIR] --fixture FIXTURE
+                     [--k K [K ...]] [--embed-model EMBED_MODEL]
+                     [--searcher SEARCHER]
+                     [--expand-parent | --no-expand-parent] [--json]
+```
+
+- `--fixture`: Required path to an evaluation JSON fixture (`EvalFixture` schema with non-empty `queries`, non-blank `question`, non-empty `relevant_ids`, optional `collection`, `profile`, `notes`).
+- `--k`: Positive cutoff value(s) `K` accepting single (`--k 5`), multi-value (`--k 1 3 5 10`), or repeated (`--k 1 --k 3`) flags (default: `1 3 5 10`). Unsorted or duplicate positive integers normalize automatically in ascending order; values `<= 0` fail with exit status `1`.
+- `--searcher`: Registered searcher strategy (`"default"` dense or `"fts5_hybrid"`, inheriting TOML `searcher` when omitted).
+- `--expand-parent` / `--no-expand-parent`: Evaluate parent sections (`True`, default) or child chunks (`False`).
+- `--embed-model`: Embedding model checked against the collection lock (inherits TOML `embed_model` when omitted).
+- `--collection` precedence: Resolves strictly in order: explicit `--collection` flag (before or after `eval`) `>` non-empty fixture `collection` `>` TOML `collection` `>` `"default"`. Fixture `profile` is kept purely as informational provenance.
+- `--json`: Emits structured `EvalReport` JSON (`config`, `aggregate`, `per_query`) to `stdout` and exits `0`. Without `--json`, prints an aligned `Collection`/`MRR`/`K | Precision@K | Recall@K` table and per-query diagnostics.
+- **Exit behavior**: Exits `0` on valid measurement runs (no regression-threshold failure gates) and exits `1` with single-line `Error: <message>` on `stderr` for invalid flags, malformed fixtures, missing/empty collections, model mismatches, or unknown `--searcher` keys.
+
+- **Example command & JSON check**:
+  ```bash
+  docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --k 1 3 5 --searcher fts5_hybrid --json
+  ```
 
 ---
 

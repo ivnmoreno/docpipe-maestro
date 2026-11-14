@@ -53,6 +53,7 @@ Every file's execution role is visible from the package layout under `src/docpip
 | [`query/retriever.py`](../src/docpipe_maestro/query/retriever.py) | Phase 2 | Read-only child retrieval orchestration, threshold filter, parent expansion & cross-doc citation pass |
 | [`query/prompts.py`](../src/docpipe_maestro/query/prompts.py) | Phase 2 | Pure zero-I/O prompt constructor preserving citation metadata (`Source`, `Section`, `Clause`, `Page`) |
 | [`query/answer.py`](../src/docpipe_maestro/query/answer.py) | Phase 2 | Optional grounded completion via `litellm.completion` with deterministic empty-context refusal |
+| [`eval/`](../src/docpipe_maestro/eval/__init__.py) | Phase 2 | Read-only retrieval evaluation metrics (`metrics.py`) and harness runner (`harness.py`) |
 | [`cli.py`](../src/docpipe_maestro/cli.py) | Both | `docpipe-maestro` CLI entry point and **sole** module permitted to read user TOML config files (`--config`) |
 
 ---
@@ -181,3 +182,5 @@ In policy and compliance corpora, an isolated sentence such as *"Full-time emplo
 ensures matched child clauses bring their complete enclosing rules and exceptions into context — continuously verified by the mandatory Release Gate in [`tests/test_reverse_safety.py`](../tests/test_reverse_safety.py).
 
 `build_prompt(question, sections)` formats retrieved context strictly offline with source/section/clause/page citations, and `answer(..., has_context=bool(sections))` short-circuits immediately with `"Not found in the provided context."` when retrieval yields no qualifying sections.
+
+For longitudinal quality measurement, [`docpipe_maestro.eval`](../src/docpipe_maestro/eval/__init__.py) evaluates Phase 2 `retrieve()` outputs strictly read-only: `evaluate()` verifies manifest presence, embedding model locks, and committed sources prior to store instantiation so missing collections create zero storage artifacts and valid runs produce `0`-byte persistence drift.
