@@ -123,6 +123,7 @@ def test_public_callable_signatures_and_keyword_only_selectors() -> None:
         ("follow_crossrefs", kw_only, True),
         ("embedder", kw_only, "default"),
         ("store", kw_only, "default"),
+        ("searcher", kw_only, "default"),
     ]
     assert _params_info(root.build_prompt) == [
         ("question", pos_kw, empty),

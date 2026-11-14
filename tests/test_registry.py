@@ -527,7 +527,6 @@ def test_top_level_eight_registries_empty_defaults_and_protocol_conformance(
 
     empty_registries: list[tuple[Registry[Any], Any, str]] = [
         (ENRICHERS, register_enricher, "enricher"),
-        (SEARCHERS, register_searcher, "searcher"),
         (RERANKERS, register_reranker, "reranker"),
     ]
     for reg, decorator, empty_msg_name in empty_registries:
@@ -538,6 +537,13 @@ def test_top_level_eight_registries_empty_defaults_and_protocol_conformance(
         ):
             reg.resolve("missing")
         assert callable(decorator)
+
+    assert SEARCHERS.keys() == ["default", "fts5_hybrid"]
+    with pytest.raises(
+        root.RegistryError,
+        match=r"registry 'searcher' has no entry 'missing' \(available: default, fts5_hybrid\)",
+    ):
+        SEARCHERS.resolve("missing")
 
     with (
         _restore_registry(ENRICHERS),
@@ -591,6 +597,9 @@ def test_top_level_eight_registries_empty_defaults_and_protocol_conformance(
     parser_keys = PARSERS.keys()
     for key in parser_keys:
         assert isinstance(PARSERS.resolve(key)(), Parser)
+    searcher_keys = SEARCHERS.keys()
+    for key in searcher_keys:
+        assert isinstance(SEARCHERS.resolve(key)(), Searcher)
     assert isinstance(CLEANERS.resolve("default")(), Cleaner)
     assert isinstance(CHUNKERS.resolve("default")(), Chunker)
     assert isinstance(EMBEDDERS.resolve("default")(), Embedder)

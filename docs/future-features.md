@@ -68,11 +68,9 @@ This document aggregates all architectural suggestions, deferred backlog items, 
 
 ## 4. Retrieval & Search Enhancements
 
-### 4.1 Hybrid Search (BM25 Lexical + Dense Vector Similarity)
-- **Problem**: Dense semantic embeddings excel at concepts but can miss exact clause identifiers (`§4.2.1`), acronyms, product numbers, or uncommon legal jargon.
-- **Proposed Upgrade**:
-  - Integrate a lightweight lexical index (e.g., BM25 / SQLite FTS5) alongside ChromaDB.
-  - Fuse lexical and vector ranking using Reciprocal Rank Fusion (RRF) or weighted score normalization.
+### 4.1 Hybrid Search (BM25 Lexical + Dense Vector Similarity) — *Implemented*
+- **Status**: Implemented in `005-hybrid-search` (`Fts5HybridSearcher` registered as `"fts5_hybrid"` alongside collocated `LexicalIndex` in `store/lexical.py`).
+- **Details**: Uses SQLite FTS5 (`unicode61`) BM25 fused with dense ChromaDB cosine rankings via theoretical-max normalized Reciprocal Rank Fusion (`k=60`, weights `0.5`/`0.5`), exposed via `retrieve(..., searcher="fts5_hybrid")`, `--searcher fts5_hybrid`, and TOML `searcher`.
 
 ### 4.2 Pluggable Reranking Stage
 - **Problem**: Vector similarity matches the closest candidates, but a dedicated cross-encoder reranker can dramatically increase top-1 precision.
@@ -170,7 +168,7 @@ This document aggregates all architectural suggestions, deferred backlog items, 
 | **Table Preservation** | Ingestion | Post-v0.1 | High (Accuracy) | Medium |
 | **`LEGAL` Profile** | Chunking | Post-v0.1 | High (Domain Safety) | Medium |
 | **Chunk-Level Differential Re-Embedding** | Ingestion | Post-v0.1 | High (Cost / Speed) | Medium |
-| **Hybrid Search (BM25 + Dense)** | Retrieval | Post-v0.1 | High (Recall) | Medium |
+| **Hybrid Search (BM25 + Dense)** | Retrieval | *Implemented* (`005-hybrid-search`) | High (Recall) | Medium |
 | **Streaming Output (`docpipe-maestro ask`)** | Generation | Post-v0.1 | High (UX) | Low |
 | **`--dry-run` for `sync`/`reindex`** | CLI / Ops | Post-v0.1 | Medium (Safety) | Low |
 | **Inter-Document Crossrefs** | Ingestion | Post-v0.1 | Medium (Completeness) | High |

@@ -12,7 +12,17 @@ from docpipe_maestro import (
     reindex,
     retrieve,
     build_prompt,
+    build_chat_messages,
     answer,
+    answer_detailed,
+    register_parser,
+    register_cleaner,
+    register_enricher,
+    register_chunker,
+    register_embedder,
+    register_store,
+    register_searcher,
+    register_reranker,
     Chunk,
     EmbeddedChunk,
     RetrievedChunk,
@@ -20,11 +30,13 @@ from docpipe_maestro import (
     IngestResult,
     SyncResult,
     CollectionStatus,
+    GenerationResult,
     DocpipeError,
     UnsupportedFormatError,
     MissingExtraError,
     ModelMismatchError,
     MissingCredentialError,
+    RegistryError,
 )
 ```
 
@@ -43,17 +55,21 @@ def ingest(
     persist_dir: str | Path = ".docpipe",
     embed_model: str = "ollama/nomic-embed-text",
     force: bool = False,
+    cleaner: str = "default",
+    chunker: str = "default",
+    embedder: str = "default",
+    store: str = "default",
 ) -> IngestResult
 ```
 
-Atomically ingests a single file or directory tree (recursively sorted by relative POSIX path) into ChromaDB and updates the collocated manifest.
+Atomically ingests a single file or directory tree (recursively sorted by relative POSIX path) into ChromaDB, updates the collocated SQLite FTS5 lexical index (`<persist_dir>/lexical/<collection>.db`), and updates the collocated manifest.
 
 - **Batch Atomicity**: Parses, cleans, chunks, and embeds all changed files in memory *before* creating or modifying `VectorStore`. Any unsupported file or missing parser extra aborts the entire run cleanly.
 - **Fast-Path & Hash Check**: Files with unchanged `(size, mtime)` skip disk hashing unless `force=True`; changed timestamps with identical `sha256` refresh manifest metadata without re-embedding.
 - **Self-Exclusion**: Any directory matching `persist_dir` nested under `path` is automatically skipped.
 - **Empty Directories**: Raises `UnsupportedFormatError` if `path` does not exist or yields zero files.
 
-**Raises**: `UnsupportedFormatError`, `MissingExtraError`, `ModelMismatchError`, `MissingCredentialError`, `DocpipeError`.
+**Raises**: `UnsupportedFormatError`, `MissingExtraError`, `ModelMismatchError`, `MissingCredentialError`, `RegistryError`, `DocpipeError`.
 
 ---
 
@@ -67,17 +83,21 @@ def sync(
     collection: str = "default",
     persist_dir: str | Path = ".docpipe",
     embed_model: str = "ollama/nomic-embed-text",
+    cleaner: str = "default",
+    chunker: str = "default",
+    embedder: str = "default",
+    store: str = "default",
 ) -> SyncResult
 ```
 
 Performs three-way reconciliation between `directory` and `<persist_dir>/manifests/<collection>.json`:
 
-1. **Added**: New files on disk are parsed, chunked, embedded, and inserted.
+1. **Added**: New files on disk are parsed, chunked, embedded, and inserted into both vector and lexical stores.
 2. **Updated**: Modified files (different `sha256`) undergo staged delete-then-reinsert under a new `doc_version`, preventing orphaned clauses if the file shrank.
 3. **Skipped**: Files matching manifest hashes (even after `touch`) are skipped.
-4. **Removed**: Source keys tracked in the manifest that no longer exist under `directory` are purged from both ChromaDB and the manifest. (An empty existing directory cleanly purges all tracked sources.)
+4. **Removed**: Source keys tracked in the manifest that no longer exist under `directory` are purged from ChromaDB, SQLite FTS5, and the manifest. (An empty existing directory cleanly purges all tracked sources.)
 
-**Raises**: `UnsupportedFormatError` (if `directory` is not an existing directory or contains an invalid file), `MissingExtraError`, `ModelMismatchError`, `MissingCredentialError`, `DocpipeError`.
+**Raises**: `UnsupportedFormatError` (if `directory` is not an existing directory or contains an invalid file), `MissingExtraError`, `ModelMismatchError`, `MissingCredentialError`, `RegistryError`, `DocpipeError`.
 
 ---
 
@@ -89,10 +109,11 @@ def remove(
     *,
     collection: str = "default",
     persist_dir: str | Path = ".docpipe",
+    store: str = "default",
 ) -> bool
 ```
 
-Deletes all child chunks, parent sections, and the manifest entry matching `Path(source).as_posix()`.
+Deletes all child chunks, parent sections, lexical FTS5 entries (when present), and the manifest entry matching `Path(source).as_posix()`.
 
 - **Returns**: `True` if the source was tracked and purged; `False` if not present in the collection manifest.
 
@@ -105,6 +126,7 @@ def status(
     *,
     collection: str = "default",
     persist_dir: str | Path = ".docpipe",
+    store: str = "default",
 ) -> CollectionStatus
 ```
 
@@ -122,18 +144,20 @@ def reindex(
     embed_model: str,
     collection: str = "default",
     persist_dir: str | Path = ".docpipe",
+    embedder: str = "default",
+    store: str = "default",
 ) -> int
 ```
 
-Migrates an existing collection to a new embedding model without re-parsing source files from disk:
+Migrates an existing collection to a new embedding model (and/or builds its collocated FTS5 lexical index) without re-parsing source files from disk:
 
 1. Reads all committed child and parent chunks directly from ChromaDB.
-2. Embeds all child chunks in memory under the new `embed_model` (if the collection is empty, updates `manifest.embed_model`, sets `embed_dim=None`, and returns `0`).
+2. Embeds all child chunks in memory under the new `embed_model` (if the collection is empty, updates `manifest.embed_model`, sets `embed_dim=None`, resets the lexical DB, and returns `0`).
 3. Rebuilds parent zero-vector placeholders matching the new vector dimension `len(new_vectors[0])`.
-4. Resets the ChromaDB collection, inserts rebuilt records, and updates the manifest lock, `embed_dim`, and timestamps.
+4. Resets the ChromaDB collection and SQLite FTS5 lexical index, inserts rebuilt records, and updates the manifest lock, `embed_dim`, and timestamps.
 
 - **Returns**: Number of committed child chunks re-embedded.
-- **Raises**: `MissingCredentialError`, `DocpipeError`.
+- **Raises**: `MissingCredentialError`, `RegistryError`, `DocpipeError`.
 
 ---
 
@@ -152,20 +176,25 @@ def retrieve(
     threshold: float | None = None,
     expand_parent: bool = True,
     follow_crossrefs: bool = True,
+    embedder: str = "default",
+    store: str = "default",
+    searcher: str = "default",
 ) -> list[RetrievedChunk]
 ```
 
-Read-only semantic retrieval enforcing the collection's embedding model lock:
+Read-only retrieval enforcing the collection's embedding model lock:
 
 - Checks `manifest.embed_model` via `check_model_lock()`; raises `ModelMismatchError` if locked to a different model.
+- Resolves `searcher` via `SEARCHERS`:
+  - `"default"` (`DenseSearcher`): queries dense child chunks exclusively (`where={"type": "child"}`) with `include_embeddings=False`, filtering out uncommitted `doc_version` entries (`score` is cosine similarity in `[0.0, 1.0]`).
+  - `"fts5_hybrid"` (`Fts5HybridSearcher`): fuses dense vector candidates with read-only SQLite FTS5 BM25 candidates (`candidate_k = max(child_top_k * 2, 20)`) using Reciprocal Rank Fusion (`k = 60`, weights `0.5` / `0.5`), normalized by theoretical maximum `1 / 61` into `[0.0, 1.0]` (dual rank-1 agreement `== 1.0`; single-signal rank-1 `== 0.5`). Short-circuits whitespace/punctuation-only queries to `[]`, and raises `DocpipeError` recommending `reindex` if a non-empty collection lacks an FTS5 index.
 - Returns `[]` immediately without calling the embedder if the collection is empty or `top_k <= 0`.
-- Queries child chunks exclusively (`where={"type": "child"}`) with `include_embeddings=False` to avoid unnecessary vector deserialization, filtering out any uncommitted `doc_version` entries.
-- Applies optional similarity cutoff `score >= threshold` (`score` is normalized cosine similarity in `[0.0, 1.0]`).
-- When `expand_parent=True`, over-fetches `top_k * 3` child candidates, assigns each unique `parent_id` `max(child.score)` across its matched children, resolves the top `top_k` parent sections via `get_by_ids(..., include_embeddings=False)`, and returns up to `top_k` unique parents sorted descending by `score`.
+- Applies optional score cutoff `score >= threshold` (`[0.0, 1.0]`).
+- When `expand_parent=True`, searches `top_k * 3` child candidates, assigns each unique `parent_id` `max(child.score)` across its matched children, resolves the top `top_k` parent sections via `get_by_ids(..., include_embeddings=False)`, and returns up to `top_k` unique parents sorted descending by `score`.
 - When `expand_parent=True` and `follow_crossrefs=True`, resolves explicit cross-document section/clause citations (e.g., `Section 4.1 of the Compliance Policy`) in one non-recursive pass when the target section is absent from top-`k` results.
 - When `expand_parent=False`, returns matched child chunks sorted descending by `score`.
 
-**Raises**: `ModelMismatchError`, `MissingCredentialError`, `DocpipeError`.
+**Raises**: `ModelMismatchError`, `MissingCredentialError`, `RegistryError`, `DocpipeError`.
 
 ---
 
@@ -347,15 +376,18 @@ ingest("./manual.md", profile=custom, collection="manuals")
 
 ---
 
-## 5. Exception Hierarchy
+## 5. Exception Hierarchy & Extension Registries
 
 ```text
 DocpipeError (Exception)
 ├── UnsupportedFormatError   # Unknown extension, missing file/dir, corrupted/binary content
 ├── MissingExtraError        # Optional dependency missing (pypdf, python-docx, bs4, etc.)
 ├── ModelMismatchError       # Requested embed_model conflicts with manifest.embed_model
-└── MissingCredentialError   # Provider rejected missing or invalid API key env var
+├── MissingCredentialError   # Provider rejected missing or invalid API key env var
+└── RegistryError            # Unregistered stage key or colliding stage registration
 ```
+
+Eight lazy extension decorators are re-exported from `docpipe_maestro` (`register_parser`, `register_cleaner`, `register_enricher`, `register_chunker`, `register_embedder`, `register_store`, `register_searcher`, `register_reranker`). For retrieval, built-in `SEARCHERS` keys are `"default"` (`DenseSearcher`) and `"fts5_hybrid"` (`Fts5HybridSearcher`).
 
 Example defensive wrapper for an application backend:
 
