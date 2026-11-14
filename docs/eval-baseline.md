@@ -2,8 +2,8 @@
 
 Committed offline reference baselines for `docpipe-maestro` comparing default semantic vector search (`searcher="default"`) against hybrid lexical + dense Reciprocal Rank Fusion (`searcher="fts5_hybrid"`).
 
-> **Machine-Readable Artifact**: [docs/eval-baseline.json](file:///home/maestro/LifeFolder/10_PUBLIC/projects/docpipe-maestro/docs/eval-baseline.json) (`schema_version = 1`)  
-> **Curated Query Fixture**: [tests/fixtures/eval_policy_corpus.json](file:///home/maestro/LifeFolder/10_PUBLIC/projects/docpipe-maestro/tests/fixtures/eval_policy_corpus.json) (`24` verified queries)
+> - **Machine-Readable Artifact**: [`docs/eval-baseline.json`](eval-baseline.json) (`schema_version = 1`)
+> - **Curated Query Fixture**: [`tests/fixtures/eval_policy_corpus.json`](../tests/fixtures/eval_policy_corpus.json) (`24` verified queries)
 
 ---
 
