@@ -1,0 +1,2207 @@
+{
+  "schema_version": 1,
+  "fixture": "tests/fixtures/eval_policy_corpus.json",
+  "corpora": [
+    "tests/fixtures/policy_corpus",
+    "tests/fixtures/eval_corpus"
+  ],
+  "embed_mode": "offline_deterministic",
+  "collection": "eval_policy",
+  "profile": "POLICY",
+  "k_values": [
+    1,
+    3,
+    5,
+    10
+  ],
+  "modes": {
+    "default": {
+      "config": {
+        "collection": "eval_policy",
+        "persist_dir": ".docpipe",
+        "embed_model": "ollama/nomic-embed-text",
+        "k_values": [
+          1,
+          3,
+          5,
+          10
+        ],
+        "expand_parent": true,
+        "follow_crossrefs": true,
+        "searcher": "default",
+        "embedder": "default",
+        "store": "default",
+        "threshold": null
+      },
+      "aggregate": {
+        "num_queries": 24,
+        "mrr": 0.7303240740740741,
+        "precision_at_k": {
+          "1": 0.625,
+          "3": 0.2777777777777777,
+          "5": 0.17500000000000004,
+          "10": 0.10000000000000003
+        },
+        "recall_at_k": {
+          "1": 0.6041666666666666,
+          "3": 0.8125,
+          "5": 0.8541666666666666,
+          "10": 0.9583333333333334
+        }
+      },
+      "per_query": [
+        {
+          "question": "How many days of paid annual leave do full-time employees receive each calendar year?",
+          "notes": "direct_lookup",
+          "relevant_ids": [
+            "1a6c12c4e9f7bdb6"
+          ],
+          "retrieved_ids": [
+            "1a6c12c4e9f7bdb6",
+            "6cdb8a119cac7942",
+            "c59a7d99b8d1d344",
+            "8de82bd300b883d4",
+            "5917eb3e8474052b",
+            "843192a5c228c101",
+            "7126cc03ba483155",
+            "55c0bf8d9c5fca2e",
+            "94b6de503c05fc7c",
+            "cc639836b615ce7f"
+          ],
+          "retrieved_scores": [
+            0.4373888373374939,
+            0.3503532409667969,
+            0.3235294222831726,
+            0.23157107830047607,
+            0.22555357217788696,
+            0.20143544673919678,
+            0.1960231065750122,
+            0.1886388659477234,
+            0.17797249555587769,
+            0.17629927396774292
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "What is the standard maximum nightly hotel reimbursement rate for business travel?",
+          "notes": "direct_lookup",
+          "relevant_ids": [
+            "03bcea6e41488c5e"
+          ],
+          "retrieved_ids": [
+            "03bcea6e41488c5e",
+            "5917eb3e8474052b",
+            "abe47264d7c28509",
+            "c59a7d99b8d1d344",
+            "55c0bf8d9c5fca2e",
+            "effc54501452ddbc",
+            "843192a5c228c101",
+            "017cf4b71945ad14",
+            "fb2c4aae62cee946",
+            "7126cc03ba483155"
+          ],
+          "retrieved_scores": [
+            0.23302072286605835,
+            0.1677890419960022,
+            0.1466471552848816,
+            0.1400279998779297,
+            0.12830007076263428,
+            0.1280583143234253,
+            0.11065667867660522,
+            0.10206210613250732,
+            0.09284770488739014,
+            0.07777136564254761
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "What TLS protocol version and certificate rotation interval apply to public and partner networks?",
+          "notes": "direct_lookup",
+          "relevant_ids": [
+            "7126cc03ba483155"
+          ],
+          "retrieved_ids": [
+            "7126cc03ba483155",
+            "1506654ac74de210",
+            "8fad5bb26cc02766",
+            "c59a7d99b8d1d344",
+            "fb2c4aae62cee946",
+            "cc639836b615ce7f",
+            "94b6de503c05fc7c",
+            "6cdb8a119cac7942",
+            "017cf4b71945ad14",
+            "93959a8727ad6fcb"
+          ],
+          "retrieved_scores": [
+            0.1920061707496643,
+            0.133630633354187,
+            0.12964075803756714,
+            0.09723055362701416,
+            0.05730682611465454,
+            0.05298334360122681,
+            0.02801656723022461,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "What is the acknowledgment SLA for SEV-2 partial service degradation incidents?",
+          "notes": "direct_lookup",
+          "relevant_ids": [
+            "017cf4b71945ad14"
+          ],
+          "retrieved_ids": [
+            "017cf4b71945ad14",
+            "fb2c4aae62cee946",
+            "03bcea6e41488c5e",
+            "abe47264d7c28509",
+            "93959a8727ad6fcb",
+            "55c0bf8d9c5fca2e",
+            "843192a5c228c101",
+            "8de82bd300b883d4",
+            "94b6de503c05fc7c",
+            "192aedc969801a01"
+          ],
+          "retrieved_scores": [
+            0.3125,
+            0.30323922634124756,
+            0.2853909730911255,
+            0.2694079875946045,
+            0.2153874635696411,
+            0.19641858339309692,
+            0.1807016134262085,
+            0.12056070566177368,
+            0.1111873984336853,
+            0.0962250828742981
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "Within how many business days must every SEV-1 and SEV-2 incident publish a blameless postmortem?",
+          "notes": "direct_lookup",
+          "relevant_ids": [
+            "c59a7d99b8d1d344"
+          ],
+          "retrieved_ids": [
+            "c59a7d99b8d1d344",
+            "017cf4b71945ad14",
+            "1a6c12c4e9f7bdb6",
+            "7126cc03ba483155",
+            "1506654ac74de210",
+            "cc639836b615ce7f",
+            "6cdb8a119cac7942",
+            "843192a5c228c101",
+            "5917eb3e8474052b",
+            "03bcea6e41488c5e"
+          ],
+          "retrieved_scores": [
+            0.6351073384284973,
+            0.5207738280296326,
+            0.45567119121551514,
+            0.45072054862976074,
+            0.4364358186721802,
+            0.4037668704986572,
+            0.39817917346954346,
+            0.3903599977493286,
+            0.35514241456985474,
+            0.32293635606765747
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "What is the annual gift limit for employees participating in vendor evaluations?",
+          "notes": "direct_lookup",
+          "relevant_ids": [
+            "8fad5bb26cc02766"
+          ],
+          "retrieved_ids": [
+            "55c0bf8d9c5fca2e",
+            "8fad5bb26cc02766",
+            "fb2c4aae62cee946",
+            "94b6de503c05fc7c",
+            "7126cc03ba483155",
+            "1a6c12c4e9f7bdb6",
+            "93959a8727ad6fcb",
+            "5917eb3e8474052b",
+            "cc639836b615ce7f",
+            "843192a5c228c101"
+          ],
+          "retrieved_scores": [
+            0.35282522439956665,
+            0.3500699996948242,
+            0.3404414653778076,
+            0.21182966232299805,
+            0.18146657943725586,
+            0.16439902782440186,
+            0.14655262231826782,
+            0.13423120975494385,
+            0.13353335857391357,
+            0.12909948825836182
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 0.5
+        },
+        {
+          "question": "How much workspace hardware allowance can staff claim yearly for working remotely?",
+          "notes": "paraphrased",
+          "relevant_ids": [
+            "6cdb8a119cac7942"
+          ],
+          "retrieved_ids": [
+            "dece03e7b5805589",
+            "effc54501452ddbc",
+            "fb2c4aae62cee946",
+            "8de82bd300b883d4",
+            "abe47264d7c28509",
+            "cc639836b615ce7f",
+            "7126cc03ba483155",
+            "1506654ac74de210",
+            "8fad5bb26cc02766",
+            "5917eb3e8474052b"
+          ],
+          "retrieved_scores": [
+            0.5345225930213928,
+            0.46092283725738525,
+            0.2712253928184509,
+            0.25879865884780884,
+            0.20080482959747314,
+            0.18807226419448853,
+            0.1703885793685913,
+            0.15811389684677124,
+            0.15339303016662598,
+            0.14704293012619019
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.0,
+            "5": 0.0,
+            "10": 0.0
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 0.0,
+            "5": 0.0,
+            "10": 0.0
+          },
+          "reciprocal_rank": 0.0
+        },
+        {
+          "question": "How many competing quotes are needed to justify waiving airfare or hotel cost limits?",
+          "notes": "paraphrased",
+          "relevant_ids": [
+            "abe47264d7c28509"
+          ],
+          "retrieved_ids": [
+            "effc54501452ddbc",
+            "dece03e7b5805589",
+            "03bcea6e41488c5e",
+            "c59a7d99b8d1d344",
+            "1506654ac74de210",
+            "8de82bd300b883d4",
+            "fb2c4aae62cee946",
+            "5917eb3e8474052b",
+            "abe47264d7c28509",
+            "843192a5c228c101"
+          ],
+          "retrieved_scores": [
+            0.34854841232299805,
+            0.33806174993515015,
+            0.3363364338874817,
+            0.33348649740219116,
+            0.3250000476837158,
+            0.32394731044769287,
+            0.3216337561607361,
+            0.31968098878860474,
+            0.31750035285949707,
+            0.3034663796424866
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.0,
+            "5": 0.0,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 0.0,
+            "5": 0.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 0.1111111111111111
+        },
+        {
+          "question": "Are temporary staff without managed device enrollment allowed administrator access or VPN logins?",
+          "notes": "paraphrased",
+          "relevant_ids": [
+            "94b6de503c05fc7c"
+          ],
+          "retrieved_ids": [
+            "6cdb8a119cac7942",
+            "1506654ac74de210",
+            "94b6de503c05fc7c",
+            "192aedc969801a01",
+            "8de82bd300b883d4",
+            "1a6c12c4e9f7bdb6",
+            "c59a7d99b8d1d344",
+            "7126cc03ba483155",
+            "5917eb3e8474052b",
+            "09eb968a73cb587c"
+          ],
+          "retrieved_scores": [
+            0.29445749521255493,
+            0.284018874168396,
+            0.2706660032272339,
+            0.2459549903869629,
+            0.22891724109649658,
+            0.22056442499160767,
+            0.18786728382110596,
+            0.16230863332748413,
+            0.15007507801055908,
+            0.13012003898620605
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 0.3333333333333333
+        },
+        {
+          "question": "How long must immutable security audit telemetry logs remain retained in cold archival storage?",
+          "notes": "paraphrased",
+          "relevant_ids": [
+            "cc639836b615ce7f"
+          ],
+          "retrieved_ids": [
+            "09eb968a73cb587c",
+            "192aedc969801a01",
+            "cc639836b615ce7f",
+            "843192a5c228c101",
+            "55c0bf8d9c5fca2e",
+            "03bcea6e41488c5e",
+            "6cdb8a119cac7942",
+            "1a6c12c4e9f7bdb6",
+            "8fad5bb26cc02766",
+            "7126cc03ba483155"
+          ],
+          "retrieved_scores": [
+            0.267261266708374,
+            0.1924501657485962,
+            0.17133206129074097,
+            0.1505846381187439,
+            0.13094568252563477,
+            0.12684041261672974,
+            0.0896005630493164,
+            0.08948749303817749,
+            0.08574926853179932,
+            0.08466672897338867
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 0.3333333333333333
+        },
+        {
+          "question": "Who is permitted to issue public advisories or share incident logs externally during a security event?",
+          "notes": "paraphrased",
+          "relevant_ids": [
+            "09eb968a73cb587c"
+          ],
+          "retrieved_ids": [
+            "09eb968a73cb587c",
+            "5917eb3e8474052b",
+            "017cf4b71945ad14",
+            "843192a5c228c101",
+            "c59a7d99b8d1d344",
+            "8fad5bb26cc02766",
+            "1a6c12c4e9f7bdb6",
+            "55c0bf8d9c5fca2e",
+            "cc639836b615ce7f",
+            "6cdb8a119cac7942"
+          ],
+          "retrieved_scores": [
+            0.3944053649902344,
+            0.33791887760162354,
+            0.3359919786453247,
+            0.3285714387893677,
+            0.27116310596466064,
+            0.24404674768447876,
+            0.23346203565597534,
+            0.22360682487487793,
+            0.17731618881225586,
+            0.17000508308410645
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "How far ahead of automatic contract renewal must pricey software subscriptions undergo value review?",
+          "notes": "paraphrased",
+          "relevant_ids": [
+            "55c0bf8d9c5fca2e"
+          ],
+          "retrieved_ids": [
+            "dece03e7b5805589",
+            "effc54501452ddbc",
+            "5917eb3e8474052b",
+            "8fad5bb26cc02766",
+            "843192a5c228c101",
+            "55c0bf8d9c5fca2e",
+            "abe47264d7c28509",
+            "7126cc03ba483155",
+            "cc639836b615ce7f",
+            "8de82bd300b883d4"
+          ],
+          "retrieved_scores": [
+            0.1807016134262085,
+            0.16936999559402466,
+            0.1553424596786499,
+            0.12964075803756714,
+            0.10244816541671753,
+            0.08908712863922119,
+            0.06788444519042969,
+            0.04800152778625488,
+            0.03532224893569946,
+            0.018227040767669678
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.0,
+            "5": 0.0,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 0.0,
+            "5": 0.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 0.16666666666666666
+        },
+        {
+          "question": "Control SEC-101 AES-256 KMS-401 encryption requirements for confidential datasets",
+          "notes": "exact_identifier",
+          "relevant_ids": [
+            "7126cc03ba483155"
+          ],
+          "retrieved_ids": [
+            "7126cc03ba483155",
+            "cc639836b615ce7f",
+            "55c0bf8d9c5fca2e",
+            "93959a8727ad6fcb",
+            "1506654ac74de210",
+            "8de82bd300b883d4",
+            "03bcea6e41488c5e",
+            "abe47264d7c28509",
+            "94b6de503c05fc7c",
+            "effc54501452ddbc"
+          ],
+          "retrieved_scores": [
+            0.15715467929840088,
+            0.049561381340026855,
+            0.027777791023254395,
+            0.02538365125656128,
+            0.02499997615814209,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "PAM-08 privilege elevation duration and BREAKGLASS-99 session rotation protocol",
+          "notes": "exact_identifier",
+          "relevant_ids": [
+            "dece03e7b5805589"
+          ],
+          "retrieved_ids": [
+            "c59a7d99b8d1d344",
+            "dece03e7b5805589",
+            "effc54501452ddbc",
+            "8fad5bb26cc02766",
+            "5917eb3e8474052b",
+            "1a6c12c4e9f7bdb6",
+            "fb2c4aae62cee946",
+            "843192a5c228c101",
+            "93959a8727ad6fcb",
+            "192aedc969801a01"
+          ],
+          "retrieved_scores": [
+            0.3363363742828369,
+            0.3047247529029846,
+            0.29879796504974365,
+            0.23543548583984375,
+            0.1934477686882019,
+            0.18427437543869019,
+            0.17841029167175293,
+            0.17719244956970215,
+            0.11264252662658691,
+            0.07548516988754272
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 0.5
+        },
+        {
+          "question": "Playbook IR-RB-012 IR-15M SLA and CHANGE-404 maintenance window rule",
+          "notes": "exact_identifier",
+          "relevant_ids": [
+            "017cf4b71945ad14"
+          ],
+          "retrieved_ids": [
+            "017cf4b71945ad14",
+            "8fad5bb26cc02766",
+            "8de82bd300b883d4",
+            "5917eb3e8474052b",
+            "843192a5c228c101",
+            "c59a7d99b8d1d344",
+            "09eb968a73cb587c",
+            "94b6de503c05fc7c",
+            "93959a8727ad6fcb",
+            "1506654ac74de210"
+          ],
+          "retrieved_scores": [
+            0.1141088604927063,
+            0.031311213970184326,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "DPO-24H escalation and REG-72H supervisory notification timelines",
+          "notes": "exact_identifier",
+          "relevant_ids": [
+            "5917eb3e8474052b"
+          ],
+          "retrieved_ids": [
+            "192aedc969801a01",
+            "8de82bd300b883d4",
+            "5917eb3e8474052b",
+            "94b6de503c05fc7c",
+            "03bcea6e41488c5e",
+            "09eb968a73cb587c",
+            "effc54501452ddbc",
+            "017cf4b71945ad14",
+            "cc639836b615ce7f",
+            "843192a5c228c101"
+          ],
+          "retrieved_scores": [
+            0.4114757180213928,
+            0.36087751388549805,
+            0.35149985551834106,
+            0.3169715404510498,
+            0.22882181406021118,
+            0.19047623872756958,
+            0.11976265907287598,
+            0.10022294521331787,
+            0.09990638494491577,
+            0.0965890884399414
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 0.3333333333333333
+        },
+        {
+          "question": "Control PROC-204 SOC2-II attestation and SEC-REV-30 vendor onboarding",
+          "notes": "exact_identifier",
+          "relevant_ids": [
+            "fb2c4aae62cee946"
+          ],
+          "retrieved_ids": [
+            "fb2c4aae62cee946",
+            "09eb968a73cb587c",
+            "1506654ac74de210",
+            "abe47264d7c28509",
+            "017cf4b71945ad14",
+            "93959a8727ad6fcb",
+            "effc54501452ddbc",
+            "5917eb3e8474052b",
+            "843192a5c228c101",
+            "03bcea6e41488c5e"
+          ],
+          "retrieved_scores": [
+            0.33903175592422485,
+            0.23904573917388916,
+            0.2213594913482666,
+            0.20080482959747314,
+            0.1956559419631958,
+            0.19264841079711914,
+            0.1803610920906067,
+            0.14704293012619019,
+            0.14142131805419922,
+            0.12763071060180664
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "Fast-track EMERG-PO-09 cloud capacity authorization during active IR-RB-012 SEV-1 outage",
+          "notes": "exact_identifier",
+          "relevant_ids": [
+            "1506654ac74de210"
+          ],
+          "retrieved_ids": [
+            "1506654ac74de210",
+            "017cf4b71945ad14",
+            "7126cc03ba483155",
+            "c59a7d99b8d1d344",
+            "843192a5c228c101",
+            "6cdb8a119cac7942",
+            "fb2c4aae62cee946",
+            "93959a8727ad6fcb",
+            "cc639836b615ce7f",
+            "abe47264d7c28509"
+          ],
+          "retrieved_scores": [
+            0.6667948961257935,
+            0.5893689393997192,
+            0.4050701856613159,
+            0.40430378913879395,
+            0.33829379081726074,
+            0.2832982540130615,
+            0.27333617210388184,
+            0.25886350870132446,
+            0.24623465538024902,
+            0.2241610288619995
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "Are new employees during their initial 90-day probationary period entitled to 20 days annual leave, and what is the seasonal contract carry-over exception?",
+          "notes": "rule_and_exception",
+          "relevant_ids": [
+            "1a6c12c4e9f7bdb6"
+          ],
+          "retrieved_ids": [
+            "1a6c12c4e9f7bdb6",
+            "c59a7d99b8d1d344",
+            "6cdb8a119cac7942",
+            "5917eb3e8474052b",
+            "192aedc969801a01",
+            "8de82bd300b883d4",
+            "1506654ac74de210",
+            "7126cc03ba483155",
+            "017cf4b71945ad14",
+            "fb2c4aae62cee946"
+          ],
+          "retrieved_scores": [
+            0.5315285325050354,
+            0.38805699348449707,
+            0.31932008266448975,
+            0.2557448148727417,
+            0.08164966106414795,
+            0.06819939613342285,
+            0.06000000238418579,
+            0.05388158559799194,
+            0.035355329513549805,
+            0.0214422345161438
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "Are part-time contractors working fewer than 15 hours per week entitled to paid sabbatical leave, and what approval exception applies in medical emergencies?",
+          "notes": "rule_and_exception",
+          "relevant_ids": [
+            "8de82bd300b883d4",
+            "192aedc969801a01"
+          ],
+          "retrieved_ids": [
+            "8de82bd300b883d4",
+            "1a6c12c4e9f7bdb6",
+            "dece03e7b5805589",
+            "94b6de503c05fc7c",
+            "effc54501452ddbc",
+            "5917eb3e8474052b",
+            "192aedc969801a01",
+            "abe47264d7c28509",
+            "6cdb8a119cac7942",
+            "03bcea6e41488c5e"
+          ],
+          "retrieved_scores": [
+            0.5337449908256531,
+            0.21223819255828857,
+            0.18898224830627441,
+            0.18752288818359375,
+            0.18421661853790283,
+            0.18195629119873047,
+            0.1521451473236084,
+            0.14199048280715942,
+            0.13600409030914307,
+            0.09024852514266968
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.2
+          },
+          "recall_at_k": {
+            "1": 0.5,
+            "3": 0.5,
+            "5": 0.5,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "Under what medical accommodation exception can domestic flights bypass economy class airfare rules?",
+          "notes": "rule_and_exception",
+          "relevant_ids": [
+            "03bcea6e41488c5e"
+          ],
+          "retrieved_ids": [
+            "abe47264d7c28509",
+            "fb2c4aae62cee946",
+            "effc54501452ddbc",
+            "03bcea6e41488c5e",
+            "dece03e7b5805589",
+            "8de82bd300b883d4",
+            "192aedc969801a01",
+            "5917eb3e8474052b",
+            "94b6de503c05fc7c",
+            "1506654ac74de210"
+          ],
+          "retrieved_scores": [
+            0.36070430278778076,
+            0.3598637580871582,
+            0.32725387811660767,
+            0.29526180028915405,
+            0.2836833596229553,
+            0.21130824089050293,
+            0.17568212747573853,
+            0.15007507801055908,
+            0.13533300161361694,
+            0.10327959060668945
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.0,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 0.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 0.25
+        },
+        {
+          "question": "Can new software vendors access pilot environments before full SEC-REV-30 onboarding when compensating network isolation is active?",
+          "notes": "rule_and_exception",
+          "relevant_ids": [
+            "effc54501452ddbc"
+          ],
+          "retrieved_ids": [
+            "effc54501452ddbc",
+            "017cf4b71945ad14",
+            "1506654ac74de210",
+            "843192a5c228c101",
+            "abe47264d7c28509",
+            "fb2c4aae62cee946",
+            "03bcea6e41488c5e",
+            "c59a7d99b8d1d344",
+            "dece03e7b5805589",
+            "55c0bf8d9c5fca2e"
+          ],
+          "retrieved_scores": [
+            0.24592113494873047,
+            0.2358105182647705,
+            0.1940285563468933,
+            0.18594038486480713,
+            0.12320822477340698,
+            0.10401022434234619,
+            0.08157354593276978,
+            0.05882352590560913,
+            0.040996015071868896,
+            0.026948392391204834
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "When rotating KMS-401 keys under KEY-ROT-4H, what condition applies regarding PAM-08 active session tokens?",
+          "notes": "rule_and_exception",
+          "relevant_ids": [
+            "843192a5c228c101"
+          ],
+          "retrieved_ids": [
+            "843192a5c228c101",
+            "55c0bf8d9c5fca2e",
+            "017cf4b71945ad14",
+            "effc54501452ddbc",
+            "c59a7d99b8d1d344",
+            "fb2c4aae62cee946",
+            "cc639836b615ce7f",
+            "dece03e7b5805589",
+            "1506654ac74de210",
+            "8de82bd300b883d4"
+          ],
+          "retrieved_scores": [
+            0.4216369390487671,
+            0.2095131278038025,
+            0.2083333134651184,
+            0.1792442798614502,
+            0.17149853706359863,
+            0.12634968757629395,
+            0.12460511922836304,
+            0.11952286958694458,
+            0.1178511381149292,
+            0.09644854068756104
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "When do expenditures above PO-5000 and PO-25000 bypass three competitive vendor bids under PROC-101?",
+          "notes": "rule_and_exception",
+          "relevant_ids": [
+            "93959a8727ad6fcb"
+          ],
+          "retrieved_ids": [
+            "93959a8727ad6fcb",
+            "fb2c4aae62cee946",
+            "843192a5c228c101",
+            "94b6de503c05fc7c",
+            "7126cc03ba483155",
+            "cc639836b615ce7f",
+            "017cf4b71945ad14",
+            "8fad5bb26cc02766",
+            "03bcea6e41488c5e",
+            "5917eb3e8474052b"
+          ],
+          "retrieved_scores": [
+            0.34940463304519653,
+            0.29515141248703003,
+            0.17588204145431519,
+            0.1683451533317566,
+            0.16481715440750122,
+            0.15160220861434937,
+            0.14194375276565552,
+            0.13910377025604248,
+            0.1080251932144165,
+            0.10667616128921509
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        }
+      ]
+    },
+    "fts5_hybrid": {
+      "config": {
+        "collection": "eval_policy",
+        "persist_dir": ".docpipe",
+        "embed_model": "ollama/nomic-embed-text",
+        "k_values": [
+          1,
+          3,
+          5,
+          10
+        ],
+        "expand_parent": true,
+        "follow_crossrefs": true,
+        "searcher": "fts5_hybrid",
+        "embedder": "default",
+        "store": "default",
+        "threshold": null
+      },
+      "aggregate": {
+        "num_queries": 24,
+        "mrr": 0.9004629629629629,
+        "precision_at_k": {
+          "1": 0.8333333333333334,
+          "3": 0.3333333333333332,
+          "5": 0.20000000000000007,
+          "10": 0.1041666666666667
+        },
+        "recall_at_k": {
+          "1": 0.8125,
+          "3": 0.9583333333333334,
+          "5": 0.9583333333333334,
+          "10": 1.0
+        }
+      },
+      "per_query": [
+        {
+          "question": "How many days of paid annual leave do full-time employees receive each calendar year?",
+          "notes": "direct_lookup",
+          "relevant_ids": [
+            "1a6c12c4e9f7bdb6"
+          ],
+          "retrieved_ids": [
+            "1a6c12c4e9f7bdb6",
+            "6cdb8a119cac7942",
+            "8de82bd300b883d4",
+            "55c0bf8d9c5fca2e",
+            "5917eb3e8474052b",
+            "c59a7d99b8d1d344",
+            "843192a5c228c101",
+            "cc639836b615ce7f",
+            "192aedc969801a01",
+            "7126cc03ba483155"
+          ],
+          "retrieved_scores": [
+            1.0,
+            0.9838709677419354,
+            0.9606894841269841,
+            0.9177601809954751,
+            0.9112597547380157,
+            0.9077380952380951,
+            0.8916986769099445,
+            0.8842436974789916,
+            0.8742833742833743,
+            0.8673860427591771
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "What is the standard maximum nightly hotel reimbursement rate for business travel?",
+          "notes": "direct_lookup",
+          "relevant_ids": [
+            "03bcea6e41488c5e"
+          ],
+          "retrieved_ids": [
+            "03bcea6e41488c5e",
+            "abe47264d7c28509",
+            "c59a7d99b8d1d344",
+            "55c0bf8d9c5fca2e",
+            "effc54501452ddbc",
+            "5917eb3e8474052b",
+            "017cf4b71945ad14",
+            "1506654ac74de210",
+            "843192a5c228c101",
+            "1a6c12c4e9f7bdb6"
+          ],
+          "retrieved_scores": [
+            1.0,
+            0.9760624679979518,
+            0.9606894841269841,
+            0.9457932692307692,
+            0.9173450927182271,
+            0.9155465949820788,
+            0.8970588235294117,
+            0.8928418803418803,
+            0.8848013453857473,
+            0.8799294312992942
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "What TLS protocol version and certificate rotation interval apply to public and partner networks?",
+          "notes": "direct_lookup",
+          "relevant_ids": [
+            "7126cc03ba483155"
+          ],
+          "retrieved_ids": [
+            "7126cc03ba483155",
+            "cc639836b615ce7f",
+            "5917eb3e8474052b",
+            "8fad5bb26cc02766",
+            "c59a7d99b8d1d344",
+            "1506654ac74de210",
+            "6cdb8a119cac7942",
+            "dece03e7b5805589",
+            "94b6de503c05fc7c",
+            "8de82bd300b883d4"
+          ],
+          "retrieved_scores": [
+            1.0,
+            0.9540566959921798,
+            0.9137044489157166,
+            0.9077380952380951,
+            0.9061399647887324,
+            0.8986021505376345,
+            0.8905583972719522,
+            0.8799294312992942,
+            0.8730320997750971,
+            0.8626384493670886
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "What is the acknowledgment SLA for SEV-2 partial service degradation incidents?",
+          "notes": "direct_lookup",
+          "relevant_ids": [
+            "017cf4b71945ad14"
+          ],
+          "retrieved_ids": [
+            "017cf4b71945ad14",
+            "03bcea6e41488c5e",
+            "843192a5c228c101",
+            "abe47264d7c28509",
+            "effc54501452ddbc",
+            "93959a8727ad6fcb",
+            "192aedc969801a01",
+            "dece03e7b5805589",
+            "c59a7d99b8d1d344",
+            "8de82bd300b883d4"
+          ],
+          "retrieved_scores": [
+            1.0,
+            0.9606894841269841,
+            0.9471593644679827,
+            0.938683712121212,
+            0.8848013453857473,
+            0.8813929313929314,
+            0.8777432712215321,
+            0.8721405228758169,
+            0.8702029334940726,
+            0.866337630942788
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "Within how many business days must every SEV-1 and SEV-2 incident publish a blameless postmortem?",
+          "notes": "direct_lookup",
+          "relevant_ids": [
+            "c59a7d99b8d1d344"
+          ],
+          "retrieved_ids": [
+            "c59a7d99b8d1d344",
+            "017cf4b71945ad14",
+            "1506654ac74de210",
+            "7126cc03ba483155",
+            "843192a5c228c101",
+            "1a6c12c4e9f7bdb6",
+            "5917eb3e8474052b",
+            "cc639836b615ce7f",
+            "6cdb8a119cac7942",
+            "09eb968a73cb587c"
+          ],
+          "retrieved_scores": [
+            1.0,
+            0.9838709677419354,
+            0.9533577533577533,
+            0.938683712121212,
+            0.9250919117647058,
+            0.9198412698412697,
+            0.9112597547380157,
+            0.910650623885918,
+            0.8972528661042612,
+            0.8673860427591771
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "What is the annual gift limit for employees participating in vendor evaluations?",
+          "notes": "direct_lookup",
+          "relevant_ids": [
+            "8fad5bb26cc02766"
+          ],
+          "retrieved_ids": [
+            "8fad5bb26cc02766",
+            "fb2c4aae62cee946",
+            "1a6c12c4e9f7bdb6",
+            "55c0bf8d9c5fca2e",
+            "93959a8727ad6fcb",
+            "6cdb8a119cac7942",
+            "94b6de503c05fc7c",
+            "03bcea6e41488c5e",
+            "effc54501452ddbc",
+            "7126cc03ba483155"
+          ],
+          "retrieved_scores": [
+            0.9919354838709679,
+            0.9606894841269841,
+            0.9540566959921798,
+            0.9357142857142857,
+            0.9037532923617206,
+            0.8802308802308801,
+            0.8726663961038961,
+            0.8673860427591771,
+            0.8634370015948962,
+            0.8602564102564102
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "How much workspace hardware allowance can staff claim yearly for working remotely?",
+          "notes": "paraphrased",
+          "relevant_ids": [
+            "6cdb8a119cac7942"
+          ],
+          "retrieved_ids": [
+            "dece03e7b5805589",
+            "8de82bd300b883d4",
+            "effc54501452ddbc",
+            "8fad5bb26cc02766",
+            "abe47264d7c28509",
+            "cc639836b615ce7f",
+            "7126cc03ba483155",
+            "03bcea6e41488c5e",
+            "6cdb8a119cac7942",
+            "93959a8727ad6fcb"
+          ],
+          "retrieved_scores": [
+            0.9841269841269842,
+            0.9765625000000001,
+            0.961166253101737,
+            0.9339644693782141,
+            0.9244546498277841,
+            0.8916986769099445,
+            0.8909381663113005,
+            0.8799294312992942,
+            0.8726663961038961,
+            0.8721405228758169
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.0,
+            "5": 0.0,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 0.0,
+            "5": 0.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 0.1111111111111111
+        },
+        {
+          "question": "How many competing quotes are needed to justify waiving airfare or hotel cost limits?",
+          "notes": "paraphrased",
+          "relevant_ids": [
+            "abe47264d7c28509"
+          ],
+          "retrieved_ids": [
+            "03bcea6e41488c5e",
+            "abe47264d7c28509",
+            "fb2c4aae62cee946",
+            "6cdb8a119cac7942",
+            "effc54501452ddbc",
+            "8de82bd300b883d4",
+            "09eb968a73cb587c",
+            "dece03e7b5805589",
+            "1506654ac74de210",
+            "c59a7d99b8d1d344"
+          ],
+          "retrieved_scores": [
+            0.9841269841269842,
+            0.9339644693782141,
+            0.9173450927182271,
+            0.9077380952380951,
+            0.9066666666666666,
+            0.9041501976284585,
+            0.8943707191780821,
+            0.8880393799748638,
+            0.8870389884088514,
+            0.8778782894736842
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 0.5
+        },
+        {
+          "question": "Are temporary staff without managed device enrollment allowed administrator access or VPN logins?",
+          "notes": "paraphrased",
+          "relevant_ids": [
+            "94b6de503c05fc7c"
+          ],
+          "retrieved_ids": [
+            "94b6de503c05fc7c",
+            "6cdb8a119cac7942",
+            "7126cc03ba483155",
+            "8fad5bb26cc02766",
+            "1a6c12c4e9f7bdb6",
+            "dece03e7b5805589",
+            "8de82bd300b883d4",
+            "cc639836b615ce7f",
+            "09eb968a73cb587c",
+            "017cf4b71945ad14"
+          ],
+          "retrieved_scores": [
+            0.9841269841269842,
+            0.9765625000000001,
+            0.910650623885918,
+            0.8907936507936508,
+            0.8857323232323232,
+            0.8829611248966087,
+            0.8813929313929314,
+            0.8716064502959787,
+            0.8714285714285713,
+            0.851327776700911
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "How long must immutable security audit telemetry logs remain retained in cold archival storage?",
+          "notes": "paraphrased",
+          "relevant_ids": [
+            "cc639836b615ce7f"
+          ],
+          "retrieved_ids": [
+            "cc639836b615ce7f",
+            "09eb968a73cb587c",
+            "192aedc969801a01",
+            "55c0bf8d9c5fca2e",
+            "7126cc03ba483155",
+            "843192a5c228c101",
+            "dece03e7b5805589",
+            "94b6de503c05fc7c",
+            "fb2c4aae62cee946",
+            "effc54501452ddbc"
+          ],
+          "retrieved_scores": [
+            0.9841269841269842,
+            0.9621212121212123,
+            0.9276497695852534,
+            0.9244546498277841,
+            0.9198412698412697,
+            0.9185914855072463,
+            0.8943707191780821,
+            0.8829611248966087,
+            0.8781068765534382,
+            0.8705465587044534
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "Who is permitted to issue public advisories or share incident logs externally during a security event?",
+          "notes": "paraphrased",
+          "relevant_ids": [
+            "09eb968a73cb587c"
+          ],
+          "retrieved_ids": [
+            "09eb968a73cb587c",
+            "843192a5c228c101",
+            "017cf4b71945ad14",
+            "5917eb3e8474052b",
+            "c59a7d99b8d1d344",
+            "cc639836b615ce7f",
+            "55c0bf8d9c5fca2e",
+            "7126cc03ba483155",
+            "effc54501452ddbc",
+            "1a6c12c4e9f7bdb6"
+          ],
+          "retrieved_scores": [
+            1.0,
+            0.9684979838709676,
+            0.9682539682539681,
+            0.9215129486597001,
+            0.9177601809954751,
+            0.9041501976284585,
+            0.9037532923617206,
+            0.8832291666666667,
+            0.8813929313929314,
+            0.8565396700706991
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "How far ahead of automatic contract renewal must pricey software subscriptions undergo value review?",
+          "notes": "paraphrased",
+          "relevant_ids": [
+            "55c0bf8d9c5fca2e"
+          ],
+          "retrieved_ids": [
+            "effc54501452ddbc",
+            "55c0bf8d9c5fca2e",
+            "8fad5bb26cc02766",
+            "5917eb3e8474052b",
+            "843192a5c228c101",
+            "c59a7d99b8d1d344",
+            "1a6c12c4e9f7bdb6",
+            "8de82bd300b883d4",
+            "93959a8727ad6fcb",
+            "7126cc03ba483155"
+          ],
+          "retrieved_scores": [
+            0.9838709677419354,
+            0.9621212121212123,
+            0.938683712121212,
+            0.9261559696342305,
+            0.9049450549450548,
+            0.8943707191780821,
+            0.8854427736006683,
+            0.8842436974789916,
+            0.875897435897436,
+            0.8721405228758169
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 0.5
+        },
+        {
+          "question": "Control SEC-101 AES-256 KMS-401 encryption requirements for confidential datasets",
+          "notes": "exact_identifier",
+          "relevant_ids": [
+            "7126cc03ba483155"
+          ],
+          "retrieved_ids": [
+            "7126cc03ba483155",
+            "cc639836b615ce7f",
+            "93959a8727ad6fcb",
+            "94b6de503c05fc7c",
+            "effc54501452ddbc",
+            "843192a5c228c101",
+            "8de82bd300b883d4",
+            "03bcea6e41488c5e",
+            "abe47264d7c28509",
+            "dece03e7b5805589"
+          ],
+          "retrieved_scores": [
+            1.0,
+            0.9838709677419354,
+            0.9457932692307692,
+            0.9173450927182271,
+            0.9173450927182271,
+            0.9137044489157166,
+            0.9122767857142856,
+            0.8905583972719522,
+            0.8905583972719522,
+            0.8593253968253967
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "PAM-08 privilege elevation duration and BREAKGLASS-99 session rotation protocol",
+          "notes": "exact_identifier",
+          "relevant_ids": [
+            "dece03e7b5805589"
+          ],
+          "retrieved_ids": [
+            "dece03e7b5805589",
+            "effc54501452ddbc",
+            "5917eb3e8474052b",
+            "843192a5c228c101",
+            "c59a7d99b8d1d344",
+            "8fad5bb26cc02766",
+            "8de82bd300b883d4",
+            "192aedc969801a01",
+            "93959a8727ad6fcb",
+            "fb2c4aae62cee946"
+          ],
+          "retrieved_scores": [
+            0.9919354838709679,
+            0.9760624679979518,
+            0.9457932692307692,
+            0.9326563958916899,
+            0.923611111111111,
+            0.8943707191780821,
+            0.8848013453857473,
+            0.8842436974789916,
+            0.8777432712215321,
+            0.8673860427591771
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "Playbook IR-RB-012 IR-15M SLA and CHANGE-404 maintenance window rule",
+          "notes": "exact_identifier",
+          "relevant_ids": [
+            "017cf4b71945ad14"
+          ],
+          "retrieved_ids": [
+            "017cf4b71945ad14",
+            "843192a5c228c101",
+            "1506654ac74de210",
+            "09eb968a73cb587c",
+            "8de82bd300b883d4",
+            "8fad5bb26cc02766",
+            "93959a8727ad6fcb",
+            "5917eb3e8474052b",
+            "c59a7d99b8d1d344",
+            "cc639836b615ce7f"
+          ],
+          "retrieved_scores": [
+            1.0,
+            0.9684979838709676,
+            0.9682539682539681,
+            0.9122767857142856,
+            0.9037532923617206,
+            0.8986021505376345,
+            0.8909381663113005,
+            0.8813929313929314,
+            0.8799294312992942,
+            0.8799294312992942
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "DPO-24H escalation and REG-72H supervisory notification timelines",
+          "notes": "exact_identifier",
+          "relevant_ids": [
+            "5917eb3e8474052b"
+          ],
+          "retrieved_ids": [
+            "5917eb3e8474052b",
+            "192aedc969801a01",
+            "8de82bd300b883d4",
+            "09eb968a73cb587c",
+            "03bcea6e41488c5e",
+            "effc54501452ddbc",
+            "94b6de503c05fc7c",
+            "dece03e7b5805589",
+            "017cf4b71945ad14",
+            "c59a7d99b8d1d344"
+          ],
+          "retrieved_scores": [
+            0.9841269841269842,
+            0.9765625000000001,
+            0.9760624679979518,
+            0.9540566959921798,
+            0.9384615384615385,
+            0.9037532923617206,
+            0.900173611111111,
+            0.8565396700706991,
+            0.8551960784313725,
+            0.8541911476694086
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "Control PROC-204 SOC2-II attestation and SEC-REV-30 vendor onboarding",
+          "notes": "exact_identifier",
+          "relevant_ids": [
+            "fb2c4aae62cee946"
+          ],
+          "retrieved_ids": [
+            "fb2c4aae62cee946",
+            "effc54501452ddbc",
+            "93959a8727ad6fcb",
+            "1506654ac74de210",
+            "09eb968a73cb587c",
+            "7126cc03ba483155",
+            "55c0bf8d9c5fca2e",
+            "8de82bd300b883d4",
+            "03bcea6e41488c5e",
+            "017cf4b71945ad14"
+          ],
+          "retrieved_scores": [
+            1.0,
+            0.9471593644679827,
+            0.9462481962481962,
+            0.9326563958916899,
+            0.9097437030490498,
+            0.8726663961038961,
+            0.8673860427591771,
+            0.8656400966183575,
+            0.8652917505030181,
+            0.8602564102564102
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "Fast-track EMERG-PO-09 cloud capacity authorization during active IR-RB-012 SEV-1 outage",
+          "notes": "exact_identifier",
+          "relevant_ids": [
+            "1506654ac74de210"
+          ],
+          "retrieved_ids": [
+            "1506654ac74de210",
+            "017cf4b71945ad14",
+            "843192a5c228c101",
+            "c59a7d99b8d1d344",
+            "fb2c4aae62cee946",
+            "55c0bf8d9c5fca2e",
+            "effc54501452ddbc",
+            "94b6de503c05fc7c",
+            "7126cc03ba483155",
+            "6cdb8a119cac7942"
+          ],
+          "retrieved_scores": [
+            1.0,
+            0.9760624679979518,
+            0.961166253101737,
+            0.9317863805970149,
+            0.9173450927182271,
+            0.9061399647887324,
+            0.8602564102564102,
+            0.8551960784313725,
+            0.4841269841269841,
+            0.4621212121212121
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "Are new employees during their initial 90-day probationary period entitled to 20 days annual leave, and what is the seasonal contract carry-over exception?",
+          "notes": "rule_and_exception",
+          "relevant_ids": [
+            "1a6c12c4e9f7bdb6"
+          ],
+          "retrieved_ids": [
+            "1a6c12c4e9f7bdb6",
+            "6cdb8a119cac7942",
+            "8de82bd300b883d4",
+            "192aedc969801a01",
+            "8fad5bb26cc02766",
+            "03bcea6e41488c5e",
+            "1506654ac74de210",
+            "017cf4b71945ad14",
+            "5917eb3e8474052b",
+            "c59a7d99b8d1d344"
+          ],
+          "retrieved_scores": [
+            1.0,
+            0.9760624679979518,
+            0.9462481962481962,
+            0.9177601809954751,
+            0.8943707191780821,
+            0.8848013453857473,
+            0.8848013453857473,
+            0.8840579710144927,
+            0.8832291666666667,
+            0.8829611248966087
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "Are part-time contractors working fewer than 15 hours per week entitled to paid sabbatical leave, and what approval exception applies in medical emergencies?",
+          "notes": "rule_and_exception",
+          "relevant_ids": [
+            "8de82bd300b883d4",
+            "192aedc969801a01"
+          ],
+          "retrieved_ids": [
+            "8de82bd300b883d4",
+            "1a6c12c4e9f7bdb6",
+            "192aedc969801a01",
+            "94b6de503c05fc7c",
+            "6cdb8a119cac7942",
+            "abe47264d7c28509",
+            "03bcea6e41488c5e",
+            "5917eb3e8474052b",
+            "effc54501452ddbc",
+            "dece03e7b5805589"
+          ],
+          "retrieved_scores": [
+            1.0,
+            0.9760624679979518,
+            0.9471593644679827,
+            0.9317863805970149,
+            0.9185914855072463,
+            0.910650623885918,
+            0.9049450549450548,
+            0.9041501976284585,
+            0.8988082340195017,
+            0.8854427736006683
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.6666666666666666,
+            "5": 0.4,
+            "10": 0.2
+          },
+          "recall_at_k": {
+            "1": 0.5,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "Under what medical accommodation exception can domestic flights bypass economy class airfare rules?",
+          "notes": "rule_and_exception",
+          "relevant_ids": [
+            "03bcea6e41488c5e"
+          ],
+          "retrieved_ids": [
+            "abe47264d7c28509",
+            "03bcea6e41488c5e",
+            "192aedc969801a01",
+            "8de82bd300b883d4",
+            "5917eb3e8474052b",
+            "fb2c4aae62cee946",
+            "843192a5c228c101",
+            "1506654ac74de210",
+            "55c0bf8d9c5fca2e",
+            "cc639836b615ce7f"
+          ],
+          "retrieved_scores": [
+            0.9919354838709679,
+            0.9765625000000001,
+            0.939350864723999,
+            0.938683712121212,
+            0.9177601809954751,
+            0.9097437030490498,
+            0.878834991708126,
+            0.8652917505030181,
+            0.8598372046853285,
+            0.8531468531468531
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 0.5
+        },
+        {
+          "question": "Can new software vendors access pilot environments before full SEC-REV-30 onboarding when compensating network isolation is active?",
+          "notes": "rule_and_exception",
+          "relevant_ids": [
+            "effc54501452ddbc"
+          ],
+          "retrieved_ids": [
+            "effc54501452ddbc",
+            "fb2c4aae62cee946",
+            "843192a5c228c101",
+            "03bcea6e41488c5e",
+            "dece03e7b5805589",
+            "017cf4b71945ad14",
+            "1506654ac74de210",
+            "c59a7d99b8d1d344",
+            "55c0bf8d9c5fca2e",
+            "abe47264d7c28509"
+          ],
+          "retrieved_scores": [
+            1.0,
+            0.9540566959921798,
+            0.953125,
+            0.9173450927182271,
+            0.9112597547380157,
+            0.9040976460331299,
+            0.9019352033050663,
+            0.8970588235294117,
+            0.8909381663113005,
+            0.875897435897436
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "When rotating KMS-401 keys under KEY-ROT-4H, what condition applies regarding PAM-08 active session tokens?",
+          "notes": "rule_and_exception",
+          "relevant_ids": [
+            "843192a5c228c101"
+          ],
+          "retrieved_ids": [
+            "843192a5c228c101",
+            "effc54501452ddbc",
+            "dece03e7b5805589",
+            "cc639836b615ce7f",
+            "55c0bf8d9c5fca2e",
+            "7126cc03ba483155",
+            "1506654ac74de210",
+            "c59a7d99b8d1d344",
+            "017cf4b71945ad14",
+            "fb2c4aae62cee946"
+          ],
+          "retrieved_scores": [
+            1.0,
+            0.9684979838709676,
+            0.9326563958916899,
+            0.9244546498277841,
+            0.9215129486597001,
+            0.9061399647887324,
+            0.8972528661042612,
+            0.8928418803418803,
+            0.8854427736006683,
+            0.8742833742833743
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        },
+        {
+          "question": "When do expenditures above PO-5000 and PO-25000 bypass three competitive vendor bids under PROC-101?",
+          "notes": "rule_and_exception",
+          "relevant_ids": [
+            "93959a8727ad6fcb"
+          ],
+          "retrieved_ids": [
+            "93959a8727ad6fcb",
+            "fb2c4aae62cee946",
+            "843192a5c228c101",
+            "03bcea6e41488c5e",
+            "8fad5bb26cc02766",
+            "cc639836b615ce7f",
+            "94b6de503c05fc7c",
+            "55c0bf8d9c5fca2e",
+            "7126cc03ba483155",
+            "5917eb3e8474052b"
+          ],
+          "retrieved_scores": [
+            1.0,
+            0.9684979838709676,
+            0.9682539682539681,
+            0.9339644693782141,
+            0.9177601809954751,
+            0.8978354978354978,
+            0.8943707191780821,
+            0.8916986769099445,
+            0.8813929313929314,
+            0.8777432712215321
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 1.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          },
+          "reciprocal_rank": 1.0
+        }
+      ]
+    }
+  }
+}

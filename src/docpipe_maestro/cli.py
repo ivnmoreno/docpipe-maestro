@@ -7,9 +7,9 @@ import json
 import math
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dotenv import load_dotenv
 
@@ -23,6 +23,9 @@ from docpipe_maestro.config import (
 )
 from docpipe_maestro.embedder import DEFAULT_REQUEST_TIMEOUT
 from docpipe_maestro.types import DocpipeError
+
+if TYPE_CHECKING:
+    from docpipe_maestro.types import EvalReport
 
 
 def _load_cli_dotenv(config_path: str | None) -> None:
@@ -119,6 +122,20 @@ def _cfg_opt_float(cfg: dict[str, Any], key: str) -> float | None:
     return float(val)
 
 
+class _StoreExplicitCollection(argparse.Action):
+    """Store ``--collection`` value while recording explicit CLI flag presence."""
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: Any,
+        option_string: str | None = None,
+    ) -> None:
+        setattr(namespace, self.dest, values)
+        namespace._collection_explicit = True
+
+
 def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentParser:
     """Construct the ``docpipe-maestro`` CLI parser with shared global options.
 
@@ -146,6 +163,7 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         prog="docpipe-maestro",
         description="Minimal, structure-aware RAG pipeline CLI.",
     )
+    parser.set_defaults(_collection_explicit=False)
     parser.add_argument("--version", action="version", version=f"docpipe-maestro {__version__}")
     parser.add_argument("--config", default=None, help="Optional TOML config file path")
     parser.add_argument(
@@ -154,7 +172,12 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         default=False,
         help="Ignore CWD docpipe.toml and --config TOML defaults",
     )
-    parser.add_argument("--collection", default=default_collection, help="Target collection name")
+    parser.add_argument(
+        "--collection",
+        action=_StoreExplicitCollection,
+        default=default_collection,
+        help="Target collection name",
+    )
     parser.add_argument("--persist-dir", default=default_persist_dir, help="Local store directory")
 
     # Shared parent parser so global flags work both before and after any subcommand
@@ -168,7 +191,12 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         default=argparse.SUPPRESS,
         help="Ignore CWD docpipe.toml and --config TOML defaults",
     )
-    common.add_argument("--collection", default=argparse.SUPPRESS, help="Target collection name")
+    common.add_argument(
+        "--collection",
+        action=_StoreExplicitCollection,
+        default=argparse.SUPPRESS,
+        help="Target collection name",
+    )
     common.add_argument("--persist-dir", default=argparse.SUPPRESS, help="Local store directory")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -292,6 +320,42 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         help="Emit structured JSON with answer, truncation flag, token usage, and sources",
     )
 
+    # Phase 2: eval
+    p_eval = subparsers.add_parser(
+        "eval",
+        parents=[common],
+        help="Evaluate retrieval quality read-only against a ground-truth fixture",
+    )
+    p_eval.add_argument("--fixture", required=True, help="Path to evaluation JSON fixture")
+    p_eval.add_argument(
+        "--k",
+        action="extend",
+        nargs="+",
+        type=int,
+        default=None,
+        dest="k_values",
+        help="Positive ranking cutoff(s) K (default: 1 3 5 10)",
+    )
+    p_eval.add_argument("--embed-model", default=default_embed_model, help="Embedding model")
+    p_eval.add_argument(
+        "--searcher",
+        default=default_searcher,
+        help="Registered retrieval searcher strategy (e.g., default, fts5_hybrid)",
+    )
+    p_eval.add_argument(
+        "--expand-parent",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Expand matched children to parent sections",
+    )
+    p_eval.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        default=False,
+        help="Emit structured EvalReport JSON output",
+    )
+
     return parser
 
 
@@ -381,6 +445,80 @@ def _handle_ask(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_eval_collection(
+    args: argparse.Namespace,
+    loaded_fixture: Mapping[str, Any],
+    cfg_collection: str | None,
+) -> str:
+    """Resolve target collection strictly: explicit CLI > fixture > TOML > global default."""
+    if getattr(args, "_collection_explicit", False):
+        return str(args.collection)
+    fixture_collection = str(loaded_fixture.get("collection", "")).strip()
+    if fixture_collection:
+        return fixture_collection
+    if cfg_collection is not None and cfg_collection.strip():
+        return cfg_collection.strip()
+    return DEFAULT_COLLECTION
+
+
+def _format_eval_text(report: EvalReport) -> str:
+    """Render an aligned terminal summary of an ``EvalReport``."""
+    cfg = report["config"]
+    agg = report["aggregate"]
+    lines = [
+        (
+            f"Collection: {cfg['collection']} | Model: {cfg['embed_model']} | "
+            f"Searcher: {cfg['searcher']} | Expand Parent: {cfg['expand_parent']}"
+        ),
+        f"Queries: {agg['num_queries']} | MRR: {agg['mrr']:.4f}",
+        "",
+        "K   | Precision@K | Recall@K",
+        "----+-------------+---------",
+    ]
+    for k in cfg["k_values"]:
+        ks = str(k)
+        lines.append(f"{k:<3d} | {agg['precision_at_k'][ks]:<11.4f} | {agg['recall_at_k'][ks]:.4f}")
+    max_k_key = str(cfg["k_values"][-1])
+    lines.append("")
+    lines.append("Per-Query Diagnostics:")
+    for item in report["per_query"]:
+        rr = item["reciprocal_rank"]
+        rank_str = f"rank={round(1.0 / rr)}" if rr > 0.0 else "miss"
+        p_max = item["precision_at_k"][max_k_key]
+        lines.append(
+            f"  [{rank_str}] MRR={rr:.4f} | P@{max_k_key}={p_max:.4f} | {item['question']}"
+        )
+    return "\n".join(lines)
+
+
+def _handle_eval(args: argparse.Namespace, *, cfg_collection: str | None) -> int:
+    """Execute the ``eval`` subcommand read-only with lazy harness imports."""
+    from docpipe_maestro.eval.harness import (
+        DEFAULT_EVAL_K_VALUES,
+        evaluate,
+        load_eval_fixture,
+    )
+
+    loaded_fixture = load_eval_fixture(args.fixture)
+    resolved_collection = _resolve_eval_collection(args, loaded_fixture, cfg_collection)
+    k_values = DEFAULT_EVAL_K_VALUES if args.k_values is None else args.k_values
+
+    report = evaluate(
+        loaded_fixture,
+        collection=resolved_collection,
+        persist_dir=args.persist_dir,
+        embed_model=args.embed_model,
+        k_values=k_values,
+        expand_parent=args.expand_parent,
+        searcher=args.searcher,
+    )
+    if args.as_json:
+        print(json.dumps(report, indent=2))
+    else:
+        print(_format_eval_text(report))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the ``docpipe-maestro`` CLI entry point and return a process exit code.
 
@@ -398,6 +536,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         effective_cfg = None if known.no_config else known.config
         _load_cli_dotenv(effective_cfg)
         cfg_defaults = _load_toml_config(known.config, no_config=known.no_config)
+        cfg_collection = _cfg_opt_str(cfg_defaults, "collection")
         parser = build_parser(cfg_defaults)
         args = parser.parse_args(arg_list)
 
@@ -552,6 +691,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.command == "ask":
             return _handle_ask(args)
+
+        if args.command == "eval":
+            return _handle_eval(args, cfg_collection=cfg_collection)
     except (DocpipeError, ValueError, TypeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

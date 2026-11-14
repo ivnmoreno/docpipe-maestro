@@ -417,3 +417,45 @@ def rag_answer(question: str, *, collection: str) -> tuple[str, list[str]]:
     except (UnsupportedFormatError, DocpipeError) as exc:
         raise RuntimeError(f"RAG pipeline error: {exc}") from exc
 ```
+
+---
+
+## 6. Phase 2 Retrieval Evaluation Harness (`docpipe_maestro.eval`)
+
+Offline/local retrieval ranking metrics and read-only fixture evaluation live in the dedicated `docpipe_maestro.eval` subpackage (keeping the 33-symbol top-level `docpipe_maestro.__all__` contract unchanged). Zero config/TOML discovery occurs inside the subpackage: callers pass `persist_dir` and `collection` explicitly.
+
+```python
+from docpipe_maestro.eval import (
+    DEFAULT_EVAL_K_VALUES,
+    EvalConfig,
+    EvalFixture,
+    EvalMetricsSummary,
+    EvalQuery,
+    EvalReport,
+    PerQueryResult,
+    evaluate,
+    load_eval_fixture,
+    normalize_k_values,
+    precision_at_k,
+    recall_at_k,
+    reciprocal_rank,
+)
+```
+
+### Pure Metrics (`docpipe_maestro.eval.metrics`)
+
+- `normalize_k_values(k_values: Sequence[int]) -> tuple[int, ...]`: Validates positive non-boolean integers, deduplicates, and sorts ascending (`[10, 3, 3]` -> `(3, 10)`); raises `ValueError` on empty sequences or `k <= 0`.
+- `precision_at_k(retrieved_ids, relevant_ids, k) -> float`: Unique relevant hits in `retrieved_ids[:k]` divided by fixed cutoff `k` (`0.0` if inputs empty).
+- `recall_at_k(retrieved_ids, relevant_ids, k) -> float`: Standard IR recall dividing unique top-`k` hits by `len(frozenset(relevant_ids))` (`0.0` if inputs empty).
+- `reciprocal_rank(retrieved_ids, relevant_ids) -> float`: `1.0 / rank` for the first relevant ID in `retrieved_ids`, or `0.0`.
+
+### Read-Only Runner (`docpipe_maestro.eval.harness`)
+
+- `load_eval_fixture(fixture: str | Path | EvalFixture) -> EvalFixture`: Loads and normalizes a JSON file or mapping without mutating caller inputs; raises `DocpipeError` on missing files, malformed JSON, empty `queries`, blank `question`, or empty/blank `relevant_ids`.
+- `evaluate(fixture, *, collection=None, persist_dir=".docpipe", embed_model="ollama/nomic-embed-text", k_values=(1, 3, 5, 10), expand_parent=True, follow_crossrefs=True, threshold=None, embedder="default", store="default", searcher="default", **retrieve_kwargs) -> EvalReport`:
+  1. Validates `k_values`, finite `threshold` (`[0.0, 1.0]`), fixture schema, and stage selectors (`EMBEDDERS`, `STORES`, `SEARCHERS`) upfront.
+  2. Resolves target collection: explicit non-`None` `collection` `>` non-empty `fixture["collection"]` `>` `"default"`.
+  3. Checks `manifest_path.exists()`, `check_model_lock()`, and committed sources **before** touching `ChromaStore` so missing or empty collections cause zero disk mutations.
+  4. Executes `retrieve(..., top_k=max(k_values))` once per query read-only and returns `EvalReport` (`config`, `aggregate`, `per_query`).
+
+Canonical `TypedDict` schemas (`EvalQuery`, `EvalFixture`, `EvalConfig`, `PerQueryResult`, `EvalMetricsSummary`, `EvalReport`) are defined once in [`src/docpipe_maestro/types.py`](../src/docpipe_maestro/types.py) and re-exported by `docpipe_maestro.eval`.
