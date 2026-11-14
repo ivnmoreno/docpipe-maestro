@@ -195,7 +195,8 @@ class ChunkingProfile:
         overlap: Trailing word-token overlap carried within the same parent section.
         clause_preserving: If ``True``, numbered/labeled clauses are never split mid-clause.
         parent_child: Whether parent sections are emitted alongside linked child chunks.
-        resolve_crossrefs: Whether intra-document cross-references are appended to sections.
+        resolve_crossrefs: Whether intra-document cross-references are enabled by default.
+        enrichers: Ordered registry keys executed post-clean and pre-chunk.
     """
 
     name: str
@@ -204,6 +205,13 @@ class ChunkingProfile:
     clause_preserving: bool
     parent_child: bool
     resolve_crossrefs: bool
+    enrichers: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        normalized = tuple(self.enrichers)
+        if self.resolve_crossrefs and not normalized:
+            normalized = ("crossrefs",)
+        object.__setattr__(self, "enrichers", normalized)
 
 
 @dataclass(slots=True)

@@ -314,11 +314,12 @@ Built-in profiles are immutable presets (`docpipe_maestro.config`) calibrated fo
 | **Chunk Overlap** | ~64 tokens (scoped within section) | ~80 tokens (scoped within section) |
 | **Clause Preservation** | Disabled (splits on sentences/paragraphs) | **Enabled** (never splits inside detected numbered clauses; PDF clause detection is heuristic) |
 | **Cross-Reference Resolution** | Disabled | **Enabled** (resolves `§2.1`, `Section 4`, `Clause 3.2`) |
+| **Enrichers (`enrichers`)** | `()` (skipped) | `("crossrefs",)` |
 | **Parent-Child Expansion** | Enabled | **Enabled** |
 
 > **Note on PDF Clause Detection**: Markdown, DOCX, and HTML headings/numbering provide explicit structural boundaries, whereas PDF clause detection uses extracted-text heuristics (`1.1`, `Clause 2`, `(a)` layout cues) and depends on clean PDF text extraction order.
 
-In Python, you can also pass a custom [`ChunkingProfile`](docs/api-reference.md) instance directly to `ingest(..., profile=custom_profile)` or `sync(...)`.
+In Python, you can also pass a custom [`ChunkingProfile`](docs/api-reference.md) instance directly to `ingest(..., profile=custom_profile)` or `sync(...)`, and configure ordered post-clean enrichers via `profile.enrichers` and `@register_enricher`.
 
 ---
 
@@ -643,11 +644,12 @@ docpipe-maestro/
 │   ├── py.typed             # PEP 561 typed package marker
 │   ├── cli.py               # `docpipe-maestro` CLI + TOML config loader
 │   ├── config.py            # Default constants & immutable chunking profiles
+│   ├── _crossrefs.py        # Shared phase-neutral cross-reference matching & excerpt helpers
 │   ├── embedder/            # Batched LiteLLM embedding adapter & registry
 │   ├── manifest.py          # Atomic sha256/mtime JSON manifest & model lock
 │   ├── store/               # ChromaDB vector store (`chroma.py`) & SQLite FTS5 (`lexical.py`)
 │   ├── types.py             # Dataclasses, TypedDicts & DocpipeError hierarchy
-│   ├── ingest/              # Phase 1: intake/, clean/, crossrefs, chunker/, enricher/, pipeline
+│   ├── ingest/              # Phase 1: intake/, clean/, enricher/, chunker/, pipeline, compat crossrefs
 │   ├── query/               # Phase 2: searcher/ (`default`, `fts5_hybrid`), reranker/ (`cross_encoder`), retriever, prompts, answer
 │   └── eval/                # Phase 2: offline metrics (`metrics.py`) & read-only runner (`harness.py`)
 ├── tests/                   # Unit, integration, security & reverse-safety suites

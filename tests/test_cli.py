@@ -1287,3 +1287,96 @@ def test_cli_eval_rerank_flags_toml_header_and_errors(
     finally:
         RERANKERS._entries = saved_entries
         RERANKERS._lazy_builtins = saved_lazy
+
+
+def test_cli_policy_profile_runs_crossrefs_and_enricher_error_exits_1(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """CLI ingest --profile POLICY runs CrossrefsEnricher and enricher errors exit 1."""
+    from docpipe_maestro.config import PROFILES
+    from docpipe_maestro.ingest.enricher import ENRICHERS, register_enricher
+    from docpipe_maestro.store import VectorStore
+    from docpipe_maestro.types import ChunkingProfile, DocpipeError, IngestContext, ParsedDocument
+
+    _ = mock_litellm_offline
+    doc = tmp_path / "cli_policy.md"
+    doc.write_text(
+        "## Section 1: Retention\n\n"
+        "1.1 Isolate logs and follow Section 2.\n\n"
+        "## Section 2: Exceptions\n\n"
+        "2.1 Executive backups remain offline unless audited.\n",
+        encoding="utf-8",
+    )
+
+    rc_ingest = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "--collection",
+            "cli_policy_col",
+            "ingest",
+            str(doc),
+            "--profile",
+            "POLICY",
+        ]
+    )
+    assert rc_ingest == 0
+    _ = capsys.readouterr()
+
+    stored_text = "\n".join(
+        c.text for c in VectorStore(tmp_persist_dir, "cli_policy_col").get_all_children()
+    )
+    assert "[Crossref Section 2:" in stored_text
+    assert "Executive backups remain offline" in stored_text
+
+    saved_entries = dict(ENRICHERS._entries)
+    saved_lazy = dict(ENRICHERS._lazy_builtins)
+    saved_mat = set(ENRICHERS._materializing)
+    try:
+
+        @register_enricher("boom_cli")
+        class _CliBoomEnricher:
+            name = "boom_cli"
+
+            def enrich(self, doc_in: ParsedDocument, ctx: IngestContext) -> ParsedDocument:
+                _ = (doc_in, ctx)
+                raise DocpipeError("Enricher validation halted CLI run")
+
+        boom_profile = ChunkingProfile(
+            name="BOOM_CLI",
+            chunk_size=1000,
+            overlap=80,
+            clause_preserving=False,
+            parent_child=False,
+            resolve_crossrefs=False,
+            enrichers=("boom_cli",),
+        )
+        cfg = tmp_path / "cli_boom.toml"
+        cfg.write_text(
+            f'persist_dir = "{tmp_persist_dir.as_posix()}"\ncollection = "cli_boom_col"\n',
+            encoding="utf-8",
+        )
+        with patch.dict(PROFILES, {"BOOM_CLI": boom_profile}):
+            rc_err = main(
+                [
+                    "--config",
+                    str(cfg),
+                    "ingest",
+                    str(doc),
+                    "--profile",
+                    "BOOM_CLI",
+                ]
+            )
+        captured = capsys.readouterr()
+        assert rc_err == 1
+        assert captured.out == ""
+        assert "Error: Enricher validation halted CLI run" in captured.err
+        assert len(captured.err.strip().splitlines()) == 1
+    finally:
+        ENRICHERS._entries = saved_entries
+        ENRICHERS._lazy_builtins = saved_lazy
+        ENRICHERS._materializing = saved_mat

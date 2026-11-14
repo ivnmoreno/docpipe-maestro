@@ -37,13 +37,14 @@ from docpipe_maestro.ingest.stages import Chunker, Cleaner, Enricher, Parser
 from docpipe_maestro.query.reranker import RERANKERS
 from docpipe_maestro.query.searcher import SEARCHERS
 from docpipe_maestro.query.stages import Reranker, Searcher
-from docpipe_maestro.store import STORES
+from docpipe_maestro.store import STORES, VectorStore
 from docpipe_maestro.types import (
     Chunk,
     ChunkingProfile,
     ChunkMetadata,
     DocpipeError,
     EmbeddedChunk,
+    IngestContext,
     ParsedDocument,
     ParsedSection,
     RetrievedChunk,
@@ -525,17 +526,13 @@ def test_top_level_eight_registries_empty_defaults_and_protocol_conformance(
     # Subpackage imports from test setup must never shadow callable root.ingest
     assert callable(root.ingest)
 
-    empty_registries: list[tuple[Registry[Any], Any, str]] = [
-        (ENRICHERS, register_enricher, "enricher"),
-    ]
-    for reg, decorator, empty_msg_name in empty_registries:
-        assert reg.keys() == []
-        with pytest.raises(
-            root.RegistryError,
-            match=rf"registry '{empty_msg_name}' has no entry 'missing' \(available: <empty>\)",
-        ):
-            reg.resolve("missing")
-        assert callable(decorator)
+    assert ENRICHERS.keys() == ["crossrefs"]
+    assert callable(register_enricher)
+    with pytest.raises(
+        root.RegistryError,
+        match=r"registry 'enricher' has no entry 'missing' \(available: crossrefs\)",
+    ):
+        ENRICHERS.resolve("missing")
 
     assert SEARCHERS.keys() == ["default", "fts5_hybrid"]
     with pytest.raises(
@@ -610,6 +607,9 @@ def test_top_level_eight_registries_empty_defaults_and_protocol_conformance(
     reranker_keys = RERANKERS.keys()
     for key in reranker_keys:
         assert isinstance(RERANKERS.resolve(key)(), Reranker)
+    enricher_keys = ENRICHERS.keys()
+    for key in enricher_keys:
+        assert isinstance(ENRICHERS.resolve(key)(), Enricher)
     assert isinstance(CLEANERS.resolve("default")(), Cleaner)
     assert isinstance(CHUNKERS.resolve("default")(), Chunker)
     assert isinstance(EMBEDDERS.resolve("default")(), Embedder)
@@ -635,3 +635,184 @@ def test_lazy_materialization_does_not_load_unrelated_sibling_builtins() -> None
     )
     proc = subprocess.run([sys.executable, "-c", code], check=False, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
+
+
+def test_enricher_execution_order_duplicates_context_upfront_lookup_and_default_skip(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify enricher ordering, duplicates, IngestContext, upfront lookup, and DEFAULT skip."""
+    _ = mock_litellm_offline
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    doc_a = corpus / "alpha.md"
+    doc_a.write_text("# Alpha\n\nInitial alpha body.\n", encoding="utf-8")
+
+    with _restore_registry(ENRICHERS):
+        calls: list[tuple[str, str, dict[str, Any]]] = []
+
+        @register_enricher("first")
+        class _FirstEnricher:
+            name = "first"
+
+            def enrich(self, doc: ParsedDocument, ctx: IngestContext) -> ParsedDocument:
+                calls.append(("first", doc.source, dict(ctx)))
+                return ParsedDocument(
+                    source=doc.source,
+                    format_name=doc.format_name,
+                    sections=[
+                        ParsedSection(
+                            source=sec.source,
+                            section_label=sec.section_label,
+                            heading_level=sec.heading_level,
+                            raw_text=f"{sec.raw_text}\n[ENRICHED:first]",
+                            page=sec.page,
+                            clauses=list(sec.clauses),
+                        )
+                        for sec in doc.sections
+                    ],
+                )
+
+        @register_enricher("second")
+        class _SecondEnricher:
+            name = "second"
+
+            def enrich(self, doc: ParsedDocument, ctx: IngestContext) -> ParsedDocument:
+                calls.append(("second", doc.source, dict(ctx)))
+                return ParsedDocument(
+                    source=doc.source,
+                    format_name=doc.format_name,
+                    sections=[
+                        ParsedSection(
+                            source=sec.source,
+                            section_label=sec.section_label,
+                            heading_level=sec.heading_level,
+                            raw_text=f"{sec.raw_text}\n[ENRICHED:second]",
+                            page=sec.page,
+                            clauses=list(sec.clauses),
+                        )
+                        for sec in doc.sections
+                    ],
+                )
+
+        def _profile(name: str, enrichers: tuple[str, ...]) -> ChunkingProfile:
+            return ChunkingProfile(
+                name=name,
+                chunk_size=1000,
+                overlap=80,
+                clause_preserving=False,
+                parent_child=False,
+                resolve_crossrefs=False,
+                enrichers=enrichers,
+            )
+
+        order_profile = _profile("CUSTOM_ORDER", ("first", "second"))
+        ingest(
+            doc_a,
+            persist_dir=tmp_persist_dir,
+            collection="order_col",
+            embed_model="mock/embed",
+            profile=order_profile,
+        )
+
+        assert [(name, src) for name, src, _ in calls] == [
+            ("first", "alpha.md"),
+            ("second", "alpha.md"),
+        ]
+        expected_ctx_keys = {
+            "collection",
+            "source",
+            "content_hash",
+            "doc_version",
+            "embed_model",
+            "profile",
+        }
+        for _, _, captured_ctx in calls:
+            assert expected_ctx_keys.issubset(captured_ctx.keys())
+            assert captured_ctx["collection"] == "order_col"
+            assert captured_ctx["source"] == "alpha.md"
+            assert captured_ctx["content_hash"].startswith("sha256:")
+            assert captured_ctx["doc_version"] == captured_ctx["content_hash"].split(":", 1)[1][:12]
+            assert len(captured_ctx["doc_version"]) == 12
+            assert captured_ctx["embed_model"] == "mock/embed"
+            assert captured_ctx["profile"] == "CUSTOM_ORDER"
+
+        order_store = VectorStore(tmp_persist_dir, "order_col")
+        combined_text = "\n".join(c.text for c in order_store.get_all_children())
+        assert "[ENRICHED:first]\n[ENRICHED:second]" in combined_text
+
+        calls.clear()
+        doc_b = corpus / "beta.md"
+        doc_b.write_text("# Beta\n\nInitial beta body.\n", encoding="utf-8")
+        dup_profile = _profile("CUSTOM_DUP", ("first", "first"))
+        sync(
+            corpus,
+            persist_dir=tmp_persist_dir,
+            collection="order_col",
+            embed_model="mock/embed",
+            profile=dup_profile,
+        )
+        assert [(name, src) for name, src, _ in calls] == [
+            ("first", "beta.md"),
+            ("first", "beta.md"),
+        ]
+        for _, _, captured_ctx in calls:
+            assert captured_ctx["collection"] == "order_col"
+            assert captured_ctx["source"] == "beta.md"
+            assert captured_ctx["profile"] == "CUSTOM_DUP"
+            assert len(captured_ctx["doc_version"]) == 12
+
+        beta_text = "\n".join(
+            c.text for c in order_store.get_all_children() if c.metadata["source"] == "beta.md"
+        )
+        assert "[ENRICHED:first]\n[ENRICHED:first]" in beta_text
+
+        missing_profile = _profile("MISSING_ENRICHER", ("does_not_exist",))
+        with pytest.raises(RegistryError, match="does_not_exist"):
+            ingest(
+                doc_a,
+                persist_dir=tmp_persist_dir,
+                collection="order_col",
+                embed_model="mock/embed",
+                profile=missing_profile,
+            )
+        with pytest.raises(RegistryError, match="does_not_exist"):
+            sync(
+                corpus,
+                persist_dir=tmp_persist_dir,
+                collection="order_col",
+                embed_model="mock/embed",
+                profile=missing_profile,
+            )
+
+        resolve_calls: list[str] = []
+        orig_resolve = ENRICHERS.resolve
+
+        def _spy_resolve(name: str) -> Any:
+            resolve_calls.append(name)
+            return orig_resolve(name)
+
+        monkeypatch.setattr(ENRICHERS, "resolve", _spy_resolve)
+
+        doc_c = tmp_path / "gamma.md"
+        doc_c.write_text("# Gamma\n\nDefault body.\n", encoding="utf-8")
+        ingest(
+            doc_c,
+            persist_dir=tmp_persist_dir,
+            collection="default_skip_col",
+            embed_model="mock/embed",
+            profile="DEFAULT",
+        )
+        sync_default_dir = tmp_path / "sync_default"
+        sync_default_dir.mkdir()
+        (sync_default_dir / "delta.md").write_text("# Delta\n\nDefault sync.\n", encoding="utf-8")
+        sync(
+            sync_default_dir,
+            persist_dir=tmp_persist_dir,
+            collection="default_skip_sync_col",
+            embed_model="mock/embed",
+            profile="DEFAULT",
+        )
+        assert resolve_calls == []

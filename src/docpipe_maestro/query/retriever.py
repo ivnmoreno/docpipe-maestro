@@ -5,6 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, cast
 
+from docpipe_maestro._crossrefs import (
+    extract_doc_crossrefs,
+    index_section_targets,
+    match_source_key,
+    truncate_excerpt,
+)
 from docpipe_maestro._stages import Store
 from docpipe_maestro.config import (
     DEFAULT_COLLECTION,
@@ -14,12 +20,6 @@ from docpipe_maestro.config import (
     DEFAULT_TOP_K,
 )
 from docpipe_maestro.embedder import EMBEDDERS
-from docpipe_maestro.ingest.crossrefs import (
-    extract_doc_crossrefs,
-    index_section_targets,
-    match_source_key,
-    truncate_excerpt,
-)
 from docpipe_maestro.manifest import check_model_lock, load_manifest
 from docpipe_maestro.query.reranker import validate_rerank_options
 from docpipe_maestro.query.searcher import SEARCHERS

@@ -33,6 +33,7 @@ POLICY = ChunkingProfile(
     clause_preserving=True,
     parent_child=True,
     resolve_crossrefs=True,
+    enrichers=("crossrefs",),
 )
 
 PROFILES: dict[str, ChunkingProfile] = {

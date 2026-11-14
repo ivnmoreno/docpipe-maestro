@@ -327,12 +327,12 @@ print(detailed.text, detailed.total_tokens, detailed.elapsed_seconds)
 
 ### Built-In Chunking Profiles
 
-| Constant | `name` | `chunk_size` | `overlap` | `clause_preserving` | `parent_child` | `resolve_crossrefs` |
-|---|---|---|---|---|---|---|
-| `DEFAULT` | `"DEFAULT"` | `512` | `64` | `False` | `True` | `False` |
-| `POLICY` | `"POLICY"` | `1000` | `80` | `True` | `True` | `True` |
+| Constant | `name` | `chunk_size` | `overlap` | `clause_preserving` | `parent_child` | `resolve_crossrefs` | `enrichers` |
+|---|---|---|---|---|---|---|---|
+| `DEFAULT` | `"DEFAULT"` | `512` | `64` | `False` | `True` | `False` | `()` |
+| `POLICY` | `"POLICY"` | `1000` | `80` | `True` | `True` | `True` | `("crossrefs",)` |
 
-You may pass `"DEFAULT"`, `"POLICY"` (case-insensitive string resolved via `resolve_profile`), or construct a custom frozen `ChunkingProfile` instance in Python:
+You may pass `"DEFAULT"`, `"POLICY"` (case-insensitive string resolved via `resolve_profile`), or construct a custom frozen `ChunkingProfile` instance in Python. Custom profiles omitting `enrichers` (or passing `enrichers=()`) with `resolve_crossrefs=True` automatically normalize `enrichers` to `("crossrefs",)`; passing an explicit non-empty `enrichers` tuple overrides that legacy flag directly:
 
 ```python
 from docpipe_maestro import ingest
@@ -345,6 +345,7 @@ custom = ChunkingProfile(
     clause_preserving=True,
     parent_child=True,
     resolve_crossrefs=True,
+    enrichers=("crossrefs",),
 )
 ingest("./manual.md", profile=custom, collection="manuals")
 ```
@@ -394,7 +395,7 @@ DocpipeError (Exception)
 └── RegistryError            # Unregistered stage key or colliding stage registration
 ```
 
-Eight lazy extension decorators are re-exported from `docpipe_maestro` (`register_parser`, `register_cleaner`, `register_enricher`, `register_chunker`, `register_embedder`, `register_store`, `register_searcher`, `register_reranker`). For retrieval, built-in `SEARCHERS` keys are `"default"` (`DenseSearcher`) and `"fts5_hybrid"` (`Fts5HybridSearcher`), and the built-in `RERANKERS` key is `"cross_encoder"` (`docpipe_maestro.query.reranker.CrossEncoderReranker`, loaded lazily and requiring `docpipe-maestro[rerank]`). Custom rerankers follow the `Reranker` protocol (`name: str`, `rerank(self, query: str, chunks: list[RetrievedChunk], *, top_k: int) -> list[RetrievedChunk]`, optionally providing a static/class `validate_available()` method for upfront dependency checks) via `@register_reranker("<name>")`.
+Eight lazy extension decorators are re-exported from `docpipe_maestro` (`register_parser`, `register_cleaner`, `register_enricher`, `register_chunker`, `register_embedder`, `register_store`, `register_searcher`, `register_reranker`). For Phase 1 post-clean enrichment, the built-in `ENRICHERS` key is `"crossrefs"` (`docpipe_maestro.ingest.enricher.CrossrefsEnricher`, registered lazily and active on `POLICY` via `enrichers=("crossrefs",)`). Custom enrichers implement the `Enricher` protocol (`name: str`, `enrich(self, doc: ParsedDocument, ctx: IngestContext) -> ParsedDocument`) via `@register_enricher("<name>")`, receiving `IngestContext` (`collection`, `source`, `content_hash`, `doc_version`, `embed_model`, `profile`, and optional `extra`) and executing sequentially in `ChunkingProfile.enrichers` order before chunking. For retrieval, built-in `SEARCHERS` keys are `"default"` (`DenseSearcher`) and `"fts5_hybrid"` (`Fts5HybridSearcher`), and the built-in `RERANKERS` key is `"cross_encoder"` (`docpipe_maestro.query.reranker.CrossEncoderReranker`, loaded lazily and requiring `docpipe-maestro[rerank]`). Custom rerankers follow the `Reranker` protocol (`name: str`, `rerank(self, query: str, chunks: list[RetrievedChunk], *, top_k: int) -> list[RetrievedChunk]`, optionally providing a static/class `validate_available()` method for upfront dependency checks) via `@register_reranker("<name>")`.
 
 Example defensive wrapper for an application backend:
 
