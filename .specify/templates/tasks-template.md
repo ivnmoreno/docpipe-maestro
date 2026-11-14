@@ -157,6 +157,7 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] TXXX [P] Additional unit tests (if requested) in tests/unit/
 - [ ] TXXX Security hardening
 - [ ] TXXX Run quickstart.md validation
+- [ ] TXXX **REQUIRED**: Run all tests across the entire project test suite after all implementation tasks finish; 100% of tests must pass before reporting completion
 
 ---
 

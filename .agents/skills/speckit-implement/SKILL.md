@@ -174,7 +174,8 @@ You **MUST** consider the user input before proceeding (if not empty).
 9. Completion validation:
    - Verify all required tasks are completed
    - Check that implemented features match the original specification
-   - Validate that tests pass and coverage meets requirements
+   - **MANDATORY**: Run all tests across the entire project test suite after implementation finishes; **all tests must pass** (zero failures — do not mark implementation complete if any test fails)
+   - Validate that coverage and lint/type quality gates meet project requirements
    - Confirm the implementation follows the technical plan
 
 Note: This command assumes a complete task breakdown exists in tasks.md. If tasks are incomplete or missing, suggest running `/speckit-tasks` first to regenerate the task list.
@@ -221,6 +222,7 @@ Report final status with summary of completed work.
 ## Done When
 
 - [ ] All tasks in tasks.md completed and marked `[X]`
+- [ ] All tests across the entire project test suite run after implementation and passed (zero failures)
 - [ ] Implementation validated against specification, plan, and test coverage
 - [ ] Extension hooks dispatched or skipped according to the rules in Mandatory Post-Execution Hooks above
 - [ ] Completion reported to user with summary of completed work
