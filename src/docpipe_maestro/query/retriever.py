@@ -10,6 +10,7 @@ from docpipe_maestro.config import (
     DEFAULT_COLLECTION,
     DEFAULT_EMBED_MODEL,
     DEFAULT_PERSIST_DIR,
+    DEFAULT_RERANK_TOP_N,
     DEFAULT_TOP_K,
 )
 from docpipe_maestro.embedder import EMBEDDERS
@@ -20,8 +21,9 @@ from docpipe_maestro.ingest.crossrefs import (
     truncate_excerpt,
 )
 from docpipe_maestro.manifest import check_model_lock, load_manifest
+from docpipe_maestro.query.reranker import validate_rerank_options
 from docpipe_maestro.query.searcher import SEARCHERS
-from docpipe_maestro.query.stages import Searcher
+from docpipe_maestro.query.stages import Reranker, Searcher
 from docpipe_maestro.store import STORES
 from docpipe_maestro.types import EmbeddedChunk, RetrievedChunk
 
@@ -117,13 +119,17 @@ def retrieve(
     embedder: str = "default",
     store: str = "default",
     searcher: str = "default",
+    rerank: bool = False,
+    reranker: str = "cross_encoder",
+    rerank_top_n: int = DEFAULT_RERANK_TOP_N,
 ) -> list[RetrievedChunk]:
     """Retrieve relevant parent sections (or child chunks) for a question.
 
     Treats both the vector store and manifest as strictly read-only. Searches
     only committed ``"child"`` chunks, optionally filters by normalized score
-    (``[0.0, 1.0]``), and when ``expand_parent`` is ``True`` fetches unique
-    parent sections scored by ``max(child.score)``.
+    (``[0.0, 1.0]``), optionally rescores surviving candidate children via a
+    registered ``Reranker``, and when ``expand_parent`` is ``True`` fetches
+    unique parent sections scored by ``max(child.score)``.
 
     Args:
         question: Natural-language search query.
@@ -141,21 +147,31 @@ def retrieve(
         embedder: Registered ``EMBEDDERS`` key (defaults to ``"default"``).
         store: Registered ``STORES`` key (defaults to ``"default"``).
         searcher: Registered ``SEARCHERS`` key (defaults to ``"default"``).
+        rerank: Opt into post-retrieval child reranking before parent expansion.
+        reranker: Registered ``RERANKERS`` key (defaults to ``"cross_encoder"``).
+        rerank_top_n: Minimum candidate child pool size fetched prior to reranking.
 
     Returns:
         Matched ``RetrievedChunk`` objects ordered by descending ``score``.
 
     Raises:
+        ValueError: If ``rerank_top_n`` is not a positive integer ``>= 1``.
+        MissingExtraError: If ``rerank`` is enabled without optional extras installed.
         ModelMismatchError: If ``embed_model`` mismatches the collection lock.
         MissingCredentialError: If provider credentials are missing or invalid.
-        RegistryError: If ``embedder``, ``store``, or ``searcher`` is unregistered.
-        DocpipeError: If embedding or store lookup fails.
+        RegistryError: If ``embedder``, ``store``, ``searcher``, or ``reranker`` is unregistered.
+        DocpipeError: If embedding, reranking, or store lookup fails.
     """
     if embedder != "default":
         EMBEDDERS.resolve(embedder)
     if store != "default":
         STORES.resolve(store)
     searcher_cls: type[Searcher] = SEARCHERS.resolve(searcher)
+    reranker_cls: type[Reranker] | None = validate_rerank_options(
+        rerank=rerank,
+        reranker=reranker,
+        rerank_top_n=rerank_top_n,
+    )
 
     persist_path = Path(persist_dir)
     manifest = load_manifest(persist_path, collection)
@@ -172,7 +188,8 @@ def retrieve(
         searcher_inst = searcher_cls()
 
     active_versions = {k: v.doc_version for k, v in manifest.sources.items()}
-    child_top_k = top_k * 3 if expand_parent else top_k
+    base_child_k = top_k * 3 if expand_parent else top_k
+    child_top_k = max(rerank_top_n, base_child_k) if rerank else base_child_k
     child_matches = searcher_inst.search(
         question,
         top_k=child_top_k,
@@ -186,6 +203,12 @@ def retrieve(
 
     if not child_matches:
         return []
+
+    if reranker_cls is not None:
+        rerank_limit = len(child_matches) if expand_parent else top_k
+        child_matches = reranker_cls().rerank(question, child_matches, top_k=rerank_limit)
+        if not child_matches:
+            return []
 
     if not expand_parent:
         return sorted(child_matches, key=lambda c: c.score, reverse=True)[:top_k]

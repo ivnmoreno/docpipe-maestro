@@ -19,6 +19,7 @@ from docpipe_maestro.config import (
     DEFAULT_EMBED_MODEL,
     DEFAULT_GENERATION_MODEL,
     DEFAULT_PERSIST_DIR,
+    DEFAULT_RERANK_TOP_N,
     DEFAULT_TOP_K,
 )
 from docpipe_maestro.embedder import DEFAULT_REQUEST_TIMEOUT
@@ -47,7 +48,8 @@ def _load_toml_config(config_path: str | None, *, no_config: bool = False) -> di
     for ``docpipe.toml`` in the current working directory (never walking upward
     into parent directories). Supported keys include ``collection``, ``persist_dir``,
     ``embed_model``, ``model``, ``profile``, ``top_k``, ``threshold``, ``searcher``,
-    ``api_base``, ``temperature``, ``max_tokens``, ``timeout``, and ``fail_on_truncation``.
+    ``rerank``, ``reranker``, ``rerank_top_n``, ``api_base``, ``temperature``,
+    ``max_tokens``, ``timeout``, and ``fail_on_truncation``.
     Credentials must never be stored here; use environment variables or ``.env``.
     """
     if no_config:
@@ -136,6 +138,36 @@ class _StoreExplicitCollection(argparse.Action):
         namespace._collection_explicit = True
 
 
+def _add_rerank_args(
+    subparser: argparse.ArgumentParser,
+    *,
+    default_rerank: bool,
+    default_reranker: str,
+    default_rerank_top_n: int,
+) -> None:
+    """Attach shared cross-encoder reranking CLI flags to a retrieval subparser."""
+    subparser.add_argument(
+        "--rerank",
+        action=argparse.BooleanOptionalAction,
+        default=default_rerank,
+        help="Apply second-stage reranking before returning top_k results",
+    )
+    subparser.add_argument(
+        "--reranker",
+        default=default_reranker,
+        help="Registered reranker strategy (default: cross_encoder)",
+    )
+    subparser.add_argument(
+        "--rerank-top-n",
+        type=int,
+        default=default_rerank_top_n,
+        help=(
+            "Minimum candidate pool size fetched before reranking "
+            f"(default: {DEFAULT_RERANK_TOP_N})"
+        ),
+    )
+
+
 def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentParser:
     """Construct the ``docpipe-maestro`` CLI parser with shared global options.
 
@@ -152,6 +184,9 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     default_top_k = _cfg_int(cfg, "top_k", DEFAULT_TOP_K)
     default_threshold = _cfg_opt_float(cfg, "threshold")
     default_searcher = _cfg_str(cfg, "searcher", "default")
+    default_rerank = _cfg_bool(cfg, "rerank", False)
+    default_reranker = _cfg_str(cfg, "reranker", "cross_encoder")
+    default_rerank_top_n = _cfg_int(cfg, "rerank_top_n", DEFAULT_RERANK_TOP_N)
     default_api_base = _cfg_opt_str(cfg, "api_base")
     default_temperature = _cfg_opt_float(cfg, "temperature")
     default_max_tokens = _cfg_opt_int(cfg, "max_tokens")
@@ -255,6 +290,12 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         default=True,
         help="Expand matched children to parent sections",
     )
+    _add_rerank_args(
+        p_query,
+        default_rerank=default_rerank,
+        default_reranker=default_reranker,
+        default_rerank_top_n=default_rerank_top_n,
+    )
     p_query.add_argument(
         "--json",
         action="store_true",
@@ -278,6 +319,12 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         "--searcher",
         default=default_searcher,
         help="Registered retrieval searcher strategy (e.g., default, fts5_hybrid)",
+    )
+    _add_rerank_args(
+        p_ask,
+        default_rerank=default_rerank,
+        default_reranker=default_reranker,
+        default_rerank_top_n=default_rerank_top_n,
     )
     p_ask.add_argument(
         "--api-base", default=default_api_base, help="Optional OpenAI-compatible base URL"
@@ -348,6 +395,12 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         default=True,
         help="Expand matched children to parent sections",
     )
+    _add_rerank_args(
+        p_eval,
+        default_rerank=default_rerank,
+        default_reranker=default_reranker,
+        default_rerank_top_n=default_rerank_top_n,
+    )
     p_eval.add_argument(
         "--json",
         action="store_true",
@@ -374,6 +427,9 @@ def _handle_ask(args: argparse.Namespace) -> int:
         threshold=args.threshold,
         expand_parent=True,
         searcher=args.searcher,
+        rerank=args.rerank,
+        reranker=args.reranker,
+        rerank_top_n=args.rerank_top_n,
     )
     retrieval_elapsed = time.perf_counter() - t_ret
 
@@ -465,11 +521,17 @@ def _format_eval_text(report: EvalReport) -> str:
     """Render an aligned terminal summary of an ``EvalReport``."""
     cfg = report["config"]
     agg = report["aggregate"]
+    header = (
+        f"Collection: {cfg['collection']} | Model: {cfg['embed_model']} | "
+        f"Searcher: {cfg['searcher']} | Expand Parent: {cfg['expand_parent']}"
+    )
+    if cfg.get("rerank"):
+        header += (
+            f" | Reranker: {cfg.get('reranker', 'cross_encoder')} "
+            f"(top_n={cfg.get('rerank_top_n', DEFAULT_RERANK_TOP_N)})"
+        )
     lines = [
-        (
-            f"Collection: {cfg['collection']} | Model: {cfg['embed_model']} | "
-            f"Searcher: {cfg['searcher']} | Expand Parent: {cfg['expand_parent']}"
-        ),
+        header,
         f"Queries: {agg['num_queries']} | MRR: {agg['mrr']:.4f}",
         "",
         "K   | Precision@K | Recall@K",
@@ -511,6 +573,9 @@ def _handle_eval(args: argparse.Namespace, *, cfg_collection: str | None) -> int
         k_values=k_values,
         expand_parent=args.expand_parent,
         searcher=args.searcher,
+        rerank=args.rerank,
+        reranker=args.reranker,
+        rerank_top_n=args.rerank_top_n,
     )
     if args.as_json:
         print(json.dumps(report, indent=2))
@@ -652,6 +717,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 threshold=args.threshold,
                 expand_parent=args.expand_parent,
                 searcher=args.searcher,
+                rerank=args.rerank,
+                reranker=args.reranker,
+                rerank_top_n=args.rerank_top_n,
             )
             if args.as_json:
                 print(

@@ -12,6 +12,7 @@ from docpipe_maestro.config import (
     DEFAULT_EMBED_MODEL,
     DEFAULT_GENERATION_MODEL,
     DEFAULT_PERSIST_DIR,
+    DEFAULT_RERANK_TOP_N,
     DEFAULT_TOP_K,
 )
 from docpipe_maestro.embedder import DEFAULT_REQUEST_TIMEOUT
@@ -124,6 +125,9 @@ def test_public_callable_signatures_and_keyword_only_selectors() -> None:
         ("embedder", kw_only, "default"),
         ("store", kw_only, "default"),
         ("searcher", kw_only, "default"),
+        ("rerank", kw_only, False),
+        ("reranker", kw_only, "cross_encoder"),
+        ("rerank_top_n", kw_only, DEFAULT_RERANK_TOP_N),
     ]
     assert _params_info(root.build_prompt) == [
         ("question", pos_kw, empty),

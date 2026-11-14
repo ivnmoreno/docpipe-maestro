@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from docpipe_maestro import ingest, retrieve
+from docpipe_maestro.query.reranker import RERANKERS, register_reranker
 
 POLICY_CORPUS = Path(__file__).parent / "fixtures" / "policy_corpus"
 
@@ -65,4 +66,77 @@ def test_reverse_safety_exception_preservation(
     )
     assert expected_exception.lower() in combined_context.lower(), (
         f"Expected exception text {expected_exception!r} in retrieved context for {query!r}"
+    )
+
+
+@pytest.mark.reverse
+@pytest.mark.parametrize(("query", "marker", "expected_exception"), EXCEPTION_CASES)
+def test_reverse_safety_exception_preservation_with_reranker(
+    query: str,
+    marker: str,
+    expected_exception: str,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+) -> None:
+    ingest(
+        POLICY_CORPUS,
+        profile="POLICY",
+        collection="reverse_gate_rerank",
+        persist_dir=tmp_persist_dir,
+    )
+
+    entries_snap = dict(RERANKERS._entries)
+    lazy_snap = dict(RERANKERS._lazy_builtins)
+    try:
+
+        @register_reranker("reverse_test_reranker")
+        class ReverseTestReranker:
+            name = "reverse_test_reranker"
+
+            def rerank(
+                self,
+                q: str,
+                chunks: list[Any],
+                *,
+                top_k: int,
+            ) -> list[Any]:
+                q_terms = set(q.lower().split())
+                scored = []
+                for idx, chunk in enumerate(chunks):
+                    overlap = len(q_terms & set(chunk.text.lower().split()))
+                    # Boost lexical match while keeping scores deterministic in [0.0, 1.0].
+                    new_score = min(1.0, 0.25 + overlap * 0.1 + (len(chunks) - idx) * 1e-4)
+                    scored.append(
+                        type(chunk)(
+                            id=chunk.id,
+                            text=chunk.text,
+                            parent_id=chunk.parent_id,
+                            metadata=chunk.metadata,
+                            vector=chunk.vector,
+                            score=new_score,
+                        )
+                    )
+                scored.sort(key=lambda item: item.score, reverse=True)
+                return scored[:top_k]
+
+        results = retrieve(
+            query,
+            collection="reverse_gate_rerank",
+            persist_dir=tmp_persist_dir,
+            top_k=3,
+            expand_parent=True,
+            rerank=True,
+            reranker="reverse_test_reranker",
+        )
+    finally:
+        RERANKERS._entries = entries_snap
+        RERANKERS._lazy_builtins = lazy_snap
+
+    assert results, f"Expected reranked results for query {query!r}"
+    combined_context = "\n".join(r.text for r in results)
+    assert marker in combined_context.lower(), (
+        f"Expected exception marker {marker!r} in reranked context for {query!r}"
+    )
+    assert expected_exception.lower() in combined_context.lower(), (
+        f"Expected exception text {expected_exception!r} in reranked context for {query!r}"
     )

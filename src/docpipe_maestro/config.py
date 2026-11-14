@@ -14,6 +14,8 @@ DEFAULT_PERSIST_DIR = ".docpipe"
 DEFAULT_EMBED_MODEL = "ollama/nomic-embed-text"
 DEFAULT_GENERATION_MODEL = "ollama/llama3.2"
 DEFAULT_TOP_K = 5
+DEFAULT_RERANK_TOP_N = 20
+DEFAULT_RERANK_MODEL = "BAAI/bge-reranker-base"
 
 DEFAULT = ChunkingProfile(
     name="DEFAULT",

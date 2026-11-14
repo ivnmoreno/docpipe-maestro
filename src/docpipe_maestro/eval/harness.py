@@ -12,6 +12,7 @@ from docpipe_maestro.config import (
     DEFAULT_COLLECTION,
     DEFAULT_EMBED_MODEL,
     DEFAULT_PERSIST_DIR,
+    DEFAULT_RERANK_TOP_N,
 )
 from docpipe_maestro.embedder import EMBEDDERS
 from docpipe_maestro.eval.metrics import (
@@ -26,6 +27,7 @@ from docpipe_maestro.manifest import (
     manifest_path,
     validate_collection_name,
 )
+from docpipe_maestro.query.reranker import validate_rerank_options
 from docpipe_maestro.query.retriever import retrieve
 from docpipe_maestro.query.searcher import SEARCHERS
 from docpipe_maestro.store import STORES
@@ -159,6 +161,9 @@ def _preflight_check(
     embedder: str,
     store: str,
     searcher: str,
+    rerank: bool,
+    reranker: str,
+    rerank_top_n: int,
 ) -> None:
     """Validate registry selectors and read-only store state without creating directories."""
     if embedder != "default":
@@ -166,6 +171,11 @@ def _preflight_check(
     if store != "default":
         STORES.resolve(store)
     SEARCHERS.resolve(searcher)
+    validate_rerank_options(
+        rerank=rerank,
+        reranker=reranker,
+        rerank_top_n=rerank_top_n,
+    )
 
     # Check manifest file directly so ChromaStore never auto-creates missing directories.
     m_path = manifest_path(persist_path, effective_collection)
@@ -217,6 +227,9 @@ def evaluate(
     embedder: str = "default",
     store: str = "default",
     searcher: str = "default",
+    rerank: bool = False,
+    reranker: str = "cross_encoder",
+    rerank_top_n: int = DEFAULT_RERANK_TOP_N,
     **retrieve_kwargs: Any,
 ) -> EvalReport:
     """Evaluate Phase 2 retrieval against a curated fixture strictly read-only.
@@ -257,6 +270,9 @@ def evaluate(
         embedder=embedder,
         store=store,
         searcher=searcher,
+        rerank=rerank,
+        reranker=reranker,
+        rerank_top_n=rerank_top_n,
     )
 
     max_k = norm_k[-1]
@@ -274,6 +290,9 @@ def evaluate(
             embedder=embedder,
             store=store,
             searcher=searcher,
+            rerank=rerank,
+            reranker=reranker,
+            rerank_top_n=rerank_top_n,
             **retrieve_kwargs,
         )
         retrieved_ids = [chunk.id for chunk in chunks]
@@ -309,6 +328,10 @@ def evaluate(
         "store": store,
         "threshold": norm_threshold,
     }
+    if rerank:
+        config["rerank"] = True
+        config["reranker"] = reranker
+        config["rerank_top_n"] = rerank_top_n
     return {
         "config": config,
         "aggregate": _aggregate_metrics(per_query, norm_k),

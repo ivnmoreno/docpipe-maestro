@@ -42,6 +42,9 @@ profile = "POLICY"                 # "DEFAULT" or "POLICY"
 top_k = 5                          # Default parent/candidate count
 threshold = 0.35                   # Optional minimum normalized score [0.0, 1.0]
 searcher = "default"               # "default" (dense vector) or "fts5_hybrid" (dense + SQLite FTS5 RRF)
+rerank = false                     # Enable second-stage reranking (requires `[rerank]` extra)
+reranker = "cross_encoder"         # Registered reranker key in RERANKERS
+rerank_top_n = 20                  # Minimum candidate child pool size before reranking (>= 1)
 api_base = "https://api.groq.com/openai/v1" # Optional custom/OpenAI-compatible endpoint
 temperature = 0.0                  # Optional sampling temperature (>= 0.0)
 max_tokens = 512                   # Optional completion token limit (>= 1)
@@ -184,14 +187,19 @@ docpipe-maestro query [--config CONFIG] [--no-config] [--collection COLLECTION]
                       [--persist-dir PERSIST_DIR] [--top-k TOP_K]
                       [--threshold THRESHOLD] [--embed-model EMBED_MODEL]
                       [--searcher SEARCHER]
-                      [--expand-parent | --no-expand-parent] [--json] question
+                      [--expand-parent | --no-expand-parent]
+                      [--rerank | --no-rerank] [--reranker RERANKER]
+                      [--rerank-top-n RERANK_TOP_N] [--json] question
 ```
 
 - `--top-k`: Maximum child chunk hits prior to parent deduplication (default: `5`).
-- `--threshold`: Minimum normalized score in `[0.0, 1.0]` (default: `None`). Under `--searcher default`, scores reflect cosine similarity; under `--searcher fts5_hybrid`, scores use theoretical-max RRF normalization (`1.0` for dual rank-1 agreement, `<= 0.5` for single-signal matches).
+- `--threshold`: Minimum normalized score in `[0.0, 1.0]` (default: `None`). Under `--searcher default`, scores reflect cosine similarity; under `--searcher fts5_hybrid`, scores use theoretical-max RRF normalization (`1.0` for dual rank-1 agreement, `<= 0.5` for single-signal matches). Note: when `--rerank` is enabled, `--threshold` is enforced against the Stage 1 score prior to cross-encoder sigmoid rescoring (`[0.0, 1.0]`).
 - `--embed-model`: Embedding model string matching the collection lock (default: `"ollama/nomic-embed-text"`).
 - `--searcher`: Registered searcher strategy (default: `"default"` or TOML `searcher`). Built-in strategies are `"default"` (dense vector similarity) and `"fts5_hybrid"` (dense + SQLite FTS5 BM25 fused via Reciprocal Rank Fusion).
 - `--expand-parent` / `--no-expand-parent`: Return deduplicated parent sections (`True`, default) or raw matched child chunks (`False`).
+- `--rerank` / `--no-rerank`: Enable or disable second-stage reranking (default: `False`, or TOML `rerank`). Requires `docpipe-maestro[rerank]` for the built-in `"cross_encoder"` reranker (`BAAI/bge-reranker-base`).
+- `--reranker`: Registered reranker strategy key (default: `"cross_encoder"`, or TOML `reranker`).
+- `--rerank-top-n`: Positive integer (`>= 1`) specifying the minimum candidate child pool fetched before reranking (default: `20`, or TOML `rerank_top_n`). Actual Stage 1 candidate fetch uses `max(rerank_top_n, top_k * 3)` when expanding parents or `max(rerank_top_n, top_k)` otherwise.
 - `--json`: Emit structured JSON on `stdout` (`{"query", "collection", "expand_parent", "results"}`) where each element of `"results"` exposes `"id"`, `"parent_id"` (`null` for expanded parents, non-empty string for raw child chunks), `"score"` (numeric float in `[0.0, 1.0]`), `"text"`, and `"metadata"` (`type`, `source`, `doc_version`, `section`, `clause`, `page`, `chunk_index`, `embed_model`). When zero results match or satisfy `--threshold`, emits `"results": []` and exits `0` with no plain-text prose. Validation or runtime failures follow the CLI-wide convention (`Error: ...` on `stderr`, empty `stdout`, exit `1`).
 - **Example text output** (when `--json` is omitted):
   ```text
@@ -239,12 +247,14 @@ docpipe-maestro ask [--config CONFIG] [--no-config] [--collection COLLECTION]
                     [--persist-dir PERSIST_DIR] [--top-k TOP_K]
                     [--threshold THRESHOLD] [--model MODEL]
                     [--embed-model EMBED_MODEL] [--searcher SEARCHER]
+                    [--rerank | --no-rerank] [--reranker RERANKER]
+                    [--rerank-top-n RERANK_TOP_N]
                     [--api-base API_BASE] [--temperature TEMPERATURE]
                     [--max-tokens MAX_TOKENS] [--timeout TIMEOUT]
                     [--fail-on-truncation] [--show-context] [--json] question
 ```
 
-- `--top-k`, `--threshold`, `--embed-model`, `--searcher`: Same semantics as `docpipe-maestro query` (`expand_parent` is always `True`).
+- `--top-k`, `--threshold`, `--embed-model`, `--searcher`, `--rerank` / `--no-rerank`, `--reranker`, `--rerank-top-n`: Same semantics as `docpipe-maestro query` (`expand_parent` is always `True`).
 - `--model`: LLM generation model string (default: `"ollama/llama3.2"` or TOML `model`).
 - `--api-base`: Optional custom OpenAI-compatible server URL (`http://` allowed for loopback hosts such as `http://localhost:8000/v1`; `https://` required for remote gateways).
 - `--temperature`: Optional sampling temperature (`>= 0.0`); omitted when unset for reasoning-model compatibility.
@@ -266,21 +276,25 @@ docpipe-maestro eval [--config CONFIG] [--no-config] [--collection COLLECTION]
                      [--persist-dir PERSIST_DIR] --fixture FIXTURE
                      [--k K [K ...]] [--embed-model EMBED_MODEL]
                      [--searcher SEARCHER]
-                     [--expand-parent | --no-expand-parent] [--json]
+                     [--expand-parent | --no-expand-parent]
+                     [--rerank | --no-rerank] [--reranker RERANKER]
+                     [--rerank-top-n RERANK_TOP_N] [--json]
 ```
 
 - `--fixture`: Required path to an evaluation JSON fixture (`EvalFixture` schema with non-empty `queries`, non-blank `question`, non-empty `relevant_ids`, optional `collection`, `profile`, `notes`).
 - `--k`: Positive cutoff value(s) `K` accepting single (`--k 5`), multi-value (`--k 1 3 5 10`), or repeated (`--k 1 --k 3`) flags (default: `1 3 5 10`). Unsorted or duplicate positive integers normalize automatically in ascending order; values `<= 0` fail with exit status `1`.
 - `--searcher`: Registered searcher strategy (`"default"` dense or `"fts5_hybrid"`, inheriting TOML `searcher` when omitted).
 - `--expand-parent` / `--no-expand-parent`: Evaluate parent sections (`True`, default) or child chunks (`False`).
+- `--rerank` / `--no-rerank`: Enable second-stage reranking during evaluation (default: `False`, or TOML `rerank`). When `True`, `EvalReport["config"]` includes `"rerank": true`, `"reranker"`, and `"rerank_top_n"`, and terminal text output appends `| Reranker: <name> (top_n=<n>)` to the header line; when `False`, all three keys and the header suffix are omitted to keep baseline replay byte-identical.
+- `--reranker`, `--rerank-top-n`: Registered reranker strategy (default: `"cross_encoder"`) and minimum child pool size (default: `20`).
 - `--embed-model`: Embedding model checked against the collection lock (inherits TOML `embed_model` when omitted).
 - `--collection` precedence: Resolves strictly in order: explicit `--collection` flag (before or after `eval`) `>` non-empty fixture `collection` `>` TOML `collection` `>` `"default"`. Fixture `profile` is kept purely as informational provenance.
 - `--json`: Emits structured `EvalReport` JSON (`config`, `aggregate`, `per_query`) to `stdout` and exits `0`. Without `--json`, prints an aligned `Collection`/`MRR`/`K | Precision@K | Recall@K` table and per-query diagnostics.
-- **Exit behavior**: Exits `0` on valid measurement runs (no regression-threshold failure gates) and exits `1` with single-line `Error: <message>` on `stderr` for invalid flags, malformed fixtures, missing/empty collections, model mismatches, or unknown `--searcher` keys.
+- **Exit behavior**: Exits `0` on valid measurement runs (no regression-threshold failure gates) and exits `1` with single-line `Error: <message>` on `stderr` for invalid flags (`--rerank-top-n 0`, missing `[rerank]` extra), malformed fixtures, missing/empty collections, model mismatches, or unknown `--searcher`/`--reranker` keys.
 
 - **Example command & JSON check**:
   ```bash
-  docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --k 1 3 5 --searcher fts5_hybrid --json
+  docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --k 1 3 5 --searcher fts5_hybrid --rerank --json
   ```
 
 ---
@@ -297,7 +311,7 @@ docpipe-maestro eval [--config CONFIG] [--no-config] [--collection COLLECTION]
 Common runtime fixes:
 - **`ModelMismatchError`**: Your `--embed-model` differs from the locked model shown by `docpipe-maestro status`. Query with the locked model or migrate via `docpipe-maestro reindex --model <new_model>`.
 - **`Collection ... does not have a lexical index yet`**: Pre-hybrid collections need a one-time index rebuild via `docpipe-maestro reindex --model <locked_model> --collection <name>` (or `ingest --force`) before running `--searcher fts5_hybrid`.
-- **`RegistryError`**: Unregistered `--searcher` strategy name; use `"default"` or `"fts5_hybrid"` (or a registered custom searcher key).
-- **`MissingExtraError`**: Install the missing format parser extra: `pip install "docpipe-maestro[pdf]"` (or `docx`, `html`, `all`).
+- **`RegistryError`**: Unregistered `--searcher` or `--reranker` strategy name; use built-in `"default"` / `"fts5_hybrid"` (or `"cross_encoder"`) or a registered custom key.
+- **`MissingExtraError`**: Install the missing optional extra: `pip install "docpipe-maestro[rerank]"` for `--rerank` / `cross_encoder`, or `pip install "docpipe-maestro[pdf]"` (or `docx`, `html`, `all`) for format parsers.
 - **`Invalid or unusable collection`**: ChromaDB collection names must be at least 3 characters long and contain only `[a-zA-Z0-9._-]`.
 - **`Error: Config file not found`**: Check the relative or absolute path passed to `--config`.

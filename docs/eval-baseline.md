@@ -57,7 +57,27 @@ Key observations:
 
 ---
 
-## 4. Reproduction Steps
+## 4. Live Local Benchmark & `Q1` Reranking Gate (`BAAI/bge-reranker-base`)
+
+Live end-to-end validation ran against local Ollama (`embed_model = "ollama/nomic-embed-text"`) and `CrossEncoderReranker` (`BAAI/bge-reranker-base`, `rerank_top_n = 20`) across all 24 fixture queries in `tests/fixtures/eval_policy_corpus.json`:
+
+| Metric | `default` (`--no-rerank`) | `default` (`--rerank`) | `default` Delta | `fts5_hybrid` (`--no-rerank`) | `fts5_hybrid` (`--rerank`) | `fts5_hybrid` Delta |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| **MRR** | `0.9583` | `0.9792` | `+0.0208` | `0.9583` | `0.9792` | `+0.0208` |
+| **Precision@1** | `0.9167` | `0.9583` | `+0.0417` | `0.9167` | `0.9583` | `+0.0417` |
+| **Precision@3** | `0.3472` | `0.3472` | `+0.0000` | `0.3472` | `0.3472` | `+0.0000` |
+| **Precision@5** | `0.2083` | `0.2083` | `+0.0000` | `0.2083` | `0.2083` | `+0.0000` |
+| **Precision@10** | `0.1042` | `0.1042` | `+0.0000` | `0.1042` | `0.1042` | `+0.0000` |
+| **Recall@1** | `0.8958` | `0.9375` | `+0.0417` | `0.8958` | `0.9375` | `+0.0417` |
+| **Recall@3** | `1.0000` | `1.0000` | `+0.0000` | `1.0000` | `1.0000` | `+0.0000` |
+| **Recall@5** | `1.0000` | `1.0000` | `+0.0000` | `1.0000` | `1.0000` | `+0.0000` |
+| **Recall@10** | `1.0000` | `1.0000` | `+0.0000` | `1.0000` | `1.0000` | `+0.0000` |
+
+**Gate Outcome (`Q1`)**: **RETAINED** — both `default` and `fts5_hybrid` individually satisfy `MRR > baseline` (`+0.0208`) and `Precision@1 > baseline` (`+0.0417`) with zero `Precision@5` regression (`0.2083 >= 0.2083`, `Recall@5 = 1.0000` already at corpus ceiling). Cross-encoder reranking promoted paraphrased rank-2 queries to rank 1 in both modes while SHA-256 hashes over `manifests/` and `lexical/` confirmed `0`-byte persistence drift and child-first parent expansion preserved cross-referenced rule exceptions.
+
+---
+
+## 5. Reproduction Steps
 
 ### Automated Offline Verification (CI / Zero Network)
 
@@ -65,12 +85,14 @@ Key observations:
 uv run pytest tests/test_eval.py -k "curated_policy_suite" -v
 ```
 
-### Local Live-Model CLI Benchmark (Optional Ollama)
+### Local Live-Model CLI Benchmark (Optional Ollama & `[rerank]`)
 
 ```bash
 uv run docpipe-maestro ingest tests/fixtures/policy_corpus --profile POLICY --collection eval_policy
 uv run docpipe-maestro ingest tests/fixtures/eval_corpus --profile POLICY --collection eval_policy
 
-uv run docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --searcher default --json
-uv run docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --searcher fts5_hybrid
+uv run docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --searcher default --no-rerank --json
+uv run docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --searcher default --rerank
+uv run docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --searcher fts5_hybrid --no-rerank
+uv run docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --searcher fts5_hybrid --rerank
 ```

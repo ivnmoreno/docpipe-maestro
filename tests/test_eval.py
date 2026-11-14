@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,14 @@ from docpipe_maestro.eval import (
     reciprocal_rank,
 )
 from docpipe_maestro.manifest import save_manifest
-from docpipe_maestro.types import DocpipeError, Manifest, ModelMismatchError, RegistryError
+from docpipe_maestro.types import (
+    DocpipeError,
+    Manifest,
+    MissingExtraError,
+    ModelMismatchError,
+    RegistryError,
+    RetrievedChunk,
+)
 
 
 def _snapshot_tree_hashes(root: Path) -> dict[str, str]:
@@ -493,3 +501,121 @@ def test_curated_policy_suite_and_baseline_replay(
     assert _snapshot_tree_hashes(tmp_persist_dir) == before_hashes
     cli_report = json.loads(capsys.readouterr().out)
     assert _strip_persist_dir(cli_report) == _strip_persist_dir(baseline["modes"]["default"])
+
+
+def test_evaluate_reranking_conditional_config_preflight_and_zero_drift(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    from docpipe_maestro.query.reranker import RERANKERS, register_reranker
+
+    docs_dir = tmp_path / "rr_eval_docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    (docs_dir / "leave.md").write_text(
+        "# Standard Eligibility\n\nAll employees qualify after onboarding.\n\n"
+        "# Probation Exception\n\nExact clause EX-99 exempts probationary staff from leave.\n",
+        encoding="utf-8",
+    )
+    ingest(docs_dir, profile="POLICY", collection="eval_rr", persist_dir=tmp_persist_dir)
+
+    chunks_ex = retrieve("EX-99", collection="eval_rr", persist_dir=tmp_persist_dir, top_k=5)
+    target_pid = next(c.id for c in chunks_ex if "EX-99" in c.text)
+
+    fixture_path = tmp_path / "rr_eval_fixture.json"
+    fixture_path.write_text(
+        json.dumps(
+            {
+                "collection": "eval_rr",
+                "profile": "POLICY",
+                "queries": [
+                    {
+                        "question": "What does clause EX-99 state for probationary staff?",
+                        "relevant_ids": [target_pid],
+                        "notes": "exact_identifier",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    saved_entries = dict(RERANKERS._entries)
+    saved_lazy = dict(RERANKERS._lazy_builtins)
+    try:
+
+        @register_reranker("_test_eval_promoter")
+        class _EvalPromoter:
+            name = "_test_eval_promoter"
+
+            def rerank(
+                self,
+                query: str,
+                chunks: list[RetrievedChunk],
+                *,
+                top_k: int,
+            ) -> list[RetrievedChunk]:
+                rescored = [
+                    replace(chunk, score=0.95 if "EX-99" in chunk.text else 0.15)
+                    for chunk in chunks
+                ]
+                rescored.sort(key=lambda c: c.score, reverse=True)
+                return rescored[:top_k]
+
+        for mode in ("default", "fts5_hybrid"):
+            before_hashes = _snapshot_tree_hashes(tmp_persist_dir)
+            off_rep = evaluate(
+                fixture_path,
+                persist_dir=tmp_persist_dir,
+                k_values=(1, 3, 5),
+                searcher=mode,
+                rerank=False,
+            )
+            assert "rerank" not in off_rep["config"]
+            assert "reranker" not in off_rep["config"]
+            assert "rerank_top_n" not in off_rep["config"]
+
+            on_rep = evaluate(
+                fixture_path,
+                persist_dir=tmp_persist_dir,
+                k_values=(1, 3, 5),
+                searcher=mode,
+                rerank=True,
+                reranker="_test_eval_promoter",
+                rerank_top_n=7,
+            )
+            assert on_rep["config"]["rerank"] is True
+            assert on_rep["config"]["reranker"] == "_test_eval_promoter"
+            assert on_rep["config"]["rerank_top_n"] == 7
+            assert on_rep["per_query"][0]["retrieved_ids"][0] == target_pid
+            assert on_rep["aggregate"]["precision_at_k"]["1"] == pytest.approx(1.0)
+            assert _snapshot_tree_hashes(tmp_persist_dir) == before_hashes
+
+        # Preflight validation runs before touching or creating persist_dir
+        missing_persist = tmp_path / "never_created_persist"
+        with pytest.raises(ValueError, match="rerank_top_n must be a positive integer >= 1"):
+            evaluate(fixture_path, persist_dir=missing_persist, rerank=True, rerank_top_n=0)
+        with pytest.raises(ValueError, match="rerank_top_n must be a positive integer >= 1"):
+            evaluate(fixture_path, persist_dir=missing_persist, rerank=False, rerank_top_n=0)
+        with pytest.raises(RegistryError):
+            evaluate(
+                fixture_path,
+                persist_dir=missing_persist,
+                rerank=True,
+                reranker="ghost_reranker",
+            )
+        monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+        with pytest.raises(MissingExtraError, match=r"docpipe-maestro\[rerank\]"):
+            evaluate(
+                fixture_path,
+                persist_dir=missing_persist,
+                rerank=True,
+                reranker="cross_encoder",
+            )
+        assert not missing_persist.exists()
+    finally:
+        RERANKERS._entries = saved_entries
+        RERANKERS._lazy_builtins = saved_lazy

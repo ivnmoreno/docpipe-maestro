@@ -50,7 +50,8 @@ Every file's execution role is visible from the package layout under `src/docpip
 | [`ingest/chunker/`](../src/docpipe_maestro/ingest/chunker/__init__.py) | Phase 1 | Structure-aware parent sections & linked child chunks, offline token estimation, section-scoped overlap |
 | [`ingest/pipeline.py`](../src/docpipe_maestro/ingest/pipeline.py) | Phase 1 | Public `ingest`, `sync`, `remove`, `status`, and `reindex` orchestration syncing ChromaDB, FTS5, and manifest |
 | [`query/searcher/`](../src/docpipe_maestro/query/searcher/__init__.py) | Phase 2 | Built-in `DenseSearcher` (`"default"`) and `Fts5HybridSearcher` (`"fts5_hybrid"` with RRF fusion) |
-| [`query/retriever.py`](../src/docpipe_maestro/query/retriever.py) | Phase 2 | Read-only child retrieval orchestration, threshold filter, parent expansion & cross-doc citation pass |
+| [`query/reranker/`](../src/docpipe_maestro/query/reranker/__init__.py) | Phase 2 | Lazy `RERANKERS` registry, shared preflight validator, and optional `CrossEncoderReranker` (`"cross_encoder"`) |
+| [`query/retriever.py`](../src/docpipe_maestro/query/retriever.py) | Phase 2 | Read-only child retrieval, optional child-first reranking, parent expansion & cross-doc citation pass |
 | [`query/prompts.py`](../src/docpipe_maestro/query/prompts.py) | Phase 2 | Pure zero-I/O prompt constructor preserving citation metadata (`Source`, `Section`, `Clause`, `Page`) |
 | [`query/answer.py`](../src/docpipe_maestro/query/answer.py) | Phase 2 | Optional grounded completion via `litellm.completion` with deterministic empty-context refusal |
 | [`eval/`](../src/docpipe_maestro/eval/__init__.py) | Phase 2 | Read-only retrieval evaluation metrics (`metrics.py`) and harness runner (`harness.py`) |
@@ -162,8 +163,12 @@ If the process crashes between steps `4a` and `4b`:
 
 ```text
 Question ──► searcher (Dense or FTS5 Hybrid RRF) over committed child chunks
+             (child_top_k = max(rerank_top_n, top_k * 3) if rerank & expand_parent)
                                      │
-                                     ▼ (filter uncommitted doc_version & score >= threshold)
+                                     ▼ (filter uncommitted doc_version & Stage 1 score >= threshold)
+                                [rerank=True?]
+                                     │ yes ──► reranker (CrossEncoder sigmoid [0.0, 1.0] over children)
+                                     ▼
                           ┌──────────┴──────────┐
                expand_parent=True      expand_parent=False
                           │                     │

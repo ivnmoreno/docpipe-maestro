@@ -38,6 +38,7 @@ dependencies = [
 pdf = ["pypdf>=6.21.3"]
 docx = ["python-docx>=1.1.0"]
 html = ["beautifulsoup4>=4.12.0"]
+rerank = ["sentence-transformers>=3.0.0"]
 all = [
     "docpipe-maestro[pdf]",
     "docpipe-maestro[docx]",
@@ -120,6 +121,7 @@ module = [
     "pypdf.*",
     "docx.*",
     "bs4.*",
+    "sentence_transformers.*",
 ]
 ignore_missing_imports = true
 

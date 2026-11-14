@@ -179,22 +179,27 @@ def retrieve(
     embedder: str = "default",
     store: str = "default",
     searcher: str = "default",
+    rerank: bool = False,
+    reranker: str = "cross_encoder",
+    rerank_top_n: int = 20,
 ) -> list[RetrievedChunk]
 ```
 
 Read-only retrieval enforcing the collection's embedding model lock:
 
+- Validates `rerank`, `reranker`, and `rerank_top_n` upfront via `validate_rerank_options()` (`rerank_top_n >= 1` integer excluding `bool`, `RERANKERS` resolution and `validate_available()` check when `rerank=True`) alongside `EMBEDDERS` / `STORES` / `SEARCHERS` resolution before manifest or early-return checks.
 - Checks `manifest.embed_model` via `check_model_lock()`; raises `ModelMismatchError` if locked to a different model.
 - Resolves `searcher` via `SEARCHERS`:
   - `"default"` (`DenseSearcher`): queries dense child chunks exclusively (`where={"type": "child"}`) with `include_embeddings=False`, filtering out uncommitted `doc_version` entries (`score` is cosine similarity in `[0.0, 1.0]`).
   - `"fts5_hybrid"` (`Fts5HybridSearcher`): fuses dense vector candidates with read-only SQLite FTS5 BM25 candidates (`candidate_k = max(child_top_k * 2, 20)`) using Reciprocal Rank Fusion (`k = 60`, weights `0.5` / `0.5`), normalized by theoretical maximum `1 / 61` into `[0.0, 1.0]` (dual rank-1 agreement `== 1.0`; single-signal rank-1 `== 0.5`). Short-circuits whitespace/punctuation-only queries to `[]`, and raises `DocpipeError` recommending `reindex` if a non-empty collection lacks an FTS5 index.
 - Returns `[]` immediately without calling the embedder if the collection is empty or `top_k <= 0`.
-- Applies optional score cutoff `score >= threshold` (`[0.0, 1.0]`).
-- When `expand_parent=True`, searches `top_k * 3` child candidates, assigns each unique `parent_id` `max(child.score)` across its matched children, resolves the top `top_k` parent sections via `get_by_ids(..., include_embeddings=False)`, and returns up to `top_k` unique parents sorted descending by `score`.
+- Applies optional score cutoff `score >= threshold` (`[0.0, 1.0]`) to Stage 1 child scores.
+- When `rerank=True`, expands the Stage 1 candidate budget to `max(rerank_top_n, top_k * 3)` when `expand_parent=True` (`max(rerank_top_n, top_k)` otherwise), instantiates the registered `Reranker` (default `"cross_encoder"` -> `CrossEncoderReranker` using `BAAI/bge-reranker-base`, sigmoid-normalized `[0.0, 1.0]` scores, lazy thread-safe `_MODEL_CACHE`), and reranks surviving children **before** parent aggregation (`top_k=len(child_matches)` when expanding parents, `top_k=top_k` otherwise).
+- When `expand_parent=True`, searches `top_k * 3` child candidates (or `max(rerank_top_n, top_k * 3)` when reranking), assigns each unique `parent_id` `max(child.score)` across its matched children, resolves the top `top_k` parent sections via `get_by_ids(..., include_embeddings=False)`, and returns up to `top_k` unique parents sorted descending by `score`.
 - When `expand_parent=True` and `follow_crossrefs=True`, resolves explicit cross-document section/clause citations (e.g., `Section 4.1 of the Compliance Policy`) in one non-recursive pass when the target section is absent from top-`k` results.
 - When `expand_parent=False`, returns matched child chunks sorted descending by `score`.
 
-**Raises**: `ModelMismatchError`, `MissingCredentialError`, `RegistryError`, `DocpipeError`.
+**Raises**: `ModelMismatchError`, `MissingCredentialError`, `MissingExtraError`, `RegistryError`, `DocpipeError`, `ValueError`.
 
 ---
 
@@ -317,6 +322,8 @@ print(detailed.text, detailed.total_tokens, detailed.elapsed_seconds)
 | `DEFAULT_EMBED_MODEL` | `"ollama/nomic-embed-text"` |
 | `DEFAULT_GENERATION_MODEL` | `"ollama/llama3.2"` |
 | `DEFAULT_TOP_K` | `5` |
+| `DEFAULT_RERANK_TOP_N` | `20` |
+| `DEFAULT_RERANK_MODEL` | `"BAAI/bge-reranker-base"` |
 
 ### Built-In Chunking Profiles
 
@@ -387,7 +394,7 @@ DocpipeError (Exception)
 └── RegistryError            # Unregistered stage key or colliding stage registration
 ```
 
-Eight lazy extension decorators are re-exported from `docpipe_maestro` (`register_parser`, `register_cleaner`, `register_enricher`, `register_chunker`, `register_embedder`, `register_store`, `register_searcher`, `register_reranker`). For retrieval, built-in `SEARCHERS` keys are `"default"` (`DenseSearcher`) and `"fts5_hybrid"` (`Fts5HybridSearcher`).
+Eight lazy extension decorators are re-exported from `docpipe_maestro` (`register_parser`, `register_cleaner`, `register_enricher`, `register_chunker`, `register_embedder`, `register_store`, `register_searcher`, `register_reranker`). For retrieval, built-in `SEARCHERS` keys are `"default"` (`DenseSearcher`) and `"fts5_hybrid"` (`Fts5HybridSearcher`), and the built-in `RERANKERS` key is `"cross_encoder"` (`docpipe_maestro.query.reranker.CrossEncoderReranker`, loaded lazily and requiring `docpipe-maestro[rerank]`). Custom rerankers follow the `Reranker` protocol (`name: str`, `rerank(self, query: str, chunks: list[RetrievedChunk], *, top_k: int) -> list[RetrievedChunk]`, optionally providing a static/class `validate_available()` method for upfront dependency checks) via `@register_reranker("<name>")`.
 
 Example defensive wrapper for an application backend:
 
@@ -452,10 +459,10 @@ from docpipe_maestro.eval import (
 ### Read-Only Runner (`docpipe_maestro.eval.harness`)
 
 - `load_eval_fixture(fixture: str | Path | EvalFixture) -> EvalFixture`: Loads and normalizes a JSON file or mapping without mutating caller inputs; raises `DocpipeError` on missing files, malformed JSON, empty `queries`, blank `question`, or empty/blank `relevant_ids`.
-- `evaluate(fixture, *, collection=None, persist_dir=".docpipe", embed_model="ollama/nomic-embed-text", k_values=(1, 3, 5, 10), expand_parent=True, follow_crossrefs=True, threshold=None, embedder="default", store="default", searcher="default", **retrieve_kwargs) -> EvalReport`:
-  1. Validates `k_values`, finite `threshold` (`[0.0, 1.0]`), fixture schema, and stage selectors (`EMBEDDERS`, `STORES`, `SEARCHERS`) upfront.
+- `evaluate(fixture, *, collection=None, persist_dir=".docpipe", embed_model="ollama/nomic-embed-text", k_values=(1, 3, 5, 10), expand_parent=True, follow_crossrefs=True, threshold=None, embedder="default", store="default", searcher="default", rerank=False, reranker="cross_encoder", rerank_top_n=20, **retrieve_kwargs) -> EvalReport`:
+  1. Validates `k_values`, finite `threshold` (`[0.0, 1.0]`), fixture schema, stage selectors (`EMBEDDERS`, `STORES`, `SEARCHERS`), and reranking options via `validate_rerank_options(...)` upfront.
   2. Resolves target collection: explicit non-`None` `collection` `>` non-empty `fixture["collection"]` `>` `"default"`.
   3. Checks `manifest_path.exists()`, `check_model_lock()`, and committed sources **before** touching `ChromaStore` so missing or empty collections cause zero disk mutations.
-  4. Executes `retrieve(..., top_k=max(k_values))` once per query read-only and returns `EvalReport` (`config`, `aggregate`, `per_query`).
+  4. Executes `retrieve(..., top_k=max(k_values), rerank=rerank, reranker=reranker, rerank_top_n=rerank_top_n)` once per query read-only and returns `EvalReport` (`config`, `aggregate`, `per_query`). `EvalConfig` includes `"rerank": True`, `"reranker"`, and `"rerank_top_n"` **only** when `rerank=True` (`total=False` optional fields).
 
 Canonical `TypedDict` schemas (`EvalQuery`, `EvalFixture`, `EvalConfig`, `PerQueryResult`, `EvalMetricsSummary`, `EvalReport`) are defined once in [`src/docpipe_maestro/types.py`](../src/docpipe_maestro/types.py) and re-exported by `docpipe_maestro.eval`.
