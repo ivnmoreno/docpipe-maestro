@@ -184,17 +184,21 @@ def _aggregate_metrics(
     per_query: list[PerQueryResult],
     norm_k: tuple[int, ...],
 ) -> EvalMetricsSummary:
-    """Compute mean Precision@K, Recall@K, and MRR across evaluated queries."""
+    """Compute mean Precision@K, Recall@K, and MRR across evaluated queries.
+
+    Uses ``math.fsum`` so floating-point totals remain bit-identical across
+    Python versions (``sum()`` switched summation algorithms in Python 3.12).
+    """
     num_queries = len(per_query)
     return {
         "num_queries": num_queries,
-        "mrr": sum(item["reciprocal_rank"] for item in per_query) / num_queries,
+        "mrr": math.fsum(item["reciprocal_rank"] for item in per_query) / num_queries,
         "precision_at_k": {
-            str(k): sum(item["precision_at_k"][str(k)] for item in per_query) / num_queries
+            str(k): math.fsum(item["precision_at_k"][str(k)] for item in per_query) / num_queries
             for k in norm_k
         },
         "recall_at_k": {
-            str(k): sum(item["recall_at_k"][str(k)] for item in per_query) / num_queries
+            str(k): math.fsum(item["recall_at_k"][str(k)] for item in per_query) / num_queries
             for k in norm_k
         },
     }

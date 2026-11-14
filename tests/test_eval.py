@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -394,6 +395,29 @@ def test_evaluate_repeatable_and_zero_persist_byte_drift(
     assert agg["num_queries"] == 2
     assert len(pq["retrieved_ids"]) == len(pq["retrieved_scores"])
     assert q_sample["question"] == "q"
+
+
+def test_aggregate_metrics_uses_compensated_fsum_across_python_versions() -> None:
+    """Ensure aggregate means remain bit-identical across Python 3.10-3.13."""
+    from docpipe_maestro.eval.harness import _aggregate_metrics
+
+    per_query: list[PerQueryResult] = [
+        {
+            "question": f"q{i}",
+            "notes": "",
+            "relevant_ids": ["r"],
+            "retrieved_ids": ["r"],
+            "retrieved_scores": [1.0],
+            "precision_at_k": {"10": 0.1},
+            "recall_at_k": {"10": 1.0 / 3.0},
+            "reciprocal_rank": 1.0 / 3.0,
+        }
+        for i in range(24)
+    ]
+    agg = _aggregate_metrics(per_query, (10,))
+    assert agg["precision_at_k"]["10"] == math.fsum([0.1] * 24) / 24
+    assert agg["recall_at_k"]["10"] == math.fsum([1.0 / 3.0] * 24) / 24
+    assert agg["mrr"] == math.fsum([1.0 / 3.0] * 24) / 24
 
 
 def _strip_persist_dir(report: dict[str, Any]) -> dict[str, Any]:
