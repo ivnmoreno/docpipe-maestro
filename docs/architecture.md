@@ -14,7 +14,7 @@ flowchart LR
         direction LR
         F["Files (.md, .txt, .pdf, .docx, .html)"] --> I["intake/\n(Format + Headings)"]
         I --> C["clean/\n(HTML/Whitespace/Boilerplate)"]
-        C --> X["crossrefs.py\n(POLICY: Intra-Doc Resolution)"]
+        C --> X["enricher/\n(POLICY: crossrefs)"]
         X --> K["chunker/\n(Parents + Linked Children)"]
         K --> E1["embedder/\n(Batch Child Vectors Only)"]
         E1 --> S1["store/ (Chroma + FTS5) + manifest.py\n(Staged Insert -> Atomic Swap -> Purge)"]
@@ -37,16 +37,17 @@ Every file's execution role is visible from the package layout under `src/docpip
 
 | Module | Phase | Responsibility |
 |---|---|---|
-| [`types.py`](../src/docpipe_maestro/types.py) | Shared | Single source of truth for chunks, metadata, profiles, manifest records, results, and `DocpipeError` hierarchy |
+| [`types.py`](../src/docpipe_maestro/types.py) | Shared | Single source of truth for chunks, metadata, profiles, `IngestContext`, manifest records, results, and `DocpipeError` hierarchy |
 | [`config.py`](../src/docpipe_maestro/config.py) | Shared | Static constants (`DEFAULT_*`) and immutable chunking profiles (`DEFAULT`, `POLICY`, `resolve_profile`) |
 | [`_registry.py`](../src/docpipe_maestro/_registry.py) | Shared | Lazy Strategy + Registry core with collision/lookup `RegistryError` guards |
+| [`_crossrefs.py`](../src/docpipe_maestro/_crossrefs.py) | Shared | Phase-neutral cross-reference pattern matching, `index_section_targets`, `match_source_key`, and bounded excerpt truncation |
 | [`embedder/`](../src/docpipe_maestro/embedder/__init__.py) | Shared | Batched provider-agnostic embeddings via `litellm.embedding` (`batch_size=64`) and auth error normalization |
 | [`manifest.py`](../src/docpipe_maestro/manifest.py) | Shared | Atomic DB-collocated JSON manifest (`sha256`, `mtime`/`size` fast-path, collection model lock) |
 | [`store/chroma.py`](../src/docpipe_maestro/store/chroma.py) | Shared | Embedded `chromadb.PersistentClient` wrapper (`cosine` space, `None` metadata bridge, staging cleanup) |
 | [`store/lexical.py`](../src/docpipe_maestro/store/lexical.py) | Shared | Collocated SQLite FTS5 `LexicalIndex` (`unicode61` BM25, technical token sanitizer, strict `mode=ro` reads) |
 | [`ingest/intake/`](../src/docpipe_maestro/ingest/intake/__init__.py) | Phase 1 | Format dispatch, magic-byte fallback, fenced-block-safe Markdown, PDF/DOCX/HTML structural parsing |
 | [`ingest/clean/`](../src/docpipe_maestro/ingest/clean/__init__.py) | Phase 1 | Allow-listed HTML stripping, whitespace normalization, and 3+ page header/footer boilerplate removal |
-| [`ingest/crossrefs.py`](../src/docpipe_maestro/ingest/crossrefs.py) | Phase 1 | Intra-document `Section`/`Article`/`Clause`/`§` detection, cycle-safe excerpt injection, unresolved warnings |
+| [`ingest/enricher/`](../src/docpipe_maestro/ingest/enricher/__init__.py) | Phase 1 | Lazy `ENRICHERS` registry and built-in `CrossrefsEnricher` (`"crossrefs"`); [`ingest/crossrefs.py`](../src/docpipe_maestro/ingest/crossrefs.py) stays as a silent compatibility re-export |
 | [`ingest/chunker/`](../src/docpipe_maestro/ingest/chunker/__init__.py) | Phase 1 | Structure-aware parent sections & linked child chunks, offline token estimation, section-scoped overlap |
 | [`ingest/pipeline.py`](../src/docpipe_maestro/ingest/pipeline.py) | Phase 1 | Public `ingest`, `sync`, `remove`, `status`, and `reindex` orchestration syncing ChromaDB, FTS5, and manifest |
 | [`query/searcher/`](../src/docpipe_maestro/query/searcher/__init__.py) | Phase 2 | Built-in `DenseSearcher` (`"default"`) and `Fts5HybridSearcher` (`"fts5_hybrid"` with RRF fusion) |
@@ -92,15 +93,17 @@ Importantly, `_TAG_RE` matches **only recognized HTML tag names and `<!--...-->`
 
 `clean_document()` inspects the first and last non-empty normalized line on every paginated page: if 3 or more distinct pages share the exact same normalized first or last line, that line is removed across all sections as recurring page-header/footer boilerplate.
 
-### Stage 3: Intra-Document Cross-Reference Resolution (`ingest/crossrefs.py`)
+### Stage 3: Document Enrichers & Cross-Reference Resolution (`ingest/enricher/`)
 
-When `profile.resolve_crossrefs=True` (`POLICY` profile):
+`ingest()` and `sync()` resolve every configured name in `profile.enrichers` upfront from `ENRICHERS` (failing immediately with `RegistryError` if any entry is missing) and execute them sequentially in declared order between cleaning and chunking, passing each stage the per-document `IngestContext` (`collection`, `source`, `content_hash`, `doc_version`, `embed_model`, `profile`). On `DEFAULT` (`enrichers=()`), zero enrichers are resolved or invoked.
 
-1. `_build_target_index(doc)` indexes every section heading containing a numeric identifier (`Section 7`, `Article 4`, `7.5 Public API`, `20.2: Compliance Rules`, `4. Regional Caps`) as well as multi-part numbered clause lines (`1.1`, `2.3.1`, etc.).
+When `profile.enrichers` includes `"crossrefs"` (`POLICY` sets `enrichers=("crossrefs",)`, and legacy custom profiles setting `resolve_crossrefs=True` with empty `enrichers` normalize automatically to `("crossrefs",)`), `CrossrefsEnricher` runs `resolve_crossrefs(doc)` backed by shared helpers in [`_crossrefs.py`](../src/docpipe_maestro/_crossrefs.py):
+
+1. `index_section_targets(...)` indexes every section heading containing a numeric identifier (`Section 7`, `Article 4`, `7.5 Public API`, `20.2: Compliance Rules`, `4. Regional Caps`) as well as multi-part numbered clause lines (`1.1`, `2.3.1`, etc.).
    - Bare integer headings without a prefix require a trailing dot (`4. Title`) so headings such as `2026 Roadmap` or `3.5mm Audio Hardware` are not misindexed as `Section 2026` or `§3.5`.
 2. Each section's `raw_text` is scanned once (non-recursively) for `Section <num>`, `Article <num>`, `Clause <num>`, or `§<num>`.
 3. References matching the current section's own identifier (`self_keys`) or already resolved in the same section are skipped, preventing infinite mutual recursion (`Section 1` $\leftrightarrow$ `§2.1`).
-4. Resolved targets are truncated cleanly at a word boundary (`max_chars=400`) and appended as `[Crossref <ref>: <excerpt>]`. Unresolved references (such as external statutes or skipped empty container headings) emit a structured `WARNING` log via `docpipe_maestro.ingest.crossrefs` and are never silently lost.
+4. Resolved targets are truncated cleanly at a word boundary (`max_chars=400`) and appended as `[Crossref <ref>: <excerpt>]`. Unresolved references (such as external statutes or skipped empty container headings) emit a structured `WARNING` log via `docpipe_maestro.ingest.enricher.crossrefs` and are never silently lost.
 
 ### Stage 4: Structure-Aware Hierarchical Chunking (`ingest/chunker.py`)
 
@@ -137,8 +140,8 @@ Never mutating stores via partial ID-only upserts prevents orphaned clauses when
 ```text
 1. Inspect Disk & Manifest (mtime/size fast-path -> sha256 check)
 2. Atomic Batch Validation:
-   Parse -> Clean -> Crossref -> Chunk -> Embed ALL changed files in memory
-   (Any format error, missing extra, or provider/auth failure aborts BEFORE DB init)
+   Parse -> Clean -> Enrich -> Chunk -> Embed ALL changed files in memory
+   (Any format error, missing extra, enricher failure, or provider/auth failure aborts BEFORE DB init)
 3. Open VectorStore + LexicalIndex & sweep_uncommitted(active_versions) from prior interrupted runs
 4. Per changed source document:
    a. Stage new child/parent records in ChromaDB and child rows in SQLite FTS5 tagged with doc_version = sha256_hex[:12]
@@ -181,7 +184,7 @@ Question ──► searcher (Dense or FTS5 Hybrid RRF) over committed child chun
 
 In policy and compliance corpora, an isolated sentence such as *"Full-time employees receive 20 days of annual leave"* can become **factually inverted** without its nearby exception (*"except during the initial 90-day probationary period"*). Combining:
 1. `POLICY` clause indivisibility (`clause_preserving=True`),
-2. Intra-document cross-reference resolution (`resolve_crossrefs=True`), and
+2. Intra-document cross-reference resolution (`enrichers=("crossrefs",)` / `resolve_crossrefs=True`), and
 3. Parent-section expansion (`expand_parent=True`)
 
 ensures matched child clauses bring their complete enclosing rules and exceptions into context — continuously verified by the mandatory Release Gate in [`tests/test_reverse_safety.py`](../tests/test_reverse_safety.py).

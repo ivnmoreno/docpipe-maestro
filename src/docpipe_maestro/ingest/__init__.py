@@ -1,1 +1,1 @@
-"""Phase 1 offline ingestion package: intake, cleaning, crossrefs, chunking, and pipeline."""
+"""Phase 1 offline ingestion package: intake, cleaning, enricher, chunking, and pipeline."""

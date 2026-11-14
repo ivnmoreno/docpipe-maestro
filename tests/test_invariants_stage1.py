@@ -2,21 +2,31 @@
 
 from __future__ import annotations
 
+import os
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import FrozenInstanceError
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
 
 from docpipe_maestro._resolve import resolve_parser
 from docpipe_maestro.cli import main
+from docpipe_maestro.ingest.enricher import ENRICHERS, register_enricher
 from docpipe_maestro.ingest.pipeline import ingest, sync
 from docpipe_maestro.manifest import load_manifest
-from docpipe_maestro.store import STORES, VectorStore
+from docpipe_maestro.store import STORES, LexicalIndex, VectorStore
 from docpipe_maestro.types import (
+    ChunkingProfile,
     ChunkMetadata,
     DocpipeError,
     EmbeddedChunk,
+    IngestContext,
+    ParsedDocument,
+    ParsedSection,
     RegistryError,
     UnsupportedFormatError,
     make_chunk_id,
@@ -238,3 +248,380 @@ def test_cli_main_handles_registry_error_with_exit_code_1(
     assert captured.out == ""
     assert "Error:" in captured.err
     assert "Unknown stage" in captured.err
+
+
+@contextmanager
+def _restore_enrichers() -> Iterator[None]:
+    """Snapshot and restore ``ENRICHERS`` state around isolated invariant tests."""
+    entries = dict(ENRICHERS._entries)
+    lazy = dict(ENRICHERS._lazy_builtins)
+    materializing = set(ENRICHERS._materializing)
+    try:
+        yield
+    finally:
+        ENRICHERS._entries.clear()
+        ENRICHERS._entries.update(entries)
+        ENRICHERS._lazy_builtins.clear()
+        ENRICHERS._lazy_builtins.update(lazy)
+        ENRICHERS._materializing.clear()
+        ENRICHERS._materializing.update(materializing)
+
+
+def _collection_snapshot(
+    persist_dir: Path,
+    collection: str,
+    *,
+    lexical_query: str = "alpha beta gamma",
+) -> tuple[
+    list[tuple[str, str, str]],
+    list[tuple[str, str, str]],
+    list[tuple[str, str, str]],
+    dict[str, tuple[str, str, float, list[str]]],
+]:
+    """Capture persisted store, lexical, and manifest state for atomic rollback checks."""
+    store = VectorStore(persist_dir, collection)
+    children = sorted(
+        ((c.id, c.metadata["doc_version"], c.text) for c in store.get_all_children()),
+        key=lambda row: row[0],
+    )
+    parents = sorted(
+        ((p.id, p.metadata["doc_version"], p.text) for p in store.get_all_parents()),
+        key=lambda row: row[0],
+    )
+    lexical_hits = [
+        (r.id, r.metadata["doc_version"], r.text)
+        for r in LexicalIndex(persist_dir, collection).search(lexical_query, top_k=50)
+    ]
+    manifest = load_manifest(persist_dir, collection)
+    manifest_state = {
+        k: (v.content_hash, v.doc_version, v.mtime, list(v.chunk_ids))
+        for k, v in sorted(manifest.sources.items())
+    }
+    return children, parents, lexical_hits, manifest_state
+
+
+def test_enricher_failure_aborts_atomically_and_profile_override_precedence(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enricher exceptions abort cleanly and explicit enrichers override resolve_crossrefs."""
+    _ = mock_litellm_offline
+
+    def _profile(
+        name: str,
+        *,
+        resolve_crossrefs: bool = False,
+        enrichers: tuple[str, ...] = (),
+    ) -> ChunkingProfile:
+        return ChunkingProfile(
+            name=name,
+            chunk_size=1000,
+            overlap=80,
+            clause_preserving=False,
+            parent_child=False,
+            resolve_crossrefs=resolve_crossrefs,
+            enrichers=enrichers,
+        )
+
+    assert _profile("LEGACY_FLAG", resolve_crossrefs=True).enrichers == ("crossrefs",)
+    assert _profile("LEGACY_EMPTY", resolve_crossrefs=True, enrichers=()).enrichers == (
+        "crossrefs",
+    )
+
+    override_profile = _profile(
+        "OVERRIDE",
+        resolve_crossrefs=True,
+        enrichers=("custom_only",),
+    )
+    assert override_profile.enrichers == ("custom_only",)
+
+    with _restore_enrichers():
+        override_ran: list[str] = []
+        resolved_names: list[str] = []
+        orig_resolve = ENRICHERS.resolve
+
+        @register_enricher("custom_only")
+        class _CustomOnlyEnricher:
+            name = "custom_only"
+
+            def enrich(self, doc: ParsedDocument, ctx: IngestContext) -> ParsedDocument:
+                _ = ctx
+                override_ran.append(doc.source)
+                return ParsedDocument(
+                    source=doc.source,
+                    format_name=doc.format_name,
+                    sections=[
+                        ParsedSection(
+                            source=sec.source,
+                            section_label=sec.section_label,
+                            heading_level=sec.heading_level,
+                            raw_text=f"{sec.raw_text}\n[CUSTOM_ONLY]",
+                            page=sec.page,
+                            clauses=list(sec.clauses),
+                        )
+                        for sec in doc.sections
+                    ],
+                )
+
+        def _spy_resolve(name: str) -> Any:
+            resolved_names.append(name)
+            return orig_resolve(name)
+
+        override_doc = tmp_path / "override.md"
+        override_doc.write_text("# Override\n\nSection 1\nSee Section 2.\n", encoding="utf-8")
+        with monkeypatch.context() as mp:
+            mp.setattr(ENRICHERS, "resolve", _spy_resolve)
+            ingest(
+                override_doc,
+                persist_dir=tmp_persist_dir,
+                collection="override_col",
+                embed_model="mock/embed",
+                profile=override_profile,
+            )
+        assert override_ran == ["override.md"]
+        assert resolved_names == ["custom_only"]
+
+    corpus = tmp_path / "atomic_corpus"
+    corpus.mkdir()
+    alpha = corpus / "alpha.md"
+    alpha.write_text("# Alpha\n\nAlpha baseline stable content.\n", encoding="utf-8")
+    ingest(
+        corpus,
+        persist_dir=tmp_persist_dir,
+        collection="atomic_col",
+        embed_model="mock/embed",
+    )
+    baseline = _collection_snapshot(tmp_persist_dir, "atomic_col")
+
+    with _restore_enrichers():
+
+        @register_enricher("touch")
+        class _TouchEnricher:
+            name = "touch"
+
+            def enrich(self, doc: ParsedDocument, ctx: IngestContext) -> ParsedDocument:
+                _ = ctx
+                return doc
+
+        @register_enricher("boom")
+        class _BoomEnricher:
+            name = "boom"
+
+            def enrich(self, doc: ParsedDocument, ctx: IngestContext) -> ParsedDocument:
+                _ = (doc, ctx)
+                raise RuntimeError("mid-sequence boom")
+
+        beta_single = tmp_path / "beta_single.md"
+        beta_single.write_text("# Beta\n\nBeta volatile token.\n", encoding="utf-8")
+        with pytest.raises(RuntimeError, match="mid-sequence boom"):
+            ingest(
+                beta_single,
+                persist_dir=tmp_persist_dir,
+                collection="atomic_col",
+                embed_model="mock/embed",
+                profile=_profile("FAIL_SEQ", enrichers=("touch", "boom")),
+            )
+        assert _collection_snapshot(tmp_persist_dir, "atomic_col") == baseline
+
+        seen_batch: list[str] = []
+
+        @register_enricher("fail_second")
+        class _FailSecondEnricher:
+            name = "fail_second"
+
+            def enrich(self, doc: ParsedDocument, ctx: IngestContext) -> ParsedDocument:
+                _ = ctx
+                seen_batch.append(doc.source)
+                if len(seen_batch) == 2:
+                    raise RuntimeError("mid-batch boom")
+                return doc
+
+        (corpus / "beta.md").write_text("# Beta\n\nBeta batch file.\n", encoding="utf-8")
+        (corpus / "gamma.md").write_text("# Gamma\n\nGamma batch file.\n", encoding="utf-8")
+        with pytest.raises(RuntimeError, match="mid-batch boom"):
+            sync(
+                corpus,
+                persist_dir=tmp_persist_dir,
+                collection="atomic_col",
+                embed_model="mock/embed",
+                profile=_profile("FAIL_BATCH", enrichers=("fail_second",)),
+            )
+        assert len(seen_batch) == 2
+        assert _collection_snapshot(tmp_persist_dir, "atomic_col") == baseline
+
+
+def test_chunking_profile_enrichers_normalization_and_immutability() -> None:
+    """ChunkingProfile normalizes iterable enrichers to immutable tuples and locks fields."""
+    caller_list = ["first", "second"]
+    prof = ChunkingProfile(
+        name="CUSTOM_NORM",
+        chunk_size=512,
+        overlap=32,
+        clause_preserving=False,
+        parent_child=True,
+        resolve_crossrefs=True,
+        enrichers=cast(tuple[str, ...], caller_list),
+    )
+    caller_list.append("mutated_after_init")
+    assert prof.enrichers == ("first", "second")
+    assert isinstance(prof.enrichers, tuple)
+
+    legacy_list_empty = ChunkingProfile(
+        name="LEGACY_EMPTY_LIST",
+        chunk_size=512,
+        overlap=32,
+        clause_preserving=False,
+        parent_child=True,
+        resolve_crossrefs=True,
+        enrichers=cast(tuple[str, ...], []),
+    )
+    assert legacy_list_empty.enrichers == ("crossrefs",)
+
+    mutable_view: Any = prof
+    with pytest.raises(FrozenInstanceError):
+        mutable_view.enrichers = ("other",)
+
+
+def test_ingest_batch_force_and_mixed_sync_delete_abort_on_enricher_failure(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: None,
+) -> None:
+    """Directory ingest(), force=True overwrite, and sync() deletions abort atomically."""
+    _ = mock_litellm_offline
+
+    def _custom_profile(name: str, enricher_key: str) -> ChunkingProfile:
+        return ChunkingProfile(
+            name=name,
+            chunk_size=1000,
+            overlap=80,
+            clause_preserving=False,
+            parent_child=False,
+            resolve_crossrefs=False,
+            enrichers=(enricher_key,),
+        )
+
+    ingest_corpus = tmp_path / "ingest_corpus"
+    ingest_corpus.mkdir()
+    keep_ingest = ingest_corpus / "alpha.md"
+    keep_ingest.write_text("# Alpha\n\nAlpha original version.\n", encoding="utf-8")
+    ingest(
+        ingest_corpus,
+        persist_dir=tmp_persist_dir,
+        collection="batch_ingest_col",
+        embed_model="mock/embed",
+    )
+    ingest_baseline = _collection_snapshot(
+        tmp_persist_dir, "batch_ingest_col", lexical_query="alpha beta gamma delta"
+    )
+
+    fail_dir = tmp_path / "fail_dir"
+    fail_dir.mkdir()
+    (fail_dir / "beta.md").write_text("# Beta\n\nBeta first batch file.\n", encoding="utf-8")
+    (fail_dir / "gamma.md").write_text("# Gamma\n\nGamma second batch file.\n", encoding="utf-8")
+
+    with _restore_enrichers():
+        seen_ingest: list[str] = []
+
+        @register_enricher("fail_ingest_second")
+        class _FailIngestSecond:
+            name = "fail_ingest_second"
+
+            def enrich(self, doc: ParsedDocument, ctx: IngestContext) -> ParsedDocument:
+                _ = ctx
+                seen_ingest.append(doc.source)
+                if len(seen_ingest) == 2:
+                    raise DocpipeError("mid-directory ingest failure")
+                return doc
+
+        @register_enricher("always_fail_force")
+        class _AlwaysFailForce:
+            name = "always_fail_force"
+
+            def enrich(self, doc: ParsedDocument, ctx: IngestContext) -> ParsedDocument:
+                _ = (doc, ctx)
+                raise DocpipeError("forced overwrite failure")
+
+        with pytest.raises(DocpipeError, match="mid-directory ingest failure"):
+            ingest(
+                fail_dir,
+                persist_dir=tmp_persist_dir,
+                collection="batch_ingest_col",
+                embed_model="mock/embed",
+                profile=_custom_profile("FAIL_DIR", "fail_ingest_second"),
+            )
+        assert len(seen_ingest) == 2
+        assert (
+            _collection_snapshot(
+                tmp_persist_dir, "batch_ingest_col", lexical_query="alpha beta gamma delta"
+            )
+            == ingest_baseline
+        )
+
+        with pytest.raises(DocpipeError, match="forced overwrite failure"):
+            ingest(
+                keep_ingest,
+                persist_dir=tmp_persist_dir,
+                collection="batch_ingest_col",
+                embed_model="mock/embed",
+                force=True,
+                profile=_custom_profile("FAIL_FORCE", "always_fail_force"),
+            )
+        assert (
+            _collection_snapshot(
+                tmp_persist_dir, "batch_ingest_col", lexical_query="alpha beta gamma delta"
+            )
+            == ingest_baseline
+        )
+
+    sync_corpus = tmp_path / "mixed_sync_corpus"
+    sync_corpus.mkdir()
+    keep_doc = sync_corpus / "keep.md"
+    doomed_doc = sync_corpus / "doomed.md"
+    update_doc = sync_corpus / "update.md"
+    keep_doc.write_text("# Keep\n\nKeep content untouched.\n", encoding="utf-8")
+    doomed_doc.write_text("# Doomed\n\nDoomed content present before failure.\n", encoding="utf-8")
+    update_doc.write_text("# Update\n\nUpdate original version.\n", encoding="utf-8")
+
+    sync(
+        sync_corpus,
+        persist_dir=tmp_persist_dir,
+        collection="mixed_sync_col",
+        embed_model="mock/embed",
+    )
+    sync_baseline = _collection_snapshot(
+        tmp_persist_dir, "mixed_sync_col", lexical_query="keep doomed update modified"
+    )
+
+    st_keep = keep_doc.stat()
+    os.utime(keep_doc, (st_keep.st_atime + 25, st_keep.st_mtime + 25))
+    doomed_doc.unlink()
+    update_doc.write_text("# Update\n\nUpdate modified content.\n", encoding="utf-8")
+
+    with _restore_enrichers():
+
+        @register_enricher("fail_mixed_sync")
+        class _FailMixedSync:
+            name = "fail_mixed_sync"
+
+            def enrich(self, doc: ParsedDocument, ctx: IngestContext) -> ParsedDocument:
+                _ = (doc, ctx)
+                raise DocpipeError("mixed sync boom")
+
+        with pytest.raises(DocpipeError, match="mixed sync boom"):
+            sync(
+                sync_corpus,
+                persist_dir=tmp_persist_dir,
+                collection="mixed_sync_col",
+                embed_model="mock/embed",
+                profile=_custom_profile("FAIL_MIXED", "fail_mixed_sync"),
+            )
+
+    assert (
+        _collection_snapshot(
+            tmp_persist_dir, "mixed_sync_col", lexical_query="keep doomed update modified"
+        )
+        == sync_baseline
+    )

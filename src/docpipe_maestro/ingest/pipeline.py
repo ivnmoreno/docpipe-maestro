@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,8 +18,8 @@ from docpipe_maestro.config import (
 from docpipe_maestro.embedder import EMBEDDERS
 from docpipe_maestro.ingest.chunker import CHUNKERS
 from docpipe_maestro.ingest.clean import CLEANERS
-from docpipe_maestro.ingest.crossrefs import resolve_crossrefs
-from docpipe_maestro.ingest.stages import Chunker, Cleaner
+from docpipe_maestro.ingest.enricher import ENRICHERS
+from docpipe_maestro.ingest.stages import Chunker, Cleaner, Enricher
 from docpipe_maestro.manifest import (
     check_model_lock,
     classify_file,
@@ -33,6 +34,7 @@ from docpipe_maestro.types import (
     CollectionStatus,
     DocpipeError,
     EmbeddedChunk,
+    IngestContext,
     IngestResult,
     ParsedDocument,
     SourceRecord,
@@ -79,6 +81,61 @@ def _discover_files(
             raise UnsupportedFormatError(f"No files found in directory: {target}")
         return [(p, p.relative_to(target).as_posix()) for p in candidates]
     raise UnsupportedFormatError(f"Path does not exist: {target}")
+
+
+def _resolve_enrichers(enricher_names: Sequence[str]) -> list[Enricher]:
+    """Resolve and instantiate configured Phase 1 enrichers in declared order."""
+    if not enricher_names:
+        return []
+    return [ENRICHERS.resolve(name)() for name in enricher_names]
+
+
+def _apply_enrichers(
+    doc: ParsedDocument,
+    enrichers: Sequence[Enricher],
+    ctx: IngestContext,
+) -> ParsedDocument:
+    """Apply resolved Phase 1 enrichers sequentially between clean and chunk."""
+    enriched = doc
+    for enricher in enrichers:
+        enriched = enricher.enrich(enriched, ctx)
+    return enriched
+
+
+def _extract_document_chunks(
+    file_path: Path,
+    *,
+    source_key: str,
+    content_hash: str | None,
+    collection: str,
+    embed_model: str,
+    profile: ChunkingProfile,
+    cleaner: Cleaner,
+    enrichers: Sequence[Enricher],
+    chunker: Chunker,
+) -> tuple[str, str, list[Chunk]]:
+    """Parse, clean, enrich, and chunk a changed source document."""
+    if content_hash is None:
+        raise DocpipeError(f"Missing content hash for non-unchanged file: {source_key}")
+    doc_version = content_hash.split(":", 1)[1][:12]
+    parsed: ParsedDocument = resolve_parser(file_path).parse(file_path, source_key=source_key)
+    cleaned = cleaner.clean(parsed)
+    ctx: IngestContext = {
+        "collection": collection,
+        "source": source_key,
+        "content_hash": content_hash,
+        "doc_version": doc_version,
+        "embed_model": embed_model,
+        "profile": profile.name,
+    }
+    enriched = _apply_enrichers(cleaned, enrichers, ctx)
+    chunks = chunker.chunk(
+        enriched,
+        profile=profile,
+        doc_version=doc_version,
+        embed_model=embed_model,
+    )
+    return content_hash, doc_version, chunks
 
 
 def _embed_document_chunks(
@@ -177,6 +234,7 @@ def ingest(
     discovered = _discover_files(target, persist_path=persist_path)
 
     cleaner_inst: Cleaner = CLEANERS.resolve(cleaner)()
+    enricher_insts: list[Enricher] = _resolve_enrichers(prof.enrichers)
     chunker_inst: Chunker = CHUNKERS.resolve(chunker)()
     embedder_inst: Embedder = EMBEDDERS.resolve(embedder)()
     store_cls: type[Store] = STORES.resolve(store)
@@ -199,18 +257,16 @@ def ingest(
                 manifest_dirty = True
             continue
 
-        if content_hash is None:
-            raise DocpipeError(f"Missing content hash for non-unchanged file: {source_key}")
-        doc_version = content_hash.split(":", 1)[1][:12]
-        parsed: ParsedDocument = resolve_parser(file_path).parse(file_path, source_key=source_key)
-        cleaned = cleaner_inst.clean(parsed)
-        if prof.resolve_crossrefs:
-            cleaned = resolve_crossrefs(cleaned)
-        chunks = chunker_inst.chunk(
-            cleaned,
-            profile=prof,
-            doc_version=doc_version,
+        content_hash, doc_version, chunks = _extract_document_chunks(
+            file_path,
+            source_key=source_key,
+            content_hash=content_hash,
+            collection=collection,
             embed_model=embed_model,
+            profile=prof,
+            cleaner=cleaner_inst,
+            enrichers=enricher_insts,
+            chunker=chunker_inst,
         )
         embedded, dim = _embed_document_chunks(
             chunks,
@@ -331,6 +387,7 @@ def sync(
     removed_keys = sorted(set(manifest.sources.keys()) - disk_keys)
 
     cleaner_inst: Cleaner = CLEANERS.resolve(cleaner)()
+    enricher_insts: list[Enricher] = _resolve_enrichers(prof.enrichers)
     chunker_inst: Chunker = CHUNKERS.resolve(chunker)()
     embedder_inst: Embedder = EMBEDDERS.resolve(embedder)()
     store_cls: type[Store] = STORES.resolve(store)
@@ -350,18 +407,16 @@ def sync(
                 manifest_dirty = True
             continue
 
-        if content_hash is None:
-            raise DocpipeError(f"Missing content hash for non-unchanged file: {source_key}")
-        doc_version = content_hash.split(":", 1)[1][:12]
-        parsed = resolve_parser(file_path).parse(file_path, source_key=source_key)
-        cleaned = cleaner_inst.clean(parsed)
-        if prof.resolve_crossrefs:
-            cleaned = resolve_crossrefs(cleaned)
-        chunks = chunker_inst.chunk(
-            cleaned,
-            profile=prof,
-            doc_version=doc_version,
+        content_hash, doc_version, chunks = _extract_document_chunks(
+            file_path,
+            source_key=source_key,
+            content_hash=content_hash,
+            collection=collection,
             embed_model=embed_model,
+            profile=prof,
+            cleaner=cleaner_inst,
+            enrichers=enricher_insts,
+            chunker=chunker_inst,
         )
         embedded, dim = _embed_document_chunks(
             chunks,
