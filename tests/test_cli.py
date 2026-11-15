@@ -538,6 +538,38 @@ def test_cli_ask_truncation_warning_strict_mode_show_context_and_json(
         assert "Error:" in err_out
         assert "truncated" in err_out.lower()
 
+    reasoning_exhausted = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=None, reasoning="Analyzing context..."),
+                finish_reason="length",
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=60,
+            completion_tokens=512,
+            total_tokens=572,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=512),
+        ),
+    )
+    with patch("litellm.completion", return_value=reasoning_exhausted):
+        rc_reasoning = main(
+            [
+                "--no-config",
+                "--persist-dir",
+                str(tmp_persist_dir),
+                "ask",
+                "Is MFA required?",
+                "--max-tokens",
+                "512",
+            ]
+        )
+        assert rc_reasoning == 1
+        err_reasoning = capsys.readouterr().err
+        assert "Error:" in err_reasoning
+        assert "max_tokens" in err_reasoning
+        assert "512 reasoning tokens used" in err_reasoning
+
 
 def test_cli_lazy_imports_avoid_heavy_deps_on_parser_init() -> None:
     code = (

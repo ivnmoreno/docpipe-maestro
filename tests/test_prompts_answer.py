@@ -352,3 +352,101 @@ def test_answer_enforces_local_only_and_egress_before_has_context_shortcut(
         )
     assert "123-45-6789" not in str(exc_info.value)
     assert mock_litellm_offline["completion"] == []
+
+
+def test_answer_detailed_reports_reasoning_and_length_truncation_diagnostics(
+    mock_litellm_offline: dict[str, Any],
+) -> None:
+    messages = build_chat_messages("Summarize exceptions?", [_sample_section()])
+
+    # 1. Reasoning tokens exhausting max_tokens (finish_reason="length", content=None)
+    reasoning_length_obj = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=None, reasoning_content="Thinking..."),
+                finish_reason="length",
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=100,
+            completion_tokens=512,
+            total_tokens=612,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=512),
+        ),
+    )
+    with patch("litellm.completion", return_value=reasoning_length_obj):
+        for strict in (False, True):
+            with pytest.raises(
+                DocpipeError,
+                match=(
+                    r"truncated at max_tokens.*before producing an answer"
+                    r".*512 reasoning tokens used"
+                ),
+            ):
+                answer_detailed(
+                    messages,
+                    model="together_ai/zai-org/GLM-5.3",
+                    max_tokens=512,
+                    fail_on_truncation=strict,
+                )
+
+    # 2. Reasoning text present without usage counters on finish_reason="length"
+    reasoning_dict = {
+        "choices": [
+            {
+                "message": {"content": "", "reasoning": "Chain of thought only"},
+                "finish_reason": "length",
+            }
+        ],
+    }
+    with (
+        patch("litellm.completion", return_value=reasoning_dict),
+        pytest.raises(
+            DocpipeError,
+            match=(
+                r"truncated at max_tokens.*before producing an answer"
+                r".*Increase or omit max_tokens"
+            ),
+        ),
+    ):
+        answer_detailed(messages, model="together_ai/zai-org/GLM-5.3")
+
+    # 3. Length truncation without reasoning still reports max_tokens exhaustion
+    plain_length_dict = {
+        "choices": [{"message": {"content": None}, "finish_reason": "length"}],
+    }
+    with (
+        patch("litellm.completion", return_value=plain_length_dict),
+        pytest.raises(
+            DocpipeError,
+            match=r"truncated at max_tokens limit with an empty response",
+        ),
+    ):
+        answer_detailed(messages, model="together_ai/zai-org/GLM-5.3")
+
+    # 4. Non-length empty content after reasoning reports reasoning context
+    stop_reasoning_obj = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=None), finish_reason="stop")],
+        usage=SimpleNamespace(
+            prompt_tokens=80,
+            completion_tokens=120,
+            total_tokens=200,
+            reasoning_tokens=120,
+        ),
+    )
+    with (
+        patch("litellm.completion", return_value=stop_reasoning_obj),
+        pytest.raises(
+            DocpipeError,
+            match=r"empty response after reasoning.*120 reasoning tokens used",
+        ),
+    ):
+        answer_detailed(messages, model="together_ai/zai-org/GLM-5.3")
+
+    # 5. Plain whitespace empty response preserves legacy error wording
+    plain_empty = {"choices": [{"message": {"content": "   "}, "finish_reason": "stop"}]}
+    with (
+        patch("litellm.completion", return_value=plain_empty),
+        pytest.raises(DocpipeError, match=r"returned an empty response\.$"),
+    ):
+        answer_detailed(messages, model="groq/openai/gpt-oss-120b")

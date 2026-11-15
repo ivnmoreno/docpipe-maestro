@@ -50,7 +50,7 @@ reranker = "cross_encoder"         # Registered reranker key in RERANKERS
 rerank_top_n = 20                  # Minimum candidate child pool size before reranking (>= 1)
 api_base = "https://api.groq.com/openai/v1" # Optional custom/OpenAI-compatible endpoint
 temperature = 0.0                  # Optional sampling temperature (>= 0.0)
-max_tokens = 512                   # Optional completion token limit (>= 1)
+max_tokens = 512                   # Optional completion token limit (>= 1); omit or raise (>= 2048) for reasoning models
 timeout = 60.0                     # Request timeout in seconds (default: 120.0)
 fail_on_truncation = false         # Exit non-zero if `ask` response hits max_tokens (`finish_reason == "length"`)
 local_only = false                 # Refuse remote/non-loopback endpoints when true (`--no-local-only` overrides)
@@ -273,7 +273,7 @@ docpipe-maestro ask [--config CONFIG] [--no-config] [--collection COLLECTION]
 - `--model`: LLM generation model string (default: `"ollama/llama3.2"` or TOML `model`).
 - `--api-base`: Optional custom OpenAI-compatible server URL (`http://` allowed for loopback hosts such as `http://localhost:8000/v1`; `https://` required for remote gateways).
 - `--temperature`: Optional sampling temperature (`>= 0.0`); omitted when unset for reasoning-model compatibility.
-- `--max-tokens`: Optional maximum completion tokens (`>= 1`); omitted when unset.
+- `--max-tokens`: Optional maximum completion tokens (`>= 1`); omitted when unset (reasoning models consume this budget during thinking, so omit or raise, e.g. `>= 2048`, if reasoning stops with `finish_reason="length"`).
 - `--timeout`: Request timeout in seconds (default: `120.0` or TOML `timeout`).
 - `--fail-on-truncation`: Exit non-zero (`1`) with an error if the provider stops with `finish_reason == "length"` (`truncated=True`), overriding the default behavior of printing a `Warning:` to `stderr`. Also configurable via `fail_on_truncation = true` in `docpipe.toml`.
 - `--show-context`: Print retrieved parent section scores and provenance details to `stderr` while keeping `stdout` clean for piping the answer.
