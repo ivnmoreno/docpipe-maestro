@@ -16,6 +16,7 @@ from docpipe_maestro import (
     answer,
     answer_detailed,
     register_parser,
+    register_pii_recognizer,
     register_cleaner,
     register_enricher,
     register_chunker,
@@ -31,11 +32,13 @@ from docpipe_maestro import (
     SyncResult,
     CollectionStatus,
     GenerationResult,
+    PiiPolicy,
     DocpipeError,
     UnsupportedFormatError,
     MissingExtraError,
     ModelMismatchError,
     MissingCredentialError,
+    PiiBlockedError,
     RegistryError,
 )
 ```
@@ -59,17 +62,20 @@ def ingest(
     chunker: str = "default",
     embedder: str = "default",
     store: str = "default",
+    pii_policy: PiiPolicy | None = None,
+    local_only: bool = False,
 ) -> IngestResult
 ```
 
 Atomically ingests a single file or directory tree (recursively sorted by relative POSIX path) into ChromaDB, updates the collocated SQLite FTS5 lexical index (`<persist_dir>/lexical/<collection>.db`), and updates the collocated manifest.
 
-- **Batch Atomicity**: Parses, cleans, chunks, and embeds all changed files in memory *before* creating or modifying `VectorStore`. Any unsupported file or missing parser extra aborts the entire run cleanly.
+- **Batch Atomicity**: Parses, cleans, enriches (including pre-chunking `PiiEnricher` when `pii_policy` is set), chunks, and embeds all changed files in memory *before* creating or modifying `VectorStore`. Any unsupported file, missing parser extra, or `PiiBlockedError` aborts the entire run cleanly.
+- **PII & Audit Log**: When `pii_policy` is provided, schedules `"pii"` ahead of downstream enrichers (unless explicitly ordered in `profile.enrichers`), scrubs headings/bodies before chunking, writes `<persist_dir>/manifests/<collection>.audit.jsonl` (`0o700`/`0o600`, zero raw PII) alongside committed sources, and logs a single `blocked=True` entry only for the offending source on abort. When `local_only=True`, rejects remote `embed_model` targets pre-network.
 - **Fast-Path & Hash Check**: Files with unchanged `(size, mtime)` skip disk hashing unless `force=True`; changed timestamps with identical `sha256` refresh manifest metadata without re-embedding.
 - **Self-Exclusion**: Any directory matching `persist_dir` nested under `path` is automatically skipped.
 - **Empty Directories**: Raises `UnsupportedFormatError` if `path` does not exist or yields zero files.
 
-**Raises**: `UnsupportedFormatError`, `MissingExtraError`, `ModelMismatchError`, `MissingCredentialError`, `RegistryError`, `DocpipeError`.
+**Raises**: `UnsupportedFormatError`, `MissingExtraError`, `ModelMismatchError`, `MissingCredentialError`, `PiiBlockedError`, `RegistryError`, `DocpipeError`.
 
 ---
 
@@ -87,17 +93,19 @@ def sync(
     chunker: str = "default",
     embedder: str = "default",
     store: str = "default",
+    pii_policy: PiiPolicy | None = None,
+    local_only: bool = False,
 ) -> SyncResult
 ```
 
-Performs three-way reconciliation between `directory` and `<persist_dir>/manifests/<collection>.json`:
+Performs three-way reconciliation between `directory` and `<persist_dir>/manifests/<collection>.json` (with pre-chunking `pii_policy` scrubbing/audit logging and `local_only` preflight identical to `ingest`):
 
 1. **Added**: New files on disk are parsed, chunked, embedded, and inserted into both vector and lexical stores.
 2. **Updated**: Modified files (different `sha256`) undergo staged delete-then-reinsert under a new `doc_version`, preventing orphaned clauses if the file shrank.
 3. **Skipped**: Files matching manifest hashes (even after `touch`) are skipped.
 4. **Removed**: Source keys tracked in the manifest that no longer exist under `directory` are purged from ChromaDB, SQLite FTS5, and the manifest. (An empty existing directory cleanly purges all tracked sources.)
 
-**Raises**: `UnsupportedFormatError` (if `directory` is not an existing directory or contains an invalid file), `MissingExtraError`, `ModelMismatchError`, `MissingCredentialError`, `RegistryError`, `DocpipeError`.
+**Raises**: `UnsupportedFormatError` (if `directory` is not an existing directory or contains an invalid file), `MissingExtraError`, `ModelMismatchError`, `MissingCredentialError`, `PiiBlockedError`, `RegistryError`, `DocpipeError`.
 
 ---
 
@@ -146,10 +154,11 @@ def reindex(
     persist_dir: str | Path = ".docpipe",
     embedder: str = "default",
     store: str = "default",
+    local_only: bool = False,
 ) -> int
 ```
 
-Migrates an existing collection to a new embedding model (and/or builds its collocated FTS5 lexical index) without re-parsing source files from disk:
+Migrates an existing collection to a new embedding model (and/or builds its collocated FTS5 lexical index) without re-parsing source files from disk (enforcing `local_only` pre-network when `True`):
 
 1. Reads all committed child and parent chunks directly from ChromaDB.
 2. Embeds all child chunks in memory under the new `embed_model` (if the collection is empty, updates `manifest.embed_model`, sets `embed_dim=None`, resets the lexical DB, and returns `0`).
@@ -182,10 +191,11 @@ def retrieve(
     rerank: bool = False,
     reranker: str = "cross_encoder",
     rerank_top_n: int = 20,
+    local_only: bool = False,
 ) -> list[RetrievedChunk]
 ```
 
-Read-only retrieval enforcing the collection's embedding model lock:
+Read-only retrieval enforcing the collection's embedding model lock (and `local_only` pre-network check when `True`):
 
 - Validates `rerank`, `reranker`, and `rerank_top_n` upfront via `validate_rerank_options()` (`rerank_top_n >= 1` integer excluding `bool`, `RERANKERS` resolution and `validate_available()` check when `rerank=True`) alongside `EMBEDDERS` / `STORES` / `SEARCHERS` resolution before manifest or early-return checks.
 - Checks `manifest.embed_model` via `check_model_lock()`; raises `ModelMismatchError` if locked to a different model.
@@ -251,6 +261,8 @@ def answer(
     timeout: float = 120.0,
     model_kwargs: Mapping[str, Any] | None = None,
     fail_on_truncation: bool = False,
+    pii_policy: PiiPolicy | None = None,
+    local_only: bool = False,
 ) -> str
 
 
@@ -265,12 +277,15 @@ def answer_detailed(
     timeout: float = 120.0,
     model_kwargs: Mapping[str, Any] | None = None,
     fail_on_truncation: bool = False,
+    pii_policy: PiiPolicy | None = None,
+    local_only: bool = False,
 ) -> GenerationResult
 ```
 
 Lazily loaded (`__getattr__` on `docpipe_maestro`) completion wrappers powered by `litellm.completion` (`answer()` delegates to `answer_detailed().text`):
 
-- **Empty Context Refusal**: Validates inputs first, then immediately returns `EMPTY_CONTEXT_REFUSAL` (`"Not found in the provided context."`) — or a `GenerationResult` carrying it with zero token telemetry — with zero LLM calls when `has_context=False`.
+- **Locality & Egress Guard**: Runs `guard_egress()` across plain string prompts and role-separated message sequences before `has_context` short-circuiting or network requests: `local_only=True` rejects remote models/endpoints before transport I/O, and active `pii_policy` rules scrub or block outbound text for remote providers (`"redact"`/`"block"`/`"allow"` egress modes, honoring per-entity `redact`/`tokenize`/`block` rules).
+- **Empty Context Refusal**: Validates inputs and egress rules first, then immediately returns `EMPTY_CONTEXT_REFUSAL` (`"Not found in the provided context."`) — or a `GenerationResult` carrying it with zero token telemetry — with zero LLM calls when `has_context=False`.
 - **Truncation Guard & Telemetry**: `answer_detailed()` captures `finish_reason`, `truncated` (`finish_reason == "length"`), `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `total_tokens`, and wall `elapsed_seconds`. Passing `fail_on_truncation=True` raises `DocpipeError` when the provider stops due to token limit (`finish_reason == "length"`).
 - **Reasoning-Model Parameter Safety**: `temperature` (`>= 0.0`) and `max_tokens` (`>= 1`) are omitted completely from the LiteLLM request when `None` (while explicit `temperature=0.0` is preserved verbatim). `timeout` defaults to `120.0` seconds.
 - **Extra Generation Controls (`model_kwargs`)**: Forwarded to `litellm.completion` (e.g., `top_p`, `frequency_penalty`), excluding reserved/conflicting keys (`model`, `messages`, `prompt`, `api_base`, `base_url`, `api_key`, `temperature`, `max_tokens`, `timeout`, `num_retries`) which raise `DocpipeError`.
@@ -307,7 +322,7 @@ print(detailed.text, detailed.total_tokens, detailed.elapsed_seconds)
 
 - **Fail-Fast Resilience & Privacy**: Passes `num_retries=0` so HTTP `429` fails fast with a sanitized `DocpipeError`; HTTP `401`/`403` raise `MissingCredentialError`; empty `choices`, populated `message.refusal`, or `None`/whitespace-only `content` raise `DocpipeError`; active env secrets and token patterns are scrubbed from error chains.
 
-**Raises**: `MissingExtraError` (if import fails), `MissingCredentialError`, `DocpipeError`.
+**Raises**: `MissingExtraError` (if import fails), `MissingCredentialError`, `PiiBlockedError`, `DocpipeError`.
 
 ---
 
@@ -381,6 +396,16 @@ ingest("./manual.md", profile=custom, collection="manuals")
 - `SyncResult`: `collection: str`, `embed_model: str`, `added: list[str]`, `updated: list[str]`, `skipped: list[str]`, `removed: list[str]`
 - `CollectionStatus`: `collection: str`, `embed_model: str | None`, `embed_dim: int | None`, `total_sources: int`, `total_children: int`, `total_parents: int`, `sources: list[SourceRecord]`
 - `SourceRecord`: `source`, `content_hash`, `doc_version`, `size`, `mtime`, `ingested_at`, `embed_model`, `profile`, `chunk_ids`, `parent_ids` (supports `.to_dict()` / `.from_dict()`).
+- **PII Types & Privacy Contracts** (`docpipe_maestro.types`, top-level `PiiPolicy`, `PiiBlockedError`, and `register_pii_recognizer`):
+  - `PiiAction`: `Literal["redact", "tokenize", "block"]`
+  - `EgressAction`: `Literal["redact", "block", "allow"]`
+  - `PiiErrorMode`: `Literal["fail", "continue"]`
+  - `PiiPolicy`: `TypedDict` with optional `types: dict[str, PiiAction]`, `min_confidence: float`, `languages: list[str]` (default `["en", "es"]`), `on_error: PiiErrorMode`, `egress: EgressAction` (default `"redact"`), `ner: bool`, `token_salt: str`, `token_salt_env: str`
+  - `PiiDetection`: `TypedDict` (`entity_type`, `start`, `end`, `score`, `recognizer`) — omits raw matched text
+  - `PiiAuditRecord`: `TypedDict` (`timestamp`, `collection`, `source`, `doc_version`, `threshold`, `entity_counts`, `actions`, `blocked`, `mode`) — retained append-only across `remove()` calls
+  - `PiiRecognizer`: `@runtime_checkable` `Protocol` (`name`, `entity_type`, `supported_languages`, `detect(text, *, languages)`) in `docpipe_maestro.types` for `@register_pii_recognizer` plugins
+  - `audit_log_path(persist_dir: Path, collection: str) -> Path` (`docpipe_maestro.manifest`): validated `<persist_dir>/manifests/<collection>.audit.jsonl` resolver
+  - `is_local_target(model: str, api_base: str | None = None) -> bool` and `enforce_local_only(model: str, api_base: str | None = None, *, operation: str) -> None` (`docpipe_maestro.embedder`): shared loopback/local enforcement helpers
 
 ---
 
@@ -389,13 +414,14 @@ ingest("./manual.md", profile=custom, collection="manuals")
 ```text
 DocpipeError (Exception)
 ├── UnsupportedFormatError   # Unknown extension, missing file/dir, corrupted/binary content
-├── MissingExtraError        # Optional dependency missing (pypdf, python-docx, bs4, etc.)
+├── MissingExtraError        # Optional dependency missing (pypdf, python-docx, bs4, presidio-analyzer)
 ├── ModelMismatchError       # Requested embed_model conflicts with manifest.embed_model
 ├── MissingCredentialError   # Provider rejected missing or invalid API key env var
+├── PiiBlockedError          # Configured PII "block" rule or egress="block" matched content
 └── RegistryError            # Unregistered stage key or colliding stage registration
 ```
 
-Eight lazy extension decorators are re-exported from `docpipe_maestro` (`register_parser`, `register_cleaner`, `register_enricher`, `register_chunker`, `register_embedder`, `register_store`, `register_searcher`, `register_reranker`). For Phase 1 post-clean enrichment, the built-in `ENRICHERS` key is `"crossrefs"` (`docpipe_maestro.ingest.enricher.CrossrefsEnricher`, registered lazily and active on `POLICY` via `enrichers=("crossrefs",)`). Custom enrichers implement the `Enricher` protocol (`name: str`, `enrich(self, doc: ParsedDocument, ctx: IngestContext) -> ParsedDocument`) via `@register_enricher("<name>")`, receiving `IngestContext` (`collection`, `source`, `content_hash`, `doc_version`, `embed_model`, `profile`, and optional `extra`) and executing sequentially in `ChunkingProfile.enrichers` order before chunking. For retrieval, built-in `SEARCHERS` keys are `"default"` (`DenseSearcher`) and `"fts5_hybrid"` (`Fts5HybridSearcher`), and the built-in `RERANKERS` key is `"cross_encoder"` (`docpipe_maestro.query.reranker.CrossEncoderReranker`, loaded lazily and requiring `docpipe-maestro[rerank]`). Custom rerankers follow the `Reranker` protocol (`name: str`, `rerank(self, query: str, chunks: list[RetrievedChunk], *, top_k: int) -> list[RetrievedChunk]`, optionally providing a static/class `validate_available()` method for upfront dependency checks) via `@register_reranker("<name>")`.
+Nine lazy extension decorators are re-exported from `docpipe_maestro` (`register_parser`, `register_cleaner`, `register_enricher`, `register_chunker`, `register_embedder`, `register_store`, `register_searcher`, `register_reranker`, `register_pii_recognizer`), with custom PII recognizers implementing `docpipe_maestro.types.PiiRecognizer` (`name`, `entity_type`, `supported_languages`, `detect(text, *, languages)`) into the shared `PII_RECOGNIZERS` strategy registry. For Phase 1 post-clean enrichment, built-in `ENRICHERS` keys are `"pii"` (`docpipe_maestro.ingest.enricher.PiiEnricher`) and `"crossrefs"` (`docpipe_maestro.ingest.enricher.CrossrefsEnricher`, active on `POLICY` via `enrichers=("crossrefs",)`). Custom enrichers implement the `Enricher` protocol (`name: str`, `enrich(self, doc: ParsedDocument, ctx: IngestContext) -> ParsedDocument`) via `@register_enricher("<name>")`, receiving `IngestContext` (`collection`, `source`, `content_hash`, `doc_version`, `embed_model`, `profile`, and optional `pii_policy` / `extra`) and executing sequentially in `ChunkingProfile.enrichers` order before chunking. For retrieval, built-in `SEARCHERS` keys are `"default"` (`DenseSearcher`) and `"fts5_hybrid"` (`Fts5HybridSearcher`), and the built-in `RERANKERS` key is `"cross_encoder"` (`docpipe_maestro.query.reranker.CrossEncoderReranker`, loaded lazily and requiring `docpipe-maestro[rerank]`). Custom rerankers follow the `Reranker` protocol (`name: str`, `rerank(self, query: str, chunks: list[RetrievedChunk], *, top_k: int) -> list[RetrievedChunk]`, optionally providing a static/class `validate_available()` method for upfront dependency checks) via `@register_reranker("<name>")`.
 
 Example defensive wrapper for an application backend:
 
@@ -430,7 +456,7 @@ def rag_answer(question: str, *, collection: str) -> tuple[str, list[str]]:
 
 ## 6. Phase 2 Retrieval Evaluation Harness (`docpipe_maestro.eval`)
 
-Offline/local retrieval ranking metrics and read-only fixture evaluation live in the dedicated `docpipe_maestro.eval` subpackage (keeping the 33-symbol top-level `docpipe_maestro.__all__` contract unchanged). Zero config/TOML discovery occurs inside the subpackage: callers pass `persist_dir` and `collection` explicitly.
+Offline/local retrieval ranking metrics and read-only fixture evaluation live in the dedicated `docpipe_maestro.eval` subpackage (keeping the 36-symbol top-level `docpipe_maestro.__all__` contract focused on core library workflows). Zero config/TOML discovery occurs inside the subpackage: callers pass `persist_dir` and `collection` explicitly.
 
 ```python
 from docpipe_maestro.eval import (
@@ -460,7 +486,7 @@ from docpipe_maestro.eval import (
 ### Read-Only Runner (`docpipe_maestro.eval.harness`)
 
 - `load_eval_fixture(fixture: str | Path | EvalFixture) -> EvalFixture`: Loads and normalizes a JSON file or mapping without mutating caller inputs; raises `DocpipeError` on missing files, malformed JSON, empty `queries`, blank `question`, or empty/blank `relevant_ids`.
-- `evaluate(fixture, *, collection=None, persist_dir=".docpipe", embed_model="ollama/nomic-embed-text", k_values=(1, 3, 5, 10), expand_parent=True, follow_crossrefs=True, threshold=None, embedder="default", store="default", searcher="default", rerank=False, reranker="cross_encoder", rerank_top_n=20, **retrieve_kwargs) -> EvalReport`:
+- `evaluate(fixture, *, collection=None, persist_dir=".docpipe", embed_model="ollama/nomic-embed-text", k_values=(1, 3, 5, 10), expand_parent=True, follow_crossrefs=True, threshold=None, embedder="default", store="default", searcher="default", rerank=False, reranker="cross_encoder", rerank_top_n=20, local_only=False, **retrieve_kwargs) -> EvalReport`:
   1. Validates `k_values`, finite `threshold` (`[0.0, 1.0]`), fixture schema, stage selectors (`EMBEDDERS`, `STORES`, `SEARCHERS`), and reranking options via `validate_rerank_options(...)` upfront.
   2. Resolves target collection: explicit non-`None` `collection` `>` non-empty `fixture["collection"]` `>` `"default"`.
   3. Checks `manifest_path.exists()`, `check_model_lock()`, and committed sources **before** touching `ChromaStore` so missing or empty collections cause zero disk mutations.

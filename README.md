@@ -60,6 +60,7 @@
 | **Orphaned vectors when files shrink or change** | **Transactional `doc_version` staging** writes new chunks, flips the JSON manifest atomically, and deletes stale versions afterward. Failed runs leave the prior version intact. |
 | **Silent embedding vector-space corruption** | **Manifest model lock** pins each collection to one `embed_model` and raises `ModelMismatchError` unless migrated explicitly via `reindex`. |
 | **Hallucinations when nothing relevant matches** | **Deterministic empty-context refusal** short-circuits before calling the LLM whenever `retrieve()` returns no chunks above `--threshold`. |
+| **Sensitive PII stored or sent to remote LLMs** | **Pre-chunking `PiiEnricher` + outbound `guard_egress()`** redact, HMAC-tokenize, or block entities cleanly (`PiiBlockedError`), log zero-raw-PII `.audit.jsonl` records (`0o700`), and enforce `--local-only` pre-network. |
 
 ---
 
@@ -92,25 +93,27 @@ flowchart LR
     subgraph P1["Phase 1: Offline Ingestion (Atomic & Transactional)"]
         A[Source Files] --> B[Intake & Format Detect]
         B --> C[Clean & Boilerplate Strip]
-        C --> D[Crossref Resolution]
+        C --> D["Enrichers (PII -> Crossrefs)"]
         D --> E[Structure-Aware Chunker]
-        E --> F[Batched Embeddings]
-        F --> G[(ChromaDB + FTS5 + JSON Manifest)]
+        E --> F["local_only Check + Batched Embeddings"]
+        F --> G[(ChromaDB + FTS5 + Manifest + .audit.jsonl)]
     end
 
     subgraph P2["Phase 2: Online Query (Read-Only)"]
-        Q[Question] --> S["Child Search (Dense or fts5_hybrid RRF)"]
+        Q[Question] --> QE["local_only Check + Query Embed"]
+        QE --> S["Child Search (Dense or fts5_hybrid RRF)"]
         S --> RR["Optional Rerank (Cross-Encoder Sigmoid)"]
         RR --> PE["Parent Expansion & max(score) Dedupe"]
-        PE --> BP["Pure build_prompt()"]
-        BP -->|results > 0| LLM["Optional answer() via LiteLLM"]
+        PE --> BP["Pure build_prompt() / build_chat_messages()"]
+        BP -->|results > 0| EG["Egress Guard (local_only + PII Policy)"]
+        EG --> LLM["Optional answer() via LiteLLM"]
         BP -->|empty results| REF["Deterministic Refusal (No LLM Call)"]
     end
 ```
 
 1. **Two-Phase Separation**:
-   - **Phase 1 (Offline Ingestion)**: Files $\to$ Parse $\to$ Clean $\to$ Cross-Reference Resolution $\to$ Structure-Aware Chunking $\to$ Embeddings $\to$ Vector Database. Correctness and crash safety matter.
-   - **Phase 2 (Online Query)**: Question $\to$ Embed $\to$ Retrieve (Match Children, Return Deduplicated Parents) $\to$ Build Prompt $\to$ Optional Grounded LLM Generation. Read-only and low-latency.
+   - **Phase 1 (Offline Ingestion)**: Files $\to$ Parse $\to$ Clean $\to$ Enrich (`pii` $\to$ `crossrefs`) $\to$ Structure-Aware Chunking $\to$ Embeddings $\to$ Vector Database + `.audit.jsonl`. Correctness and crash safety matter.
+   - **Phase 2 (Online Query)**: Question $\to$ Embed $\to$ Retrieve (Match Children, Return Deduplicated Parents) $\to$ Build Prompt $\to$ Egress Guard $\to$ Optional Grounded LLM Generation. Read-only and low-latency.
 2. **Search Small, Return Big (Parent-Child Retrieval)**:
    - Small **child chunks** (individual clauses/paragraphs prefixed with `[Source: ... | Section: ...]`) are embedded and searched for high precision.
    - Large **parent sections** (complete contextual sections) are stored with zero-vector placeholders and returned to the prompt.
@@ -169,8 +172,9 @@ Generation (`answer()`, `ask`) is available in the base install — no extra nee
 | `html` | Strip boilerplate and parse `<h1–h6>` headings from web pages / HTML exports | `beautifulsoup4>=4.12.0` |
 | `all` | Installs **all** optional document format parsers (`pdf`, `docx`, `html`) | `pypdf`, `python-docx`, `beautifulsoup4` |
 | `rerank` | Second-stage local neural cross-encoder reranking (`BAAI/bge-reranker-base` default) | `sentence-transformers>=3.0.0` |
+| `pii` | Optional multi-language NER PII recognition alongside deterministic recognizers | `presidio-analyzer>=2.2.0`, `presidio-anonymizer>=2.2.0` |
 
-> **Note on Structure Extraction**: Markdown, plain text, HTML, DOCX, and PDF extract headings, clauses, and pagination metadata cleanly without external SaaS parsers. Note that `[all]` installs document parsers only; include `[rerank]` alongside it (`[all,rerank]`) when enabling `--rerank` / `rerank=True`.
+> **Note on Structure Extraction**: Markdown, plain text, HTML, DOCX, and PDF extract headings, clauses, and pagination metadata cleanly without external SaaS parsers. Note that `[all]` installs document parsers only; include `[rerank]` and/or `[pii]` alongside it (`[all,rerank,pii]`) when enabling reranking or Presidio NER. For offline `[pii]` usage, pre-install the required local spaCy models (e.g. `en_core_web_sm`, `es_core_news_sm`).
 
 Install specific extras (substitute `@ git+https://github.com/ivnmoreno/docpipe-maestro.git` before PyPI publication):
 ```bash
@@ -183,8 +187,8 @@ pip install "docpipe-maestro[pdf,docx] @ git+https://github.com/ivnmoreno/docpip
 # Full installation with all document format parsers
 pip install "docpipe-maestro[all] @ git+https://github.com/ivnmoreno/docpipe-maestro.git"
 
-# Parsers + local cross-encoder reranking support
-pip install "docpipe-maestro[all,rerank] @ git+https://github.com/ivnmoreno/docpipe-maestro.git"
+# Parsers + local cross-encoder reranking + optional NER PII detection
+pip install "docpipe-maestro[all,rerank,pii] @ git+https://github.com/ivnmoreno/docpipe-maestro.git"
 ```
 
 ### Development Setup
@@ -295,6 +299,9 @@ searcher = "default"               # "default" (dense vector) or "fts5_hybrid" (
 # max_tokens = 512
 # timeout = 60.0
 # fail_on_truncation = false
+# Privacy & PII defaults (JSON/TOML path string or `[pii_policy]` table applied in CLI only):
+# local_only = false
+# pii_policy = "./pii-policy.json"
 ```
 
 Pass an explicit config path with `--config`, or ignore `./docpipe.toml` with `--no-config`:
@@ -345,6 +352,9 @@ docpipe-maestro ingest ./docs --collection knowledge_base
 
 # Ingest policy documents with clause-preservation and cross-reference resolution
 docpipe-maestro ingest ./company_policies --profile POLICY --collection hr_policy
+
+# Ingest strictly locally with pre-chunking PII scrubbing/blocking and .audit.jsonl output
+docpipe-maestro ingest ./company_policies --local-only --pii-policy ./pii-policy.json --collection hr_policy
 
 # Force re-ingestion even if files have not changed on disk
 docpipe-maestro ingest ./docs --force --collection knowledge_base
@@ -454,6 +464,10 @@ docpipe-maestro ask "What is the recipe for lasagna?" --threshold 0.7 --collecti
 docpipe-maestro ask "Summarize travel limits." --show-context --collection hr_policy
 docpipe-maestro ask "What is the SEV-1 escalation window?" --searcher fts5_hybrid --rerank --collection hr_policy
 docpipe-maestro ask "Summarize travel limits." --json --fail-on-truncation --collection hr_policy
+
+# Enforce local-only execution pre-network or scrub outbound remote prompts via --pii-policy
+docpipe-maestro ask "Summarize travel limits." --local-only --collection hr_policy
+docpipe-maestro ask "Summarize employee contacts." --model openai/gpt-4o-mini --pii-policy ./pii-policy.json --collection hr_policy
 ```
 *(By default, if a provider hits `--max-tokens` and sets `finish_reason == "length"`, `ask` prints a `Warning:` on `stderr`; pass `--fail-on-truncation` to fail non-zero instead.)*
 
@@ -484,20 +498,36 @@ See the complete [Python API Reference](docs/api-reference.md) for every signatu
 
 ```python
 from pathlib import Path
-from docpipe_maestro import ingest, reindex, remove, status, sync
+from docpipe_maestro import PiiBlockedError, PiiPolicy, ingest, reindex, remove, status, sync
 
-# 1. Ingest a document or directory
-result = ingest(
-    Path("./policies"),
-    profile="POLICY",  # "DEFAULT", "POLICY", or custom ChunkingProfile
-    collection="handbook",
-    persist_dir=".docpipe",
-    embed_model="ollama/nomic-embed-text",
-)
-print(
-    f"Ingested {len(result.ingested)} files "
-    f"({result.chunks_written} children, {result.parents_written} parents)."
-)
+pii_policy: PiiPolicy = {
+    "types": {
+        "EMAIL_ADDRESS": "tokenize",
+        "IBAN_CODE": "redact",
+        "US_SSN": "block",
+    },
+    "token_salt_env": "DOCPIPE_PII_SALT",  # omit to use process-random fallback salt + warning
+    "egress": "redact",
+}
+
+# 1. Ingest a document or directory with pre-chunking PII safeguards
+try:
+    result = ingest(
+        Path("./policies"),
+        profile="POLICY",  # "DEFAULT", "POLICY", or custom ChunkingProfile
+        collection="handbook",
+        persist_dir=".docpipe",
+        embed_model="ollama/nomic-embed-text",
+        pii_policy=pii_policy,
+        local_only=True,
+    )
+    print(
+        f"Ingested {len(result.ingested)} files "
+        f"({result.chunks_written} children, {result.parents_written} parents)."
+    )
+except PiiBlockedError as exc:
+    # Exception reports source & blocked entity type(s) without printing raw PII values
+    print(f"Aborted cleanly on {exc.source}: {exc.blocked_entities}")
 
 # 2. Synchronize folder after changes (adds, edits, deletions)
 sync_result = sync(
@@ -593,7 +623,8 @@ Exported from `docpipe_maestro` (`docpipe_maestro.types`):
 - `SyncResult`: Summary (`collection`, `embed_model`, `added`, `updated`, `skipped`, `removed`).
 - `CollectionStatus`: Manifest overview (`collection`, `embed_model`, `embed_dim`, `total_sources`, `total_children`, `total_parents`, `sources`).
 - `SourceRecord`: Per-file manifest tracking record (`source`, `content_hash`, `doc_version`, `size`, `mtime`, `ingested_at`, `embed_model`, `profile`, `chunk_ids`, `parent_ids`).
-- Exceptions: `DocpipeError` (base) with `UnsupportedFormatError`, `MissingExtraError`, `ModelMismatchError`, `MissingCredentialError`, and `RegistryError`.
+- Exceptions: `DocpipeError` (base) with `UnsupportedFormatError`, `MissingExtraError`, `ModelMismatchError`, `MissingCredentialError`, `PiiBlockedError`, and `RegistryError`.
+- Privacy & Extensibility: `PiiPolicy` (`TypedDict`) passed programmatically to `ingest()`, `sync()`, `answer()`, and `answer_detailed()`, plus lazy root `@register_pii_recognizer` (`docpipe_maestro.types.PiiRecognizer`) for custom entity patterns.
 
 ---
 
@@ -601,30 +632,36 @@ Exported from `docpipe_maestro` (`docpipe_maestro.types`):
 
 - **Trusted local corpus assumption**: Like most local ingestion tools, `docpipe-maestro ingest` processes files inside the target directory you specify. Only ingest trusted documents and avoid pointing `ingest`/`sync` at directories containing symlinks to sensitive files or untrusted HTML/PDF inputs.
 - **Credentials & transport security**: API keys are never accepted in `docpipe.toml`; remote custom endpoints require `https://` (`http://` is permitted only for loopback hosts), and error handlers scrub regex key patterns as well as loaded environment secrets (`from None`) so credentials never leak in exceptions.
+- **`--local-only` & outbound PII egress guard**: Pass `--local-only` (`local_only=True`) to reject non-local models and remote `--api-base` URLs prior to network requests. When calling remote LLMs with `pii_policy`, `guard_egress()` scrubs or blocks outbound prompt strings and role-separated ChatML messages before dispatch, and Phase 1 writes zero-raw-PII counts/metadata to `<persist_dir>/manifests/<collection>.audit.jsonl` under `0o700`/`0o600` permissions.
+- **Honest scope & accuracy limitations**: Built-in pattern/checksum recognizers (`EMAIL_ADDRESS`, `IBAN_CODE`, `CREDIT_CARD`, `US_SSN`, `IP_ADDRESS`, `PHONE_NUMBER`, `ES_DNI`) and optional `[pii]` Presidio NER heuristics can experience both false positives and false negatives depending on language, formatting, custom identifiers, and OCR/PDF text noise. These safeguards reduce risk but are technical controls—not a guarantee of exhaustive redaction or regulatory certification. See [SECURITY.md](SECURITY.md) for full threat-model notes.
 - **Reduce hallucinations with `--threshold`**: Set a similarity `--threshold` (e.g. `0.35`–`0.6` depending on embedding model) on `retrieve()` / `docpipe-maestro ask` so off-topic questions return zero matches and short-circuit deterministically (`"Not found in the provided context."`).
-- **Protect your `.docpipe/` store on shared hosts**: Embedded ChromaDB files store plaintext document sections; keep `persist_dir` on owner-restricted paths (`chmod 700`) and excluded from version control.
+- **Protect your `.docpipe/` store on shared hosts**: Embedded ChromaDB files store plaintext document sections unless scrubbed beforehand; keep `persist_dir` on owner-restricted paths (`chmod 700`) and excluded from version control.
 
 ---
 
 ## Safety & Verification
 
-`docpipe-maestro` includes a mandatory **Reverse Safety Test Gate** (`tests/test_reverse_safety.py`). It enforces that every clause containing an exception marker (`except`, `unless`, `not entitled`, `subject to`, `provided that`) always retrieves a parent context that contains the exception text alongside the general rule.
+`docpipe-maestro` includes two mandatory automated release gates:
+1. **Reverse Safety Test Gate** (`tests/test_reverse_safety.py`, `@pytest.mark.reverse`): Enforces that every clause containing an exception marker (`except`, `unless`, `not entitled`, `subject to`, `provided that`) always retrieves a parent context containing the exception alongside the general rule.
+2. **PII Safety Test Gate** (`tests/test_pii_safety.py`, `@pytest.mark.pii`): Verifies offline on synthetic fixtures that blocked PII halts ingestion before database commit, redacted/tokenized spans never persist to chunks or outbound remote payloads, `--local-only` blocks remote endpoints pre-network, and `.audit.jsonl` logs zero raw PII.
 
 Run the test suite and quality gates:
 
 ```bash
-# Run linters and formatting checks
+# Run linters, security rules, and formatting checks
 uv run ruff check .
+uv run ruff check --select S src/
 uv run ruff format --check .
 
 # Run static type checking (strict mode)
 uv run mypy src tests
 
-# Run all unit, integration, and safety tests with branch coverage
-uv run pytest -v --cov
+# Run all unit, integration, and safety tests with branch coverage offline
+LITELLM_LOCAL_MODEL_COST_MAP=true uv run pytest -v --cov
 
-# Verify reverse safety gate and extended complex integration tests individually
+# Verify reverse and PII safety gates individually
 uv run pytest -m reverse -v
+uv run pytest -m pii -v
 uv run pytest -m integration -v
 ```
 
@@ -645,14 +682,15 @@ docpipe-maestro/
 │   ├── cli.py               # `docpipe-maestro` CLI + TOML config loader
 │   ├── config.py            # Default constants & immutable chunking profiles
 │   ├── _crossrefs.py        # Shared phase-neutral cross-reference matching & excerpt helpers
-│   ├── embedder/            # Batched LiteLLM embedding adapter & registry
-│   ├── manifest.py          # Atomic sha256/mtime JSON manifest & model lock
+│   ├── _pii.py              # Shared phase-neutral PII recognizers, HMAC tokenizer & lazy NER
+│   ├── embedder/            # Batched LiteLLM embedding adapter, locality checks & registry
+│   ├── manifest.py          # Atomic sha256/mtime manifest, model lock & .audit.jsonl logger
 │   ├── store/               # ChromaDB vector store (`chroma.py`) & SQLite FTS5 (`lexical.py`)
 │   ├── types.py             # Dataclasses, TypedDicts & DocpipeError hierarchy
-│   ├── ingest/              # Phase 1: intake/, clean/, enricher/, chunker/, pipeline, compat crossrefs
-│   ├── query/               # Phase 2: searcher/ (`default`, `fts5_hybrid`), reranker/ (`cross_encoder`), retriever, prompts, answer
+│   ├── ingest/              # Phase 1: intake/, clean/, enricher/ (`pii`, `crossrefs`), chunker/, pipeline
+│   ├── query/               # Phase 2: searcher/, reranker/, egress.py, retriever, prompts, answer
 │   └── eval/                # Phase 2: offline metrics (`metrics.py`) & read-only runner (`harness.py`)
-├── tests/                   # Unit, integration, security & reverse-safety suites
+├── tests/                   # Unit, integration, security, reverse & PII-safety suites
 ├── documents/               # Synthetic sample policy corpus for local demos
 ├── docs/                    # Architecture, API, CLI, baselines, dev guide & roadmap
 ├── specs/                   # Feature specification, plan & contracts
@@ -674,8 +712,8 @@ docpipe-maestro/
 Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Development & Testing Guide](docs/development.md) before opening a pull request. In brief:
 
 1. Follow **Conventional Commits** (`feat:`, `fix:`, `docs:`, `test:`, `chore:`) verified with `uv run cz check`.
-2. Pass all CI quality gates (`ruff format --check .`, `ruff check .`, `ruff check --select S src/`, `mypy src tests`, `pytest -m reverse -v`, and `pytest -v --cov` with branch coverage `>= 80%`).
-3. Keep all Phase 1 and Phase 2 library modules free of config-file reading and external UI/server concerns.
+2. Pass all CI quality gates (`ruff format --check .`, `ruff check .`, `ruff check --select S src/`, `mypy src tests`, `pytest -m reverse -v`, `pytest -m pii -v`, and `pytest -v --cov` with branch coverage `>= 80%`).
+3. Keep all Phase 1 and Phase 2 library modules free of config/policy-file reading and external UI/server concerns.
 
 For security vulnerabilities, see [SECURITY.md](SECURITY.md).
 

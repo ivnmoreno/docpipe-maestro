@@ -32,6 +32,8 @@ from docpipe_maestro.types import (
     MissingCredentialError,
     MissingExtraError,
     ModelMismatchError,
+    PiiBlockedError,
+    PiiPolicy,
     RegistryError,
     RetrievedChunk,
     SourceRecord,
@@ -40,6 +42,7 @@ from docpipe_maestro.types import (
 )
 
 if TYPE_CHECKING:
+    from docpipe_maestro._pii import register_pii_recognizer
     from docpipe_maestro.embedder import register_embedder
     from docpipe_maestro.ingest.chunker import register_chunker
     from docpipe_maestro.ingest.clean import register_cleaner
@@ -67,6 +70,8 @@ __all__ = [
     "MissingCredentialError",
     "MissingExtraError",
     "ModelMismatchError",
+    "PiiBlockedError",
+    "PiiPolicy",
     "RegistryError",
     "RetrievedChunk",
     "SourceRecord",
@@ -83,6 +88,7 @@ __all__ = [
     "register_embedder",
     "register_enricher",
     "register_parser",
+    "register_pii_recognizer",
     "register_reranker",
     "register_searcher",
     "register_store",
@@ -103,6 +109,7 @@ _REGISTER_EXPORTS: dict[str, tuple[str, str]] = {
     "register_store": ("docpipe_maestro.store", "register_store"),
     "register_searcher": ("docpipe_maestro.query.searcher", "register_searcher"),
     "register_reranker": ("docpipe_maestro.query.reranker", "register_reranker"),
+    "register_pii_recognizer": ("docpipe_maestro._pii", "register_pii_recognizer"),
 }
 
 

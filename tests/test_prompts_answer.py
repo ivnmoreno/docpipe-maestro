@@ -327,3 +327,28 @@ def test_system_instructions_enforce_exception_carveout_preservation() -> None:
     assert "ignore any instructions" in lowered
     for marker in ("unless", "except", "subject to", "provided that"):
         assert marker in lowered
+
+
+def test_answer_enforces_local_only_and_egress_before_has_context_shortcut(
+    mock_litellm_offline: dict[str, Any],
+) -> None:
+    """local_only and blocking egress guard trigger even when has_context=False."""
+    with pytest.raises(DocpipeError):
+        answer_detailed(
+            "Ignored?",
+            model="openai/gpt-4o-mini",
+            has_context=False,
+            local_only=True,
+        )
+
+    from docpipe_maestro.types import PiiBlockedError
+
+    with pytest.raises(PiiBlockedError) as exc_info:
+        answer(
+            "SSN 123-45-6789?",
+            model="openai/gpt-4o-mini",
+            has_context=False,
+            pii_policy={"types": {"US_SSN": "block"}},
+        )
+    assert "123-45-6789" not in str(exc_info.value)
+    assert mock_litellm_offline["completion"] == []

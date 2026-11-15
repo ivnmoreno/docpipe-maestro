@@ -1380,3 +1380,330 @@ def test_cli_policy_profile_runs_crossrefs_and_enricher_error_exits_1(
         ENRICHERS._entries = saved_entries
         ENRICHERS._lazy_builtins = saved_lazy
         ENRICHERS._materializing = saved_mat
+
+
+def test_cli_local_only_and_pii_policy_flags_and_toml_defaults(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """CLI supports --local-only/--pii-policy positioning, TOML defaults, and safe errors."""
+    corpus = tmp_path / "pii_cli_docs"
+    corpus.mkdir()
+    doc = corpus / "directory.md"
+    doc.write_text(
+        "# Contacts\n\nReach alex.rivera@example.test for badge activation.\n",
+        encoding="utf-8",
+    )
+    blocked_doc = corpus / "blocked.md"
+    blocked_doc.write_text(
+        "# Restricted\n\nSSN 123-45-6789 is confidential.\n",
+        encoding="utf-8",
+    )
+    fixture_path = tmp_path / "eval_fix.json"
+    fixture_path.write_text(
+        json.dumps(
+            {"collection": "cli_pii_col", "queries": [{"question": "badge", "relevant_ids": ["x"]}]}
+        ),
+        encoding="utf-8",
+    )
+
+    json_policy = tmp_path / "pii_policy.json"
+    json_policy.write_text(
+        json.dumps(
+            {
+                "types": {
+                    "EMAIL_ADDRESS": "tokenize",
+                    "US_SSN": "block",
+                },
+                "token_salt": "cli-test-salt",
+                "egress": "redact",
+            }
+        ),
+        encoding="utf-8",
+    )
+    toml_policy = tmp_path / "pii_policy.toml"
+    toml_policy.write_text(
+        'token_salt = "cli-toml-salt"\negress = "block"\n[types]\nEMAIL_ADDRESS = "redact"\n',
+        encoding="utf-8",
+    )
+
+    # 1. Parser accepts --local-only / --no-local-only before & after all 6 commands.
+    for cmd_tail in (
+        ["ingest", str(doc)],
+        ["sync", str(corpus)],
+        ["reindex", "--model", "local/m"],
+        ["query", "badge"],
+        ["ask", "badge"],
+        ["eval", "--fixture", str(fixture_path)],
+    ):
+        ns_before = build_parser().parse_args(["--local-only", *cmd_tail])
+        ns_after = build_parser().parse_args([*cmd_tail, "--local-only"])
+        ns_no_after = build_parser().parse_args([*cmd_tail, "--no-local-only"])
+        assert ns_before.local_only is True
+        assert ns_after.local_only is True
+        assert ns_no_after.local_only is False
+
+    # 2. --local-only execution refuses remote models prior to LiteLLM transport.
+    for remote_argv in (
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "--local-only",
+            "ingest",
+            str(doc),
+            "--embed-model",
+            "openai/text-embedding-3-small",
+        ],
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "sync",
+            str(corpus),
+            "--embed-model",
+            "openai/text-embedding-3-small",
+            "--local-only",
+        ],
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "reindex",
+            "--model",
+            "openai/text-embedding-3-small",
+            "--local-only",
+        ],
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "--local-only",
+            "query",
+            "badge",
+            "--embed-model",
+            "openai/text-embedding-3-small",
+        ],
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "eval",
+            "--fixture",
+            str(fixture_path),
+            "--embed-model",
+            "openai/text-embedding-3-small",
+            "--local-only",
+        ],
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "ask",
+            "badge",
+            "--model",
+            "openai/gpt-4o-mini",
+            "--local-only",
+        ],
+    ):
+        rc_remote = main(remote_argv)
+        assert rc_remote == 1
+        cap_rem = capsys.readouterr()
+        assert cap_rem.out == ""
+        assert cap_rem.err.startswith("Error:")
+        assert len(cap_rem.err.strip().splitlines()) == 1
+    assert mock_litellm_offline["embedding"] == []
+    assert mock_litellm_offline["completion"] == []
+
+    # 3. --pii-policy JSON works before/after ingest and writes scrubbed output + audit log.
+    rc_ing = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "--collection",
+            "cli_pii_col",
+            "--pii-policy",
+            str(json_policy),
+            "ingest",
+            str(doc),
+        ]
+    )
+    assert rc_ing == 0
+    _ = capsys.readouterr()
+    assert (tmp_persist_dir / "manifests" / "cli_pii_col.audit.jsonl").exists()
+
+    # 4. --pii-policy TOML after sync fails closed cleanly on blocked SSN without stderr leak.
+    rc_sync_blk = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "--collection",
+            "cli_pii_col",
+            "sync",
+            str(corpus),
+            "--pii-policy",
+            str(json_policy),
+        ]
+    )
+    assert rc_sync_blk == 1
+    cap_blk = capsys.readouterr()
+    assert "US_SSN" in cap_blk.err
+    assert "123-45-6789" not in cap_blk.err
+
+    # 5. --pii-policy TOML on ask (before & after) scrubs/blocks remote completion safely.
+    rc_ask_toml = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "--collection",
+            "cli_pii_col",
+            "ask",
+            "Contact alex.rivera@example.test",
+            "--model",
+            "openai/gpt-4o-mini",
+            "--pii-policy",
+            str(toml_policy),
+        ]
+    )
+    assert rc_ask_toml == 1
+    cap_ask_blk = capsys.readouterr()
+    assert "EMAIL_ADDRESS" in cap_ask_blk.err
+    assert "alex.rivera@example.test" not in cap_ask_blk.err
+
+    rc_ask_ok = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "--collection",
+            "cli_pii_col",
+            "--pii-policy",
+            str(json_policy),
+            "ask",
+            "Mail alex.rivera@example.test please",
+            "--model",
+            "openai/gpt-4o-mini",
+        ]
+    )
+    assert rc_ask_ok == 0
+    _ = capsys.readouterr()
+    last_sent = mock_litellm_offline["completion"][-1]["messages"]
+    assert all("alex.rivera@example.test" not in m["content"] for m in last_sent)
+
+    # 6. Misplaced --pii-policy on unsupported subcommands exits 1.
+    for unsupported in ("status", "remove", "reindex", "query", "eval"):
+        tail = (
+            [unsupported]
+            if unsupported == "status"
+            else [unsupported, "x"]
+            if unsupported in ("remove", "query")
+            else [unsupported, "--model", "local/m"]
+            if unsupported == "reindex"
+            else [unsupported, "--fixture", str(fixture_path)]
+        )
+        for bad_cmd in (
+            [
+                "--no-config",
+                "--persist-dir",
+                str(tmp_persist_dir),
+                "--pii-policy",
+                str(json_policy),
+                *tail,
+            ],
+            [
+                "--no-config",
+                "--persist-dir",
+                str(tmp_persist_dir),
+                *tail,
+                "--pii-policy",
+                str(json_policy),
+            ],
+        ):
+            assert main(bad_cmd) == 1
+            cap_mis = capsys.readouterr()
+            assert cap_mis.err.startswith("Error:")
+
+    # 7. Unreadable / invalid policy files exit 1 cleanly.
+    bad_json = tmp_path / "broken_policy.json"
+    bad_json.write_text("{not json", encoding="utf-8")
+    bad_schema = tmp_path / "bad_schema.json"
+    bad_schema.write_text('{"unknown": true}', encoding="utf-8")
+    for err_policy in (tmp_path / "missing.json", bad_json, bad_schema):
+        assert (
+            main(
+                [
+                    "--no-config",
+                    "--persist-dir",
+                    str(tmp_persist_dir),
+                    "ingest",
+                    str(doc),
+                    "--pii-policy",
+                    str(err_policy),
+                ]
+            )
+            == 1
+        )
+        assert capsys.readouterr().err.startswith("Error:")
+
+    # 8. docpipe.toml local_only + pii_policy (path or inline table) & --no-local-only override.
+    toml_cfg = tmp_path / "docpipe_pii.toml"
+    toml_cfg.write_text(
+        f'persist_dir = "{tmp_persist_dir.as_posix()}"\n'
+        'collection = "cli_pii_col"\n'
+        "local_only = true\n"
+        f'pii_policy = "{json_policy.as_posix()}"\n',
+        encoding="utf-8",
+    )
+    assert main(["--config", str(toml_cfg), "query", "badge", "--embed-model", "openai/embed"]) == 1
+    assert "local_only" in capsys.readouterr().err
+    assert main(["--config", str(toml_cfg), "query", "badge", "--no-local-only"]) == 0
+    _ = capsys.readouterr()
+    assert (
+        main(
+            [
+                "--config",
+                str(toml_cfg),
+                "--no-local-only",
+                "ask",
+                "Mail alex.rivera@example.test",
+                "--model",
+                "openai/gpt-4o-mini",
+            ]
+        )
+        == 0
+    )
+    _ = capsys.readouterr()
+    last_toml_sent = mock_litellm_offline["completion"][-1]["messages"]
+    assert all("alex.rivera@example.test" not in m["content"] for m in last_toml_sent)
+
+    toml_inline_cfg = tmp_path / "docpipe_inline_pii.toml"
+    toml_inline_cfg.write_text(
+        f'persist_dir = "{tmp_persist_dir.as_posix()}"\n'
+        'collection = "cli_pii_col"\n'
+        "[pii_policy]\n"
+        'token_salt = "inline-salt"\n'
+        "[pii_policy.types]\n"
+        'EMAIL_ADDRESS = "redact"\n',
+        encoding="utf-8",
+    )
+    assert (
+        main(
+            [
+                "--config",
+                str(toml_inline_cfg),
+                "ask",
+                "Mail alex.rivera@example.test",
+                "--model",
+                "openai/gpt-4o-mini",
+            ]
+        )
+        == 0
+    )
+    _ = capsys.readouterr()
+    last_inline = mock_litellm_offline["completion"][-1]["messages"]
+    assert any("[EMAIL_ADDRESS]" in m["content"] for m in last_inline)

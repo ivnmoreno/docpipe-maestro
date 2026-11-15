@@ -9,6 +9,7 @@ The `docpipe-maestro` CLI (`docpipe_maestro.cli:main`, also invocable as `python
 ```text
 usage: docpipe-maestro [-h] [--version] [--config CONFIG] [--no-config]
                        [--collection COLLECTION] [--persist-dir PERSIST_DIR]
+                       [--local-only | --no-local-only] [--pii-policy PII_POLICY]
                        {ingest,sync,status,remove,reindex,query,ask,eval} ...
 ```
 
@@ -17,10 +18,12 @@ usage: docpipe-maestro [-h] [--version] [--config CONFIG] [--no-config]
 | `--config <path>` | `None` | Optional TOML file providing CLI defaults (overrides CWD `./docpipe.toml`) |
 | `--no-config` | `False` | Skip automatic loading of `./docpipe.toml` in the current working directory (also disables `--config` TOML loading while preserving `./.env` discovery) |
 | `--collection <name>` | `"default"` | Target ChromaDB collection & manifest identifier (ChromaDB requires $\ge 3$ characters matching `[a-zA-Z0-9._-]`) |
-| `--persist-dir <path>` | `".docpipe"` | Directory storing `chroma.sqlite3`, `manifests/<collection>.json`, and `lexical/<collection>.db` |
+| `--persist-dir <path>` | `".docpipe"` | Directory storing `chroma.sqlite3`, `manifests/<collection>.json`, `manifests/<collection>.audit.jsonl`, and `lexical/<collection>.db` |
+| `--local-only` / `--no-local-only` | `False` (or TOML `local_only`) | Refuse non-local models and non-loopback `--api-base` endpoints pre-network across `ingest`, `sync`, `reindex`, `query`, `ask`, and `eval` |
+| `--pii-policy <path>` | `None` (or TOML `pii_policy`) | JSON (`.json`) or TOML (`.toml`) PII policy file parsed strictly in `cli.py` and applied to `ingest`, `sync`, and `ask` (misplaced usage on `status`, `remove`, `reindex`, `query`, or `eval` exits with status `1`) |
 | `--version` | — | Print `docpipe-maestro <version>` and exit |
 
-All global options (`--config`, `--no-config`, `--collection`, `--persist-dir`) are attached via a shared parent parser so they work identically **before or after** any subcommand:
+All global options (`--config`, `--no-config`, `--collection`, `--persist-dir`, `--local-only` / `--no-local-only`) are attached via a shared parent parser so they work identically **before or after** any subcommand (`--pii-policy` works before or after `ingest`, `sync`, and `ask`):
 
 ```bash
 docpipe-maestro --collection hr status --json
@@ -50,6 +53,8 @@ temperature = 0.0                  # Optional sampling temperature (>= 0.0)
 max_tokens = 512                   # Optional completion token limit (>= 1)
 timeout = 60.0                     # Request timeout in seconds (default: 120.0)
 fail_on_truncation = false         # Exit non-zero if `ask` response hits max_tokens (`finish_reason == "length"`)
+local_only = false                 # Refuse remote/non-loopback endpoints when true (`--no-local-only` overrides)
+pii_policy = "./pii-policy.json"   # Path string or inline `[pii_policy]` TOML table for `ingest`, `sync`, `ask`
 ```
 
 **Precedence order**: Explicit CLI flags > Explicit `--config <path>` > CWD `./docpipe.toml` (unless `--no-config`) > Built-in defaults (`config.py` / `120.0`s timeout).
@@ -71,13 +76,16 @@ Ingest a single file or recursively scan a directory atomically.
 
 ```text
 docpipe-maestro ingest [--config CONFIG] [--collection COLLECTION]
-                       [--persist-dir PERSIST_DIR] [--profile PROFILE]
+                       [--persist-dir PERSIST_DIR] [--local-only | --no-local-only]
+                       [--pii-policy PII_POLICY] [--profile PROFILE]
                        [--embed-model EMBED_MODEL] [--force] path
 ```
 
 - `--profile`: `"DEFAULT"` or `"POLICY"` (case-insensitive; default: `"DEFAULT"` or TOML `profile`).
 - `--embed-model`: Provider/model string (default: `"ollama/nomic-embed-text"`).
 - `--force`: Re-parse, re-chunk, and re-embed even when `mtime`, `size`, and `sha256` are unchanged.
+- `--pii-policy`: Path to a JSON or TOML PII policy (`redact`, `tokenize`, `block`). Block matches fail cleanly (`exit 1`) without printing raw PII values and record a `blocked=true` entry in `<persist_dir>/manifests/<collection>.audit.jsonl`.
+- `--local-only` / `--no-local-only`: Refuse non-local embedding models prior to model initialization.
 - **Example output**:
   ```text
   Ingested 3 file(s), skipped 0 unchanged (42 children, 18 parents) into collection 'hr_policy'.
@@ -91,9 +99,12 @@ Three-way reconcile `<directory>` against the stored manifest (adds new files, s
 
 ```text
 docpipe-maestro sync [--config CONFIG] [--collection COLLECTION]
-                     [--persist-dir PERSIST_DIR] [--profile PROFILE]
+                     [--persist-dir PERSIST_DIR] [--local-only | --no-local-only]
+                     [--pii-policy PII_POLICY] [--profile PROFILE]
                      [--embed-model EMBED_MODEL] directory
 ```
+
+- Supports `--local-only` / `--no-local-only` and `--pii-policy` with atomic rollback on `PiiBlockedError`.
 
 - **Example output**:
   ```text
@@ -165,7 +176,8 @@ Re-embed all existing child chunks stored in ChromaDB under a new embedding mode
 
 ```text
 docpipe-maestro reindex [--config CONFIG] [--collection COLLECTION]
-                        [--persist-dir PERSIST_DIR] --model MODEL
+                        [--persist-dir PERSIST_DIR] [--local-only | --no-local-only]
+                        --model MODEL
 ```
 
 - **Note**: `reindex` uses `--model` (required) rather than `--embed-model`. Collections ingested prior to hybrid search support must run `reindex` (or `ingest --force`) once before querying with `--searcher fts5_hybrid`.
@@ -184,9 +196,9 @@ Run Phase 2 search (`"default"` dense vector similarity or `"fts5_hybrid"` dense
 
 ```text
 docpipe-maestro query [--config CONFIG] [--no-config] [--collection COLLECTION]
-                      [--persist-dir PERSIST_DIR] [--top-k TOP_K]
-                      [--threshold THRESHOLD] [--embed-model EMBED_MODEL]
-                      [--searcher SEARCHER]
+                      [--persist-dir PERSIST_DIR] [--local-only | --no-local-only]
+                      [--top-k TOP_K] [--threshold THRESHOLD]
+                      [--embed-model EMBED_MODEL] [--searcher SEARCHER]
                       [--expand-parent | --no-expand-parent]
                       [--rerank | --no-rerank] [--reranker RERANKER]
                       [--rerank-top-n RERANK_TOP_N] [--json] question
@@ -244,7 +256,8 @@ Retrieve deduplicated parent sections, construct role-separated messages via `bu
 
 ```text
 docpipe-maestro ask [--config CONFIG] [--no-config] [--collection COLLECTION]
-                    [--persist-dir PERSIST_DIR] [--top-k TOP_K]
+                    [--persist-dir PERSIST_DIR] [--local-only | --no-local-only]
+                    [--pii-policy PII_POLICY] [--top-k TOP_K]
                     [--threshold THRESHOLD] [--model MODEL]
                     [--embed-model EMBED_MODEL] [--searcher SEARCHER]
                     [--rerank | --no-rerank] [--reranker RERANKER]
@@ -254,6 +267,8 @@ docpipe-maestro ask [--config CONFIG] [--no-config] [--collection COLLECTION]
                     [--fail-on-truncation] [--show-context] [--json] question
 ```
 
+- `--local-only` / `--no-local-only`: Enforces loopback/local execution preflight across both retrieval (`--embed-model`) and generation (`--model` + `--api-base`) before touching remote endpoints.
+- `--pii-policy`: Path to a JSON or TOML policy enforcing outbound egress scrubbing/blocking (`guard_egress`) across ChatML messages sent to remote providers.
 - `--top-k`, `--threshold`, `--embed-model`, `--searcher`, `--rerank` / `--no-rerank`, `--reranker`, `--rerank-top-n`: Same semantics as `docpipe-maestro query` (`expand_parent` is always `True`).
 - `--model`: LLM generation model string (default: `"ollama/llama3.2"` or TOML `model`).
 - `--api-base`: Optional custom OpenAI-compatible server URL (`http://` allowed for loopback hosts such as `http://localhost:8000/v1`; `https://` required for remote gateways).
@@ -273,9 +288,9 @@ Evaluate Phase 2 retrieval ranking (`Precision@K`, `Recall@K`, and `MRR`) strict
 
 ```text
 docpipe-maestro eval [--config CONFIG] [--no-config] [--collection COLLECTION]
-                     [--persist-dir PERSIST_DIR] --fixture FIXTURE
-                     [--k K [K ...]] [--embed-model EMBED_MODEL]
-                     [--searcher SEARCHER]
+                     [--persist-dir PERSIST_DIR] [--local-only | --no-local-only]
+                     --fixture FIXTURE [--k K [K ...]]
+                     [--embed-model EMBED_MODEL] [--searcher SEARCHER]
                      [--expand-parent | --no-expand-parent]
                      [--rerank | --no-rerank] [--reranker RERANKER]
                      [--rerank-top-n RERANK_TOP_N] [--json]
@@ -312,6 +327,8 @@ Common runtime fixes:
 - **`ModelMismatchError`**: Your `--embed-model` differs from the locked model shown by `docpipe-maestro status`. Query with the locked model or migrate via `docpipe-maestro reindex --model <new_model>`.
 - **`Collection ... does not have a lexical index yet`**: Pre-hybrid collections need a one-time index rebuild via `docpipe-maestro reindex --model <locked_model> --collection <name>` (or `ingest --force`) before running `--searcher fts5_hybrid`.
 - **`RegistryError`**: Unregistered `--searcher` or `--reranker` strategy name; use built-in `"default"` / `"fts5_hybrid"` (or `"cross_encoder"`) or a registered custom key.
-- **`MissingExtraError`**: Install the missing optional extra: `pip install "docpipe-maestro[rerank]"` for `--rerank` / `cross_encoder`, or `pip install "docpipe-maestro[pdf]"` (or `docx`, `html`, `all`) for format parsers.
+- **`MissingExtraError`**: Install the missing optional extra: `pip install "docpipe-maestro[rerank]"` for `--rerank` / `cross_encoder`, `pip install "docpipe-maestro[pii]"` for optional Presidio NER entity recognition, or `pip install "docpipe-maestro[pdf]"` (`docx`, `html`, `all`) for format parsers.
+- **`PiiBlockedError` / `--pii-policy` exit `1`**: A configured `block` entity (or `egress = "block"`) matched content during `ingest`, `sync`, or `ask`, or `--pii-policy` was passed to an unsupported command or pointed to an invalid file. Error messages report only source names and entity type labels without raw PII values.
+- **`local_only` exit `1`**: `--local-only` rejected a cloud model or non-loopback `--api-base` (or `OLLAMA_API_BASE` / `OLLAMA_HOST`). Use local `ollama/...` / loopback endpoints or override with `--no-local-only`.
 - **`Invalid or unusable collection`**: ChromaDB collection names must be at least 3 characters long and contain only `[a-zA-Z0-9._-]`.
 - **`Error: Config file not found`**: Check the relative or absolute path passed to `--config`.

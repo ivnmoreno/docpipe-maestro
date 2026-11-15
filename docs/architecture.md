@@ -14,18 +14,19 @@ flowchart LR
         direction LR
         F["Files (.md, .txt, .pdf, .docx, .html)"] --> I["intake/\n(Format + Headings)"]
         I --> C["clean/\n(HTML/Whitespace/Boilerplate)"]
-        C --> X["enricher/\n(POLICY: crossrefs)"]
+        C --> X["enricher/\n(pii -> crossrefs)"]
         X --> K["chunker/\n(Parents + Linked Children)"]
-        K --> E1["embedder/\n(Batch Child Vectors Only)"]
-        E1 --> S1["store/ (Chroma + FTS5) + manifest.py\n(Staged Insert -> Atomic Swap -> Purge)"]
+        K --> E1["embedder/\n(local_only check + Batch Child Vectors)"]
+        E1 --> S1["store/ (Chroma + FTS5) + manifest.py\n(Atomic Commit + .audit.jsonl)"]
     end
 
     subgraph P2["Phase 2: Online Read-Only Query (query/)"]
         direction LR
-        Q["Question"] --> E2["embedder/\n(Match Locked Model)"]
+        Q["Question"] --> E2["embedder/\n(local_only check + Locked Model)"]
         E2 --> R["retriever.py + searcher/\n(Dense or FTS5 Hybrid RRF -> Parent Expansion)"]
         R --> P["prompts.py\n(Pure Grounded Prompt)"]
-        P --> A["answer.py\n(Optional LLM / Empty Refusal)"]
+        P --> G["egress.py\n(local_only + PII Policy Guard)"]
+        G --> A["answer.py\n(Optional LLM / Empty Refusal)"]
     end
 
     S1 -. "ChromaDB + FTS5 DB + JSON Manifest\n(Read-Only in Phase 2)" .-> R
@@ -37,26 +38,28 @@ Every file's execution role is visible from the package layout under `src/docpip
 
 | Module | Phase | Responsibility |
 |---|---|---|
-| [`types.py`](../src/docpipe_maestro/types.py) | Shared | Single source of truth for chunks, metadata, profiles, `IngestContext`, manifest records, results, and `DocpipeError` hierarchy |
+| [`types.py`](../src/docpipe_maestro/types.py) | Shared | Single source of truth for chunks, metadata, profiles, `IngestContext`, manifest records, `PiiRecognizer`, `PiiPolicy`, `PiiBlockedError`, `PiiAuditRecord`, and `DocpipeError` hierarchy |
 | [`config.py`](../src/docpipe_maestro/config.py) | Shared | Static constants (`DEFAULT_*`) and immutable chunking profiles (`DEFAULT`, `POLICY`, `resolve_profile`) |
 | [`_registry.py`](../src/docpipe_maestro/_registry.py) | Shared | Lazy Strategy + Registry core with collision/lookup `RegistryError` guards |
 | [`_crossrefs.py`](../src/docpipe_maestro/_crossrefs.py) | Shared | Phase-neutral cross-reference pattern matching, `index_section_targets`, `match_source_key`, and bounded excerpt truncation |
-| [`embedder/`](../src/docpipe_maestro/embedder/__init__.py) | Shared | Batched provider-agnostic embeddings via `litellm.embedding` (`batch_size=64`) and auth error normalization |
-| [`manifest.py`](../src/docpipe_maestro/manifest.py) | Shared | Atomic DB-collocated JSON manifest (`sha256`, `mtime`/`size` fast-path, collection model lock) |
+| [`_pii.py`](../src/docpipe_maestro/_pii.py) | Shared | Phase-neutral PII policy validation, built-in/custom `PII_RECOGNIZERS`, HMAC tokenization (`tokenize_value`), and lazy multi-lang optional `[pii]` Presidio adapter |
+| [`embedder/`](../src/docpipe_maestro/embedder/__init__.py) | Shared | Batched provider-agnostic embeddings via `litellm.embedding` (`batch_size=64`), `is_local_target` / `enforce_local_only`, and auth error normalization |
+| [`manifest.py`](../src/docpipe_maestro/manifest.py) | Shared | Atomic DB-collocated JSON manifest (`sha256`, `mtime`/`size` fast-path, model lock) and owner-only `.audit.jsonl` writer |
 | [`store/chroma.py`](../src/docpipe_maestro/store/chroma.py) | Shared | Embedded `chromadb.PersistentClient` wrapper (`cosine` space, `None` metadata bridge, staging cleanup) |
 | [`store/lexical.py`](../src/docpipe_maestro/store/lexical.py) | Shared | Collocated SQLite FTS5 `LexicalIndex` (`unicode61` BM25, technical token sanitizer, strict `mode=ro` reads) |
 | [`ingest/intake/`](../src/docpipe_maestro/ingest/intake/__init__.py) | Phase 1 | Format dispatch, magic-byte fallback, fenced-block-safe Markdown, PDF/DOCX/HTML structural parsing |
 | [`ingest/clean/`](../src/docpipe_maestro/ingest/clean/__init__.py) | Phase 1 | Allow-listed HTML stripping, whitespace normalization, and 3+ page header/footer boilerplate removal |
-| [`ingest/enricher/`](../src/docpipe_maestro/ingest/enricher/__init__.py) | Phase 1 | Lazy `ENRICHERS` registry and built-in `CrossrefsEnricher` (`"crossrefs"`); [`ingest/crossrefs.py`](../src/docpipe_maestro/ingest/crossrefs.py) stays as a silent compatibility re-export |
+| [`ingest/enricher/`](../src/docpipe_maestro/ingest/enricher/__init__.py) | Phase 1 | Lazy `ENRICHERS` registry, pre-chunking `PiiEnricher` (`"pii"`), and `CrossrefsEnricher` (`"crossrefs"`); [`ingest/crossrefs.py`](../src/docpipe_maestro/ingest/crossrefs.py) stays as a compatibility re-export |
 | [`ingest/chunker/`](../src/docpipe_maestro/ingest/chunker/__init__.py) | Phase 1 | Structure-aware parent sections & linked child chunks, offline token estimation, section-scoped overlap |
-| [`ingest/pipeline.py`](../src/docpipe_maestro/ingest/pipeline.py) | Phase 1 | Public `ingest`, `sync`, `remove`, `status`, and `reindex` orchestration syncing ChromaDB, FTS5, and manifest |
+| [`ingest/pipeline.py`](../src/docpipe_maestro/ingest/pipeline.py) | Phase 1 | Public `ingest`, `sync`, `remove`, `status`, and `reindex` orchestration syncing ChromaDB, FTS5, manifest, and transactional PII `.audit.jsonl` |
 | [`query/searcher/`](../src/docpipe_maestro/query/searcher/__init__.py) | Phase 2 | Built-in `DenseSearcher` (`"default"`) and `Fts5HybridSearcher` (`"fts5_hybrid"` with RRF fusion) |
 | [`query/reranker/`](../src/docpipe_maestro/query/reranker/__init__.py) | Phase 2 | Lazy `RERANKERS` registry, shared preflight validator, and optional `CrossEncoderReranker` (`"cross_encoder"`) |
-| [`query/retriever.py`](../src/docpipe_maestro/query/retriever.py) | Phase 2 | Read-only child retrieval, optional child-first reranking, parent expansion & cross-doc citation pass |
+| [`query/retriever.py`](../src/docpipe_maestro/query/retriever.py) | Phase 2 | Read-only child retrieval, `local_only` preflight, optional child-first reranking, parent expansion & cross-doc citation pass |
 | [`query/prompts.py`](../src/docpipe_maestro/query/prompts.py) | Phase 2 | Pure zero-I/O prompt constructor preserving citation metadata (`Source`, `Section`, `Clause`, `Page`) |
-| [`query/answer.py`](../src/docpipe_maestro/query/answer.py) | Phase 2 | Optional grounded completion via `litellm.completion` with deterministic empty-context refusal |
-| [`eval/`](../src/docpipe_maestro/eval/__init__.py) | Phase 2 | Read-only retrieval evaluation metrics (`metrics.py`) and harness runner (`harness.py`) |
-| [`cli.py`](../src/docpipe_maestro/cli.py) | Both | `docpipe-maestro` CLI entry point and **sole** module permitted to read user TOML config files (`--config`) |
+| [`query/egress.py`](../src/docpipe_maestro/query/egress.py) | Phase 2 | Pre-network `--local-only` enforcement and outbound PII policy scrubbing/blocking across prompt strings and ChatML message arrays |
+| [`query/answer.py`](../src/docpipe_maestro/query/answer.py) | Phase 2 | Optional grounded completion via `litellm.completion` guarded by `guard_egress()` with deterministic empty-context refusal |
+| [`eval/`](../src/docpipe_maestro/eval/__init__.py) | Phase 2 | Read-only retrieval evaluation metrics (`metrics.py`) and harness runner (`harness.py`) with `local_only` preflight |
+| [`cli.py`](../src/docpipe_maestro/cli.py) | Both | `docpipe-maestro` CLI entry point and **sole** module permitted to read TOML config (`--config`) or `--pii-policy` files |
 
 ---
 
@@ -140,14 +143,16 @@ Never mutating stores via partial ID-only upserts prevents orphaned clauses when
 ```text
 1. Inspect Disk & Manifest (mtime/size fast-path -> sha256 check)
 2. Atomic Batch Validation:
-   Parse -> Clean -> Enrich -> Chunk -> Embed ALL changed files in memory
-   (Any format error, missing extra, enricher failure, or provider/auth failure aborts BEFORE DB init)
+   Parse -> Clean -> Enrich (pii pre-chunking -> crossrefs) -> Chunk -> Embed ALL changed files in memory
+   (Any format error, missing extra, PiiBlockedError, enricher failure, or provider/auth failure aborts BEFORE DB init;
+    on PiiBlockedError only the offending source emits one blocked=True record to <collection>.audit.jsonl)
 3. Open VectorStore + LexicalIndex & sweep_uncommitted(active_versions) from prior interrupted runs
 4. Per changed source document:
    a. Stage new child/parent records in ChromaDB and child rows in SQLite FTS5 tagged with doc_version = sha256_hex[:12]
    b. Atomically write manifest (<persist_dir>/manifests/<collection>.json)
       via tempfile.mkstemp -> flush -> os.fsync -> os.replace
-   c. Delete prior doc_version rows from both ChromaDB and SQLite FTS5
+   c. When pii_policy is active, append one blocked=False record to <persist_dir>/manifests/<collection>.audit.jsonl (0o700 dir / 0o600 file, zero raw PII)
+   d. Delete prior doc_version rows from both ChromaDB and SQLite FTS5
 ```
 
 If the process crashes between steps `4a` and `4b`:

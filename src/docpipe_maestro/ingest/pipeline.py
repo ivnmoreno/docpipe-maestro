@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from docpipe_maestro._resolve import resolve_parser
 from docpipe_maestro._stages import Embedder, Store
@@ -21,6 +22,7 @@ from docpipe_maestro.ingest.clean import CLEANERS
 from docpipe_maestro.ingest.enricher import ENRICHERS
 from docpipe_maestro.ingest.stages import Chunker, Cleaner, Enricher
 from docpipe_maestro.manifest import (
+    append_audit_record,
     check_model_lock,
     classify_file,
     load_manifest,
@@ -37,6 +39,9 @@ from docpipe_maestro.types import (
     IngestContext,
     IngestResult,
     ParsedDocument,
+    PiiAuditRecord,
+    PiiBlockedError,
+    PiiPolicy,
     SourceRecord,
     SyncResult,
     UnsupportedFormatError,
@@ -83,6 +88,18 @@ def _discover_files(
     raise UnsupportedFormatError(f"Path does not exist: {target}")
 
 
+def _effective_enricher_names(
+    enricher_names: Sequence[str],
+    *,
+    pii_policy: PiiPolicy | None,
+) -> tuple[str, ...]:
+    """Schedule ``'pii'`` ahead of profile enrichers when ``pii_policy`` is active."""
+    names = tuple(enricher_names)
+    if pii_policy is None or "pii" in names:
+        return names
+    return ("pii", *names)
+
+
 def _resolve_enrichers(enricher_names: Sequence[str]) -> list[Enricher]:
     """Resolve and instantiate configured Phase 1 enrichers in declared order."""
     if not enricher_names:
@@ -102,6 +119,52 @@ def _apply_enrichers(
     return enriched
 
 
+def _build_pii_audit_record(
+    *,
+    collection: str,
+    source_key: str,
+    doc_version: str,
+    threshold: float,
+    entity_counts: Mapping[str, int],
+    actions: Mapping[str, str],
+    blocked: bool,
+    mode: str,
+) -> PiiAuditRecord:
+    """Build a structured zero-raw-PII audit record for JSONL persistence."""
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "collection": collection,
+        "source": source_key,
+        "doc_version": doc_version,
+        "threshold": threshold,
+        "entity_counts": dict(sorted(entity_counts.items())),
+        "actions": dict(sorted(actions.items())),
+        "blocked": blocked,
+        "mode": mode,
+    }
+
+
+def _extract_audit_fields(
+    extra: Mapping[str, Any],
+    fallback_threshold: float,
+) -> tuple[float, dict[str, int], dict[str, str]]:
+    """Read sanitized count/action/threshold metadata written by ``PiiEnricher``."""
+    raw = extra.get("pii_audit")
+    if not isinstance(raw, Mapping):
+        return fallback_threshold, {}, {}
+    thresh_raw = raw.get("threshold", fallback_threshold)
+    threshold = float(thresh_raw) if isinstance(thresh_raw, int | float) else fallback_threshold
+    counts_raw = raw.get("entity_counts")
+    counts = (
+        {str(k): int(v) for k, v in counts_raw.items()} if isinstance(counts_raw, Mapping) else {}
+    )
+    actions_raw = raw.get("actions")
+    actions = (
+        {str(k): str(v) for k, v in actions_raw.items()} if isinstance(actions_raw, Mapping) else {}
+    )
+    return threshold, counts, actions
+
+
 def _extract_document_chunks(
     file_path: Path,
     *,
@@ -113,13 +176,18 @@ def _extract_document_chunks(
     cleaner: Cleaner,
     enrichers: Sequence[Enricher],
     chunker: Chunker,
-) -> tuple[str, str, list[Chunk]]:
+    pii_policy: PiiPolicy | None = None,
+    audit_threshold: float | None = None,
+    persist_path: Path | None = None,
+    audit_mode: str | None = None,
+) -> tuple[str, str, list[Chunk], PiiAuditRecord | None]:
     """Parse, clean, enrich, and chunk a changed source document."""
     if content_hash is None:
         raise DocpipeError(f"Missing content hash for non-unchanged file: {source_key}")
     doc_version = content_hash.split(":", 1)[1][:12]
     parsed: ParsedDocument = resolve_parser(file_path).parse(file_path, source_key=source_key)
     cleaned = cleaner.clean(parsed)
+    extra: dict[str, Any] = {}
     ctx: IngestContext = {
         "collection": collection,
         "source": source_key,
@@ -127,15 +195,50 @@ def _extract_document_chunks(
         "doc_version": doc_version,
         "embed_model": embed_model,
         "profile": profile.name,
+        "extra": extra,
     }
-    enriched = _apply_enrichers(cleaned, enrichers, ctx)
+    if pii_policy is not None:
+        ctx["pii_policy"] = pii_policy
+
+    fallback_thresh = audit_threshold if audit_threshold is not None else 0.5
+    try:
+        enriched = _apply_enrichers(cleaned, enrichers, ctx)
+    except PiiBlockedError as exc:
+        if pii_policy is not None and persist_path is not None and audit_mode is not None:
+            resolved_thresh, _, _ = _extract_audit_fields(extra, fallback_thresh)
+            blocked_record = _build_pii_audit_record(
+                collection=collection,
+                source_key=source_key,
+                doc_version=doc_version,
+                threshold=resolved_thresh,
+                entity_counts=exc.entity_counts,
+                actions=exc.actions,
+                blocked=True,
+                mode=audit_mode,
+            )
+            append_audit_record(persist_path, collection, blocked_record)
+        raise
+
     chunks = chunker.chunk(
         enriched,
         profile=profile,
         doc_version=doc_version,
         embed_model=embed_model,
     )
-    return content_hash, doc_version, chunks
+    audit_record: PiiAuditRecord | None = None
+    if pii_policy is not None and audit_mode is not None:
+        resolved_thresh, counts, actions = _extract_audit_fields(extra, fallback_thresh)
+        audit_record = _build_pii_audit_record(
+            collection=collection,
+            source_key=source_key,
+            doc_version=doc_version,
+            threshold=resolved_thresh,
+            entity_counts=counts,
+            actions=actions,
+            blocked=False,
+            mode=audit_mode,
+        )
+    return content_hash, doc_version, chunks, audit_record
 
 
 def _embed_document_chunks(
@@ -190,6 +293,8 @@ def ingest(
     chunker: str = "default",
     embedder: str = "default",
     store: str = "default",
+    pii_policy: PiiPolicy | None = None,
+    local_only: bool = False,
 ) -> IngestResult:
     """Ingest a file or directory atomically into the vector database.
 
@@ -210,6 +315,8 @@ def ingest(
         chunker: Registered ``CHUNKERS`` key (defaults to ``"default"``).
         embedder: Registered ``EMBEDDERS`` key (defaults to ``"default"``).
         store: Registered ``STORES`` key (defaults to ``"default"``).
+        pii_policy: Optional programmatic ``PiiPolicy`` enforced pre-chunking.
+        local_only: When ``True``, refuse non-local ``embed_model`` targets.
 
     Returns:
         Summary of ingested/skipped source keys and written child/parent counts.
@@ -218,12 +325,24 @@ def ingest(
         UnsupportedFormatError: If ``path`` is missing, empty, or contains an
             unsupported/corrupted file (aborts the entire batch before writes).
         MissingExtraError: If a required format extra (``pdf``, ``docx``,
-            ``html``) is not installed.
+            ``html``, ``pii``) is not installed.
         ModelMismatchError: If ``collection`` is already locked to another model.
         MissingCredentialError: If provider credentials are missing or invalid.
+        PiiBlockedError: If configured ``block`` PII rules match any section.
         RegistryError: If any requested stage key is unregistered.
-        DocpipeError: If embedding or store initialization fails.
+        DocpipeError: If embedding, ``local_only``, or store initialization fails.
     """
+    if local_only:
+        from docpipe_maestro.embedder import enforce_local_only
+
+        enforce_local_only(embed_model, operation="ingest")
+
+    audit_threshold: float | None = None
+    if pii_policy is not None:
+        from docpipe_maestro._pii import validate_pii_policy
+
+        audit_threshold = validate_pii_policy(pii_policy).min_confidence
+
     target = Path(path)
     persist_path = Path(persist_dir)
     prof = resolve_profile(profile)
@@ -234,13 +353,15 @@ def ingest(
     discovered = _discover_files(target, persist_path=persist_path)
 
     cleaner_inst: Cleaner = CLEANERS.resolve(cleaner)()
-    enricher_insts: list[Enricher] = _resolve_enrichers(prof.enrichers)
+    enricher_names = _effective_enricher_names(prof.enrichers, pii_policy=pii_policy)
+    enricher_insts: list[Enricher] = _resolve_enrichers(enricher_names)
     chunker_inst: Chunker = CHUNKERS.resolve(chunker)()
     embedder_inst: Embedder = EMBEDDERS.resolve(embedder)()
     store_cls: type[Store] = STORES.resolve(store)
 
     # Atomic batch validation & in-memory parsing/chunking/embedding before touching the DB
     staged_docs: list[tuple[str, str, str, int, float, list[EmbeddedChunk], int]] = []
+    staged_audits: dict[str, PiiAuditRecord] = {}
     skipped: list[str] = []
     manifest_dirty = False
 
@@ -257,7 +378,7 @@ def ingest(
                 manifest_dirty = True
             continue
 
-        content_hash, doc_version, chunks = _extract_document_chunks(
+        content_hash, doc_version, chunks, audit_record = _extract_document_chunks(
             file_path,
             source_key=source_key,
             content_hash=content_hash,
@@ -267,6 +388,10 @@ def ingest(
             cleaner=cleaner_inst,
             enrichers=enricher_insts,
             chunker=chunker_inst,
+            pii_policy=pii_policy,
+            audit_threshold=audit_threshold,
+            persist_path=persist_path,
+            audit_mode="ingest",
         )
         embedded, dim = _embed_document_chunks(
             chunks,
@@ -274,6 +399,8 @@ def ingest(
             embed_model=embed_model,
         )
         staged_docs.append((source_key, content_hash, doc_version, size, mtime, embedded, dim))
+        if audit_record is not None:
+            staged_audits[source_key] = audit_record
 
     if manifest_dirty and not staged_docs:
         save_manifest(persist_path, manifest)
@@ -313,6 +440,9 @@ def ingest(
             parent_ids=parent_ids,
         )
         save_manifest(persist_path, manifest)
+        staged_audit = staged_audits.get(source_key)
+        if staged_audit is not None:
+            append_audit_record(persist_path, collection, staged_audit)
         store_obj.delete_stale_versions(source_key, doc_version)
         lexical.delete_stale_versions(source_key, doc_version)
 
@@ -341,6 +471,8 @@ def sync(
     chunker: str = "default",
     embedder: str = "default",
     store: str = "default",
+    pii_policy: PiiPolicy | None = None,
+    local_only: bool = False,
 ) -> SyncResult:
     """Three-way reconcile ``directory`` against the collection manifest.
 
@@ -359,6 +491,8 @@ def sync(
         chunker: Registered ``CHUNKERS`` key (defaults to ``"default"``).
         embedder: Registered ``EMBEDDERS`` key (defaults to ``"default"``).
         store: Registered ``STORES`` key (defaults to ``"default"``).
+        pii_policy: Optional programmatic ``PiiPolicy`` enforced pre-chunking.
+        local_only: When ``True``, refuse non-local ``embed_model`` targets.
 
     Returns:
         ``SyncResult`` listing ``added``, ``updated``, ``skipped``, and
@@ -367,12 +501,24 @@ def sync(
     Raises:
         UnsupportedFormatError: If ``directory`` is not a directory or contains
             an unsupported/corrupted file.
-        MissingExtraError: If a required format parser extra is missing.
+        MissingExtraError: If a required format parser or ``pii`` extra is missing.
         ModelMismatchError: If ``collection`` is locked to a different model.
         MissingCredentialError: If embedding credentials are missing or invalid.
+        PiiBlockedError: If configured ``block`` PII rules match any section.
         RegistryError: If any requested stage key is unregistered.
-        DocpipeError: If embedding or store operations fail.
+        DocpipeError: If embedding, ``local_only``, or store operations fail.
     """
+    if local_only:
+        from docpipe_maestro.embedder import enforce_local_only
+
+        enforce_local_only(embed_model, operation="sync")
+
+    audit_threshold: float | None = None
+    if pii_policy is not None:
+        from docpipe_maestro._pii import validate_pii_policy
+
+        audit_threshold = validate_pii_policy(pii_policy).min_confidence
+
     target = Path(directory)
     if not target.is_dir():
         raise UnsupportedFormatError(f"Sync target is not a directory: {target}")
@@ -387,12 +533,14 @@ def sync(
     removed_keys = sorted(set(manifest.sources.keys()) - disk_keys)
 
     cleaner_inst: Cleaner = CLEANERS.resolve(cleaner)()
-    enricher_insts: list[Enricher] = _resolve_enrichers(prof.enrichers)
+    enricher_names = _effective_enricher_names(prof.enrichers, pii_policy=pii_policy)
+    enricher_insts: list[Enricher] = _resolve_enrichers(enricher_names)
     chunker_inst: Chunker = CHUNKERS.resolve(chunker)()
     embedder_inst: Embedder = EMBEDDERS.resolve(embedder)()
     store_cls: type[Store] = STORES.resolve(store)
 
     staged_docs: list[tuple[str, str, str, str, int, float, list[EmbeddedChunk], int]] = []
+    staged_audits: dict[str, PiiAuditRecord] = {}
     skipped: list[str] = []
     manifest_dirty = False
 
@@ -407,7 +555,7 @@ def sync(
                 manifest_dirty = True
             continue
 
-        content_hash, doc_version, chunks = _extract_document_chunks(
+        content_hash, doc_version, chunks, audit_record = _extract_document_chunks(
             file_path,
             source_key=source_key,
             content_hash=content_hash,
@@ -417,6 +565,10 @@ def sync(
             cleaner=cleaner_inst,
             enrichers=enricher_insts,
             chunker=chunker_inst,
+            pii_policy=pii_policy,
+            audit_threshold=audit_threshold,
+            persist_path=persist_path,
+            audit_mode="sync",
         )
         embedded, dim = _embed_document_chunks(
             chunks,
@@ -426,6 +578,8 @@ def sync(
         staged_docs.append(
             (status_flag, source_key, content_hash, doc_version, size, mtime, embedded, dim)
         )
+        if audit_record is not None:
+            staged_audits[source_key] = audit_record
 
     store_obj: Store = store_cls(persist_path, collection)
     lexical = LexicalIndex(persist_path, collection)
@@ -469,6 +623,9 @@ def sync(
             parent_ids=parent_ids,
         )
         save_manifest(persist_path, manifest)
+        staged_audit = staged_audits.get(source_key)
+        if staged_audit is not None:
+            append_audit_record(persist_path, collection, staged_audit)
         store_obj.delete_stale_versions(source_key, doc_version)
         lexical.delete_stale_versions(source_key, doc_version)
 
@@ -576,6 +733,7 @@ def reindex(
     persist_dir: str | Path = DEFAULT_PERSIST_DIR,
     embedder: str = "default",
     store: str = "default",
+    local_only: bool = False,
 ) -> int:
     """Re-embed all existing stored child chunks under a new embedding model.
 
@@ -589,6 +747,7 @@ def reindex(
         persist_dir: Local persistence directory.
         embedder: Registered ``EMBEDDERS`` key (defaults to ``"default"``).
         store: Registered ``STORES`` key (defaults to ``"default"``).
+        local_only: When ``True``, refuse non-local ``embed_model`` targets.
 
     Returns:
         Count of committed child chunks re-embedded.
@@ -596,8 +755,13 @@ def reindex(
     Raises:
         MissingCredentialError: If provider credentials for ``embed_model`` fail.
         RegistryError: If ``embedder`` or ``store`` is unregistered.
-        DocpipeError: If embedding or collection recreation fails.
+        DocpipeError: If embedding, ``local_only``, or collection recreation fails.
     """
+    if local_only:
+        from docpipe_maestro.embedder import enforce_local_only
+
+        enforce_local_only(embed_model, operation="reindex")
+
     persist_path = Path(persist_dir)
     manifest = load_manifest(persist_path, collection)
     embedder_inst: Embedder = EMBEDDERS.resolve(embedder)()

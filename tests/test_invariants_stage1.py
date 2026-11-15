@@ -625,3 +625,81 @@ def test_ingest_batch_force_and_mixed_sync_delete_abort_on_enricher_failure(
         )
         == sync_baseline
     )
+
+
+def test_pii_enricher_auto_schedule_custom_order_and_noop_compatibility(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: None,
+) -> None:
+    """pii_policy auto-prepends 'pii' before crossrefs, preserves custom order once, or no-ops."""
+    _ = mock_litellm_offline
+    doc_path = tmp_path / "policy_with_ref.md"
+    doc_path.write_text(
+        "# 1. Billing Contact\n\nContact billing@example.test.\n\n"
+        "# 2. Escalation\n\nSee Section 1 before escalation.\n",
+        encoding="utf-8",
+    )
+
+    # Without pii_policy, DEFAULT/POLICY preserve plaintext unchanged.
+    ingest(
+        doc_path,
+        profile="POLICY",
+        persist_dir=tmp_persist_dir,
+        collection="no_pii_baseline",
+        embed_model="mock/embed",
+    )
+    plain_children = VectorStore(tmp_persist_dir, "no_pii_baseline").get_all_children()
+    assert any("billing@example.test" in c.text for c in plain_children)
+
+    # With pii_policy on POLICY, 'pii' auto-schedules ahead of 'crossrefs' so crossref
+    # excerpt from Section 1 never duplicates unredacted email text.
+    ingest(
+        doc_path,
+        profile="POLICY",
+        persist_dir=tmp_persist_dir,
+        collection="auto_pii_policy",
+        embed_model="mock/embed",
+        pii_policy={"types": {"EMAIL_ADDRESS": "redact"}},
+    )
+    scrubbed_records = VectorStore(tmp_persist_dir, "auto_pii_policy").get_all_children()
+    assert all("billing@example.test" not in c.text for c in scrubbed_records)
+    assert any("[Crossref" in c.text and "[EMAIL_ADDRESS]" in c.text for c in scrubbed_records)
+
+    # Explicit 'pii' placement inside custom profile runs exactly once in declared order.
+    with _restore_enrichers():
+        order_trace: list[str] = []
+
+        @register_enricher("record_trace")
+        class _RecordTrace:
+            name = "record_trace"
+
+            def enrich(self, doc: ParsedDocument, ctx: IngestContext) -> ParsedDocument:
+                _ = ctx
+                order_trace.append("record_trace")
+                for sec in doc.sections:
+                    order_trace.append(sec.raw_text)
+                return doc
+
+        custom_prof = ChunkingProfile(
+            name="EXPLICIT_PII_AFTER",
+            chunk_size=1000,
+            overlap=80,
+            clause_preserving=False,
+            parent_child=False,
+            resolve_crossrefs=False,
+            enrichers=("record_trace", "pii"),
+        )
+        ingest(
+            doc_path,
+            profile=custom_prof,
+            persist_dir=tmp_persist_dir,
+            collection="explicit_order_col",
+            embed_model="mock/embed",
+            pii_policy={"types": {"EMAIL_ADDRESS": "redact"}},
+        )
+        # record_trace ran BEFORE pii because explicit order in profile.enrichers wins.
+        assert order_trace[0] == "record_trace"
+        assert any("billing@example.test" in item for item in order_trace[1:])
+        stored = VectorStore(tmp_persist_dir, "explicit_order_col").get_all_children()
+        assert all("billing@example.test" not in c.text for c in stored)

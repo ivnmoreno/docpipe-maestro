@@ -230,6 +230,7 @@ def evaluate(
     rerank: bool = False,
     reranker: str = "cross_encoder",
     rerank_top_n: int = DEFAULT_RERANK_TOP_N,
+    local_only: bool = False,
     **retrieve_kwargs: Any,
 ) -> EvalReport:
     """Evaluate Phase 2 retrieval against a curated fixture strictly read-only.
@@ -246,6 +247,7 @@ def evaluate(
         embedder: Registered ``EMBEDDERS`` key (defaults to ``"default"``).
         store: Registered ``STORES`` key (defaults to ``"default"``).
         searcher: Registered ``SEARCHERS`` key (defaults to ``"default"``).
+        local_only: When ``True``, reject non-local embedding targets before evaluation.
         **retrieve_kwargs: Forwarded to ``retrieve()`` for downstream extension stages.
 
     Returns:
@@ -255,10 +257,15 @@ def evaluate(
         ValueError: If ``k_values`` or ``threshold`` fail validation.
         RegistryError: If ``embedder``, ``store``, or ``searcher`` is unregistered.
         ModelMismatchError: If ``embed_model`` mismatches the locked collection model.
-        DocpipeError: If the fixture is invalid or the collection is missing or empty.
+        DocpipeError: If the fixture is invalid, the collection is missing/empty, or
+            ``local_only`` blocks a remote target.
     """
     norm_k = normalize_k_values(k_values)
     norm_threshold = _validate_threshold(threshold)
+    if local_only:
+        from docpipe_maestro.embedder import enforce_local_only
+
+        enforce_local_only(embed_model, operation="evaluation")
     loaded_fixture = load_eval_fixture(fixture)
     effective_collection = _resolve_target_collection(collection, loaded_fixture)
 
@@ -293,6 +300,7 @@ def evaluate(
             rerank=rerank,
             reranker=reranker,
             rerank_top_n=rerank_top_n,
+            local_only=local_only,
             **retrieve_kwargs,
         )
         retrieved_ids = [chunk.id for chunk in chunks]

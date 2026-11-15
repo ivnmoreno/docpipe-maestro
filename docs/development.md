@@ -15,7 +15,7 @@ cd docpipe-maestro
 # Recommended: uv
 uv sync --all-extras --group dev
 
-# Alternative: pip >= 24.1
+# Alternative: pip >= 24.1 (add rerank,pii extras if testing optional dependencies)
 python -m venv .venv && source .venv/bin/activate
 pip install --group dev -e ".[all]"
 
@@ -31,18 +31,20 @@ pre-commit install
 All checks treat warnings strictly (`filterwarnings = ["error"]` in `pyproject.toml`), enforce `mypy --strict`, and require branch coverage $\ge 80\%$.
 
 ```bash
-# 1. Lint and formatting check (Ruff target py310, line-length 100)
+# 1. Lint, formatting, and Bandit security checks (Ruff target py310, line-length 100)
 uv run ruff check .
+uv run ruff check --select S src/
 uv run ruff format --check .
 
 # 2. Strict static type checking across library and tests
 uv run mypy src tests
 
-# 3. Full test suite with branch coverage (must stay >= 80%)
-uv run pytest -v --cov
+# 3. Full offline test suite with branch coverage (must stay >= 80%)
+LITELLM_LOCAL_MODEL_COST_MAP=true uv run pytest -v --cov
 
-# 4. Mandatory Reverse Safety Release Gate (exception preservation)
+# 4. Mandatory Safety Release Gates (exception preservation + PII safety)
 uv run pytest -m reverse -v
+uv run pytest -m pii -v
 
 # 5. Extended large-corpus, complex multi-format & stress suite
 uv run pytest -m integration -v
@@ -52,7 +54,8 @@ uv run pytest -m integration -v
 
 Configured in `pyproject.toml`:
 
-- `reverse` (`tests/test_reverse_safety.py`): Release-gating property tests verifying that queries targeting any policy clause with exception markers (`except`, `unless`, `not entitled`, `subject to`, `provided that`) retrieve parent context preserving both rule and exception.
+- `reverse` (`tests/test_reverse_safety.py`): Release Gate #1 property tests verifying that queries targeting any policy clause with exception markers (`except`, `unless`, `not entitled`, `subject to`, `provided that`) retrieve parent context preserving both rule and exception.
+- `pii` (`tests/test_pii_safety.py`): Release Gate #2 synthetic tests verifying pre-chunking blocking/redaction/tokenization in headings and bodies, transactional `PiiBlockedError` rollback, owner-only zero-raw-PII `.audit.jsonl` logs, `--local-only` refusal, and outbound `guard_egress` enforcement offline.
 - `integration` (`tests/test_extended_complex.py`): Large-corpus (`> 64` chunks testing multi-batch embedding), multi-page PDF boilerplate detection, complex DOCX/HTML table extraction, nested directory sync/rename/truncation, and atomic abort guarantees.
 - `slow`: Reserved for long-running benchmarks or large stress runs.
 - Baseline replay (`tests/test_eval.py`): Replays `tests/fixtures/eval_policy_corpus.json` strictly offline under `mock_litellm_offline` and verifies exact equivalence with `docs/eval-baseline.json` (`default` and `fts5_hybrid`).
@@ -88,7 +91,7 @@ Before adding features, verify compliance with [`.specify/memory/constitution.md
 
 1. **Scope Discipline**: Every core feature must be reachable via the minimal public API or `docpipe-maestro` CLI — no HTTP server, auth middleware, session memory, or UI code inside `docpipe_maestro`.
 2. **Two-Phase Separation**: Keep Phase 1 write logic inside `src/docpipe_maestro/ingest/` and read-only Phase 2 logic inside `src/docpipe_maestro/query/` (and `src/docpipe_maestro/eval/`).
-3. **Library Purity**: Never read config files inside library modules (TOML loading belongs solely in `cli.py`). Never add a hardcoded provider registry; delegate `provider/model` resolution directly to `litellm`.
+3. **Library Purity**: Never read config or PII policy files inside library modules (TOML `--config` and JSON/TOML `--pii-policy` parsing belong solely in `cli.py`). Never add a hardcoded provider registry; delegate `provider/model` resolution directly to `litellm`.
 4. **Schema Single Source**: Add or modify shared dataclasses/types only in `src/docpipe_maestro/types.py`.
 5. **Additive Format Extensions**: To add a new parser (e.g., `.rst` or `.xlsx`):
    - Add an optional dependency under `[project.optional-dependencies]` in `pyproject.toml`.

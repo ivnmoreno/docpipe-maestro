@@ -122,6 +122,7 @@ def retrieve(
     rerank: bool = False,
     reranker: str = "cross_encoder",
     rerank_top_n: int = DEFAULT_RERANK_TOP_N,
+    local_only: bool = False,
 ) -> list[RetrievedChunk]:
     """Retrieve relevant parent sections (or child chunks) for a question.
 
@@ -150,6 +151,8 @@ def retrieve(
         rerank: Opt into post-retrieval child reranking before parent expansion.
         reranker: Registered ``RERANKERS`` key (defaults to ``"cross_encoder"``).
         rerank_top_n: Minimum candidate child pool size fetched prior to reranking.
+        local_only: When ``True``, reject non-local embedding providers before
+            query execution.
 
     Returns:
         Matched ``RetrievedChunk`` objects ordered by descending ``score``.
@@ -160,8 +163,13 @@ def retrieve(
         ModelMismatchError: If ``embed_model`` mismatches the collection lock.
         MissingCredentialError: If provider credentials are missing or invalid.
         RegistryError: If ``embedder``, ``store``, ``searcher``, or ``reranker`` is unregistered.
-        DocpipeError: If embedding, reranking, or store lookup fails.
+        DocpipeError: If embedding, reranking, ``local_only``, or store lookup fails.
     """
+    if local_only:
+        from docpipe_maestro.embedder import enforce_local_only
+
+        enforce_local_only(embed_model, operation="retrieval")
+
     if embedder != "default":
         EMBEDDERS.resolve(embedder)
     if store != "default":

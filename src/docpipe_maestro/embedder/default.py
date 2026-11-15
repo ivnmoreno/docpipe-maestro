@@ -117,6 +117,52 @@ def validate_api_base(api_base: str | None) -> str | None:
     return api_base
 
 
+_LOCAL_MODEL_PREFIXES: tuple[str, ...] = ("ollama/", "ollama_chat/", "local/")
+
+
+def _is_env_host_loopback(raw_value: str) -> bool:
+    """Validate whether an ``OLLAMA_API_BASE`` / ``OLLAMA_HOST`` env setting stays local."""
+    stripped = raw_value.strip()
+    if not stripped:
+        return True
+    if "://" in stripped:
+        validate_api_base(stripped)
+        return _is_loopback_host(urlparse(stripped).hostname)
+    parsed = urlparse(f"http://{stripped}")
+    return _is_loopback_host(parsed.hostname)
+
+
+def is_local_target(model: str, api_base: str | None = None) -> bool:
+    """Return ``True`` iff target executes locally or against a loopback ``api_base``."""
+    normalized_model = model.strip()
+    if not normalized_model:
+        return False
+    validated_base = validate_api_base(api_base)
+    if validated_base is not None:
+        return _is_loopback_host(urlparse(validated_base).hostname)
+
+    lower_model = normalized_model.lower()
+    if not lower_model.startswith(_LOCAL_MODEL_PREFIXES):
+        return False
+    if lower_model.startswith(("ollama/", "ollama_chat/")):
+        for env_key in ("OLLAMA_API_BASE", "OLLAMA_HOST"):
+            env_val = os.environ.get(env_key)
+            if env_val and not _is_env_host_loopback(env_val):
+                return False
+    return True
+
+
+def enforce_local_only(model: str, api_base: str | None = None, *, operation: str) -> None:
+    """Raise ``DocpipeError`` pre-network when ``local_only`` sees a remote target."""
+    if is_local_target(model, api_base):
+        return
+    raise DocpipeError(
+        f"Refusing remote {operation} target for model {model!r} under local_only mode. "
+        "Configure a local provider (ollama/, ollama_chat/, local/) or a loopback "
+        "api_base (localhost, 127.0.0.1, ::1)."
+    )
+
+
 def prepare_litellm() -> Any:
     """Import LiteLLM with bundled local cost map enabled by default for air-gapped safety."""
     os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")

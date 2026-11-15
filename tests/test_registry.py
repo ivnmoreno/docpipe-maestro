@@ -526,11 +526,11 @@ def test_top_level_eight_registries_empty_defaults_and_protocol_conformance(
     # Subpackage imports from test setup must never shadow callable root.ingest
     assert callable(root.ingest)
 
-    assert ENRICHERS.keys() == ["crossrefs"]
+    assert ENRICHERS.keys() == ["crossrefs", "pii"]
     assert callable(register_enricher)
     with pytest.raises(
         root.RegistryError,
-        match=r"registry 'enricher' has no entry 'missing' \(available: crossrefs\)",
+        match=r"registry 'enricher' has no entry 'missing' \(available: crossrefs, pii\)",
     ):
         ENRICHERS.resolve("missing")
 

@@ -1,18 +1,14 @@
 <!--
 # Sync Impact Report
-- Version change: 1.2.2 -> 1.3.0
-- Rationale: Formalize Stage 4 PII safety governance ahead of feature specification — establish pre-chunking PII scrubbing and transactional block isolation, value-based non-reversible tokenization, zero-raw-PII error/audit log guarantees, outbound PII egress and `--local-only` enforcement, and mandatory Release Gate #2 (`@pytest.mark.pii`).
-- Migration Note: Minor governance expansion with zero breaking changes to existing Phase 1/2 APIs prior to Stage 4 implementation. Once Stage 4 lands, every release MUST pass both Release Gate #1 (`@pytest.mark.reverse`) and Release Gate #2 (`@pytest.mark.pii`).
-- List of modified principles:
-  - III. Library Purity (clarified to forbid library reads of user policy files alongside config files)
-  - V. Exception Preservation (expanded to promote Release Gate #2 `@pytest.mark.pii` from reserved to mandatory alongside Release Gate #1 `@pytest.mark.reverse`)
+- Version change: 1.3.0 -> 1.3.1
+- Rationale: Fulfill v1.3.0 follow-up TODO by syncing finalized Stage 4 (`009-pii-protection`) public root exports (`register_pii_recognizer`, `PiiPolicy`, `PiiBlockedError`) into Quality Gates.
+- Migration Note: Strictly additive root exports (`__all__` count incremented to 36); zero breaking changes for existing callers or Phase 1/2 signatures.
+- List of modified principles: None
 - Modified sections:
-  - Additional Constraints -> Data and Privacy (added PII ingestion safety, deterministic tokenization, zero-raw-PII audit logs, outbound egress protection, `--local-only` network refusal, and honest detection-scope claims)
-  - Additional Constraints -> Quality Gates (activated Release Gate #2 `@pytest.mark.pii` as mandatory)
-  - Additional Constraints -> Footprint (mandated zero-download offline core recognizers and lazy optional-extra loading for NER backends)
+  - Additional Constraints -> Quality Gates (synced `register_pii_recognizer`, `PiiPolicy`, `PiiBlockedError` into the root public API surface list)
 - Added sections: None
 - Removed sections: None
-- Follow-up TODOs: Implement Stage 4 (`009-pii-protection` via `/speckit-specify`) to add `tests/test_pii_safety.py` (`@pytest.mark.pii`), PII/egress runtime enforcement, and any public API surface additions synced into Quality Gates once exported.
+- Follow-up TODOs: None
 -->
 
 # docpipe-maestro Constitution
@@ -142,12 +138,12 @@ across modules is prohibited.
   `reindex`, `retrieve`, `build_prompt`, `build_chat_messages`, optional `answer`,
   `answer_detailed`, extension decorators (`register_parser`, `register_cleaner`,
   `register_enricher`, `register_chunker`, `register_embedder`, `register_store`,
-  `register_searcher`, `register_reranker`), shared data/result shapes (`Chunk`,
+  `register_searcher`, `register_reranker`, `register_pii_recognizer`), shared data/result shapes (`Chunk`,
   `EmbeddedChunk`, `RetrievedChunk`, `SourceRecord`, `IngestResult`, `SyncResult`,
-  `CollectionStatus`, `GenerationResult`), public exceptions (`DocpipeError`,
+  `CollectionStatus`, `GenerationResult`, `PiiPolicy`), public exceptions (`DocpipeError`,
   `MissingExtraError`, `UnsupportedFormatError`, `EmptyDocumentError`,
   `ModelMismatchError`, `MissingCredentialError`, `RegistryError`, `IngestionError`,
-  `GenerationError`), and `__version__`. If a feature cannot be reached through that
+  `GenerationError`, `PiiBlockedError`), and `__version__`. If a feature cannot be reached through that
   surface, it does not belong in the core.
 
 ### Footprint
@@ -177,4 +173,4 @@ across modules is prohibited.
 > correctly, embeds it, stores it, retrieves the right sections, and optionally
 > generates a grounded answer. It is the engine — not the app, not the framework."
 
-**Version**: 1.3.0 | **Ratified**: 2026-11-12 | **Last Amended**: 2026-11-15
+**Version**: 1.3.1 | **Ratified**: 2026-11-12 | **Last Amended**: 2026-11-15

@@ -15,7 +15,8 @@ from docpipe_maestro.embedder import (
     raise_litellm_error,
     validate_api_base,
 )
-from docpipe_maestro.types import DocpipeError, GenerationResult
+from docpipe_maestro.query.egress import guard_egress
+from docpipe_maestro.types import DocpipeError, GenerationResult, PiiPolicy
 
 EMPTY_CONTEXT_REFUSAL = "Not found in the provided context."
 
@@ -131,6 +132,8 @@ def answer_detailed(
     timeout: float = DEFAULT_REQUEST_TIMEOUT,
     model_kwargs: Mapping[str, Any] | None = None,
     fail_on_truncation: bool = False,
+    pii_policy: PiiPolicy | None = None,
+    local_only: bool = False,
 ) -> GenerationResult:
     """Generate a grounded answer plus completion telemetry via LiteLLM.
 
@@ -148,6 +151,9 @@ def answer_detailed(
         model_kwargs: Optional extra provider generation parameters.
         fail_on_truncation: When ``True``, raises ``DocpipeError`` if provider
             reports ``finish_reason == "length"``.
+        pii_policy: Optional PII policy applied at egress for non-local generation
+            targets before sending payloads over the network.
+        local_only: When ``True``, reject non-local generation targets before network I/O.
 
     Returns:
         ``GenerationResult`` containing stripped answer text, truncation flags,
@@ -155,8 +161,9 @@ def answer_detailed(
 
     Raises:
         MissingCredentialError: If the provider rejects missing/invalid API keys.
-        DocpipeError: If validation fails, truncation enforcement trips, or the
-            completion request fails.
+        PiiBlockedError: If egress policy blocks a matched PII entity.
+        DocpipeError: If validation fails, truncation enforcement trips, ``local_only``
+            rejects a remote target, or the completion request fails.
     """
     messages = _normalize_messages(prompt)
     valid_temp, valid_max_tokens, valid_timeout, extra_kwargs = _validate_generation_params(
@@ -164,6 +171,14 @@ def answer_detailed(
         max_tokens=max_tokens,
         timeout=timeout,
         model_kwargs=model_kwargs,
+    )
+
+    messages = guard_egress(
+        messages,
+        model=model,
+        api_base=api_base,
+        pii_policy=pii_policy,
+        local_only=local_only,
     )
 
     if not has_context:
@@ -234,6 +249,8 @@ def answer(
     timeout: float = DEFAULT_REQUEST_TIMEOUT,
     model_kwargs: Mapping[str, Any] | None = None,
     fail_on_truncation: bool = False,
+    pii_policy: PiiPolicy | None = None,
+    local_only: bool = False,
 ) -> str:
     """Generate a grounded answer string from a prompt or role-separated messages.
 
@@ -249,6 +266,8 @@ def answer(
         timeout=timeout,
         model_kwargs=model_kwargs,
         fail_on_truncation=fail_on_truncation,
+        pii_policy=pii_policy,
+        local_only=local_only,
     ).text
 
 

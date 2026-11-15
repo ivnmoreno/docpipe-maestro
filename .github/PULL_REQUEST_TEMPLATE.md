@@ -21,6 +21,7 @@ Closes #
 - [ ] `uv run ruff check .` and `uv run ruff check --select S src/` pass
 - [ ] `uv run mypy src tests` passes
 - [ ] `uv run pytest -m reverse -v` passes (Reverse Safety Gate)
+- [ ] `uv run pytest -m pii -v` passes (PII Safety Gate)
 - [ ] `LITELLM_LOCAL_MODEL_COST_MAP=true uv run pytest -v --cov` passes (`>= 80%` branch coverage)
 - [ ] Commit messages follow Conventional Commits (`uv run cz check`)
-- [ ] No library module reads config files or hardcodes provider credentials
+- [ ] No library module reads config or PII policy files or hardcodes provider credentials
