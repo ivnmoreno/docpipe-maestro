@@ -1,12 +1,18 @@
 <!--
 # Sync Impact Report
-- Version change: 1.2.1 -> 1.2.2
-- Rationale: Formalize running the full test suite after implementation with 100% passing tests as a mandatory Quality Gate requirement across every feature/stage.
-- Migration Note: Governance clarification only; zero breaking changes to existing Python APIs, CLI behavior, stored collections, or runtime dependencies.
-- List of modified principles: None
+- Version change: 1.2.2 -> 1.3.0
+- Rationale: Formalize Stage 4 PII safety governance ahead of feature specification — establish pre-chunking PII scrubbing and transactional block isolation, value-based non-reversible tokenization, zero-raw-PII error/audit log guarantees, outbound PII egress and `--local-only` enforcement, and mandatory Release Gate #2 (`@pytest.mark.pii`).
+- Migration Note: Minor governance expansion with zero breaking changes to existing Phase 1/2 APIs prior to Stage 4 implementation. Once Stage 4 lands, every release MUST pass both Release Gate #1 (`@pytest.mark.reverse`) and Release Gate #2 (`@pytest.mark.pii`).
+- List of modified principles:
+  - III. Library Purity (clarified to forbid library reads of user policy files alongside config files)
+  - V. Exception Preservation (expanded to promote Release Gate #2 `@pytest.mark.pii` from reserved to mandatory alongside Release Gate #1 `@pytest.mark.reverse`)
 - Modified sections:
-  - Additional Constraints -> Quality Gates (explicit requirement to run all tests after implementation with zero failures allowed)
-- Follow-up TODOs: Implement and activate Release Gate #2 (`@pytest.mark.pii`) in the dedicated PII Protection stage (Stage 4 / v1.3.0).
+  - Additional Constraints -> Data and Privacy (added PII ingestion safety, deterministic tokenization, zero-raw-PII audit logs, outbound egress protection, `--local-only` network refusal, and honest detection-scope claims)
+  - Additional Constraints -> Quality Gates (activated Release Gate #2 `@pytest.mark.pii` as mandatory)
+  - Additional Constraints -> Footprint (mandated zero-download offline core recognizers and lazy optional-extra loading for NER backends)
+- Added sections: None
+- Removed sections: None
+- Follow-up TODOs: Implement Stage 4 (`009-pii-protection` via `/speckit-specify`) to add `tests/test_pii_safety.py` (`@pytest.mark.pii`), PII/egress runtime enforcement, and any public API surface additions synced into Quality Gates once exported.
 -->
 
 # docpipe-maestro Constitution
@@ -35,12 +41,13 @@ read-only. The file tree must make the phase of every module legible without ope
 
 ### III. Library Purity
 
-No module in the library reads a user config file. cli.py is the only file that may.
-Chunking profiles are Python constants, not files. Provider credentials come
-exclusively from environment variables — never from code, config, logs, or error
-messages. There is no provider registry in the codebase; provider resolution is
-delegated to the unified client via `provider/model` strings. Adding a provider
-must require zero code changes.
+No module in the library reads a user config or policy file. cli.py is the only file
+that may; runtime configuration and PII policies MUST be passed programmatically to
+library entry points. Chunking profiles are Python constants, not files. Provider
+credentials come exclusively from environment variables — never from code, config, logs,
+or error messages. There is no provider registry in the codebase; provider resolution is
+delegated to the unified client via `provider/model` strings. Adding a provider must
+require zero code changes.
 
 ### IV. Search Small, Return Big (NON-NEGOTIABLE)
 
@@ -56,10 +63,11 @@ before being returned. This principle exists because incomplete retrieval can
 Any retrieval context containing a rule with an exception marker (`except`,
 `unless`, `not entitled`, `subject to`, `provided that`) must also contain that
 exception. This is enforced by the reverse test against a fixture policy corpus,
-which serves as mandatory **Release Gate #1**. A release that fails Release Gate #1
-must not be published, regardless of other passing tests. The safety claim is only
-credible if it is tested. **Release Gate #2** (PII protection safety gate) is reserved
-for enforcement in the dedicated PII Protection stage.
+which serves as mandatory **Release Gate #1** (`@pytest.mark.reverse`). PII ingestion
+safeguards, outbound egress protection, and zero-raw-PII audit guarantees are enforced
+by the PII safety suite as mandatory **Release Gate #2** (`@pytest.mark.pii`). A
+release that fails Release Gate #1 or Release Gate #2 MUST NOT be published, regardless
+of other passing tests; safety claims are only credible when verified by automated gates.
 
 ### VI. Provider Agnosticism and Local-First Default
 
@@ -84,7 +92,9 @@ across modules is prohibited.
 
 - Credentials are environment variables only. No credential may appear in source,
   config, logs, or error output.
-- Local execution must require no outbound network call.
+- Local execution must require no outbound network call. When strict local-only mode is
+  requested, any remote LLM provider or non-loopback `api_base` MUST be rejected with a
+  typed `DocpipeError` before any network request is made.
 - Every retrieved section must carry metadata sufficient to cite source document,
   section, and page.
 - Ingestion must be deterministic (identical inputs → identical content-addressed
@@ -96,6 +106,23 @@ across modules is prohibited.
     clauses and failed re-ingestions leave the prior version intact and queryable.
   - Collections lock their embedding model identifier in the manifest; model
     mismatches between ingest and query are refused unless explicitly reindexed.
+- When a PII policy is configured during ingestion:
+  - Detection and transformation MUST execute pre-chunking across both section titles
+    and body text so redacted or tokenized values never leak into child context headers
+    or stored chunks.
+  - Block-mode matches MUST halt ingestion via a typed `DocpipeError` before any vector
+    store write or manifest commit, leaving prior collection state intact.
+  - Tokenization MUST use a keyed/salted cryptographic digest of the matched value
+    (never character-offset hashing) so repeated identifiers correlate deterministically
+    without exposing plaintext.
+  - Errors, telemetry, and PII audit logs (`.audit.jsonl`) MUST contain zero raw PII
+    values (counts, entity types, actions, source keys, and document version digests
+    only), and audit log storage MUST restrict directory permissions (`0o700` on POSIX
+    systems).
+- When remote LLM completion is invoked outside local-only mode, outbound prompts and
+  role-separated chat messages MUST pass through the configured PII egress policy prior
+  to transmission. Documentation MUST NOT overclaim "100% accurate detection" or blanket
+  regulatory compliance (e.g., "GDPR compliant").
 
 ### Quality Gates
 
@@ -105,8 +132,10 @@ across modules is prohibited.
   failing test or red CI blocks completion and release.
 - **Release Gate #1 (mandatory)**: The exception-preservation reverse test
   (`@pytest.mark.reverse`) must pass prior to every release.
-- **Release Gate #2 (reserved)**: Dedicated PII protection safety gate (`@pytest.mark.pii`),
-  reserved for activation in the PII Protection stage.
+- **Release Gate #2 (mandatory)**: The PII protection safety suite (`@pytest.mark.pii`)
+  must pass prior to every release, verifying ingestion block/redaction/tokenization
+  invariants, outbound PII egress guarding, local-only remote-call refusal, and
+  zero-raw-PII audit logs.
 - The package must install from TestPyPI in a clean environment before any PyPI
   release, and publishing uses trusted publishing rather than long-lived tokens.
 - The public API surface is the contract: `ingest`, `sync`, `remove`, `status`,
@@ -127,6 +156,9 @@ across modules is prohibited.
 - The core install stays lean; generation is **optional to invoke** at runtime (Phase 1
   ingestion and Phase 2 retrieval work offline with zero LLM completion calls), while
   the unified client library handles both embeddings and completions in the core install.
+- Built-in pattern/checksum PII recognizers MUST operate offline in the core install with
+  zero automatic model downloads; optional NER-based PII dependencies MUST stay isolated
+  behind an optional extra and load lazily only when requested.
 - A new file format or storage backend must be additive — no existing module should
   need modification beyond registration.
 
@@ -145,4 +177,4 @@ across modules is prohibited.
 > correctly, embeds it, stores it, retrieves the right sections, and optionally
 > generates a grounded answer. It is the engine — not the app, not the framework."
 
-**Version**: 1.2.2 | **Ratified**: 2026-11-12 | **Last Amended**: 2026-11-14
+**Version**: 1.3.0 | **Ratified**: 2026-11-12 | **Last Amended**: 2026-11-15
