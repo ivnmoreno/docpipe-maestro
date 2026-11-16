@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
 import chromadb
 
+from docpipe_maestro._filters import build_chroma_child_where
 from docpipe_maestro.manifest import ensure_private_dir, validate_collection_name
 from docpipe_maestro.store import STORES
 from docpipe_maestro.types import (
@@ -101,15 +102,13 @@ class ChromaStore:
         *,
         top_k: int = 5,
         active_versions: dict[str, str] | None = None,
-        where: dict[str, object] | None = None,
+        where: Mapping[str, Any] | None = None,
         include_embeddings: bool = False,
     ) -> list[RetrievedChunk]:
-        """Search child chunks exclusively (``where={'type': 'child'}``)."""
-        # ``where`` is accepted for protocol compatibility (Stage 7 metadata filters);
-        # Stage 1 preserves the baseline child-only filter unchanged.
-        _ = where
+        """Search child chunks exclusively (always conjoined with ``{'type': 'child'}``)."""
+        chroma_where = build_chroma_child_where(where)
         count = self._collection.count()
-        if count == 0:
+        if count == 0 or top_k <= 0:
             return []
 
         n_results = min(max(top_k * 2, top_k), count) if active_versions else min(top_k, count)
@@ -117,7 +116,7 @@ class ChromaStore:
         results = self._collection.query(
             query_embeddings=cast(Any, [query_vector]),
             n_results=n_results,
-            where={"type": "child"},
+            where=cast(Any, chroma_where),
             include=cast(Any, include_fields),
         )
 

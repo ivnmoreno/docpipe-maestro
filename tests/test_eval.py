@@ -619,3 +619,58 @@ def test_evaluate_reranking_conditional_config_preflight_and_zero_drift(
     finally:
         RERANKERS._entries = saved_entries
         RERANKERS._lazy_builtins = saved_lazy
+
+
+def test_evaluate_where_filtering_and_preflight_validation(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+) -> None:
+    """evaluate(where=...) scopes retrieval cleanly and rejects bad where before store IO."""
+    _ = mock_litellm_offline
+    doc_pol = tmp_path / "policy.md"
+    doc_pol.write_text(
+        "## Section 1: Leave\n\n1.1 Employees accrue 20 days of leave.\n",
+        encoding="utf-8",
+    )
+    doc_note = tmp_path / "note.md"
+    doc_note.write_text(
+        "## Section 1: Misc\n\nCafeteria hours run from 08:00 to 16:00.\n",
+        encoding="utf-8",
+    )
+    ingest(doc_pol, profile="POLICY", collection="eval_where", persist_dir=tmp_persist_dir)
+    ingest(doc_note, profile="DEFAULT", collection="eval_where", persist_dir=tmp_persist_dir)
+
+    st = status(collection="eval_where", persist_dir=tmp_persist_dir)
+    pol_pids = next(r.parent_ids for r in st.sources if r.source == "policy.md")
+
+    fixture: EvalFixture = {
+        "collection": "eval_where",
+        "queries": [
+            {
+                "question": "How many days of leave do employees accrue?",
+                "relevant_ids": list(pol_pids),
+            },
+        ],
+    }
+
+    matched = evaluate(
+        fixture,
+        persist_dir=tmp_persist_dir,
+        where={"profile": "POLICY"},
+    )
+    assert matched["aggregate"]["mrr"] == pytest.approx(1.0)
+
+    excluded = evaluate(
+        fixture,
+        persist_dir=tmp_persist_dir,
+        where={"source": "note.md"},
+    )
+    assert excluded["aggregate"]["mrr"] == pytest.approx(0.0)
+
+    # Bad where fails at start of _preflight_check() even when persist_dir does not exist.
+    missing_persist = tmp_path / "never_created_where_persist"
+    for bad in ({"bad_key": "x"}, {"type": "parent"}):
+        with pytest.raises(DocpipeError):
+            evaluate(fixture, persist_dir=missing_persist, where=bad)
+    assert not missing_persist.exists()

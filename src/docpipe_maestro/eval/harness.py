@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from docpipe_maestro._filters import resolve_retrieve_where, validate_where
 from docpipe_maestro.config import (
     DEFAULT_COLLECTION,
     DEFAULT_EMBED_MODEL,
@@ -164,8 +165,10 @@ def _preflight_check(
     rerank: bool,
     reranker: str,
     rerank_top_n: int,
+    where: Mapping[str, Any] | None = None,
 ) -> None:
-    """Validate registry selectors and read-only store state without creating directories."""
+    """Validate filters, registry selectors, and read-only store state without creating dirs."""
+    validate_where(where, reject_reserved_type=True)
     if embedder != "default":
         EMBEDDERS.resolve(embedder)
     if store != "default":
@@ -188,6 +191,7 @@ def _preflight_check(
         raise DocpipeError(
             f"Collection {effective_collection!r} has no committed documents to evaluate."
         )
+    resolve_retrieve_where(where, manifest, reject_reserved_type=True)
 
 
 def _aggregate_metrics(
@@ -231,6 +235,7 @@ def evaluate(
     reranker: str = "cross_encoder",
     rerank_top_n: int = DEFAULT_RERANK_TOP_N,
     local_only: bool = False,
+    where: Mapping[str, Any] | None = None,
     **retrieve_kwargs: Any,
 ) -> EvalReport:
     """Evaluate Phase 2 retrieval against a curated fixture strictly read-only.
@@ -247,7 +252,11 @@ def evaluate(
         embedder: Registered ``EMBEDDERS`` key (defaults to ``"default"``).
         store: Registered ``STORES`` key (defaults to ``"default"``).
         searcher: Registered ``SEARCHERS`` key (defaults to ``"default"``).
+        rerank: Opt into post-retrieval child reranking before parent expansion.
+        reranker: Registered ``RERANKERS`` key (defaults to ``"cross_encoder"``).
+        rerank_top_n: Minimum candidate child pool size fetched prior to reranking.
         local_only: When ``True``, reject non-local embedding targets before evaluation.
+        where: Optional structured metadata filter passed through to ``retrieve()``.
         **retrieve_kwargs: Forwarded to ``retrieve()`` for downstream extension stages.
 
     Returns:
@@ -257,8 +266,8 @@ def evaluate(
         ValueError: If ``k_values`` or ``threshold`` fail validation.
         RegistryError: If ``embedder``, ``store``, or ``searcher`` is unregistered.
         ModelMismatchError: If ``embed_model`` mismatches the locked collection model.
-        DocpipeError: If the fixture is invalid, the collection is missing/empty, or
-            ``local_only`` blocks a remote target.
+        DocpipeError: If the fixture is invalid, the collection is missing/empty,
+            ``where`` filter validation fails, or ``local_only`` blocks a remote target.
     """
     norm_k = normalize_k_values(k_values)
     norm_threshold = _validate_threshold(threshold)
@@ -280,6 +289,7 @@ def evaluate(
         rerank=rerank,
         reranker=reranker,
         rerank_top_n=rerank_top_n,
+        where=where,
     )
 
     max_k = norm_k[-1]
@@ -301,6 +311,7 @@ def evaluate(
             reranker=reranker,
             rerank_top_n=rerank_top_n,
             local_only=local_only,
+            where=where,
             **retrieve_kwargs,
         )
         retrieved_ids = [chunk.id for chunk in chunks]

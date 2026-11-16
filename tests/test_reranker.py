@@ -635,3 +635,57 @@ def test_preflight_missing_extra_registry_and_top_n_errors(
                 rerank=False,
                 rerank_top_n=bad_top_n,  # type: ignore[arg-type]
             )
+
+
+def test_rerank_respects_where_metadata_filter(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+) -> None:
+    """where filters restrict candidates prior to reranking across dense and hybrid searchers."""
+    _ = mock_litellm_offline
+    corpus = tmp_path / "docs"
+    corpus.mkdir()
+    (corpus / "policy.md").write_text(
+        "## Section 1: Leave\n\n1.1 Annual leave allowance is 20 days except new hires.\n",
+        encoding="utf-8",
+    )
+    (corpus / "notes.md").write_text(
+        "## Section 1: Notes\n\nAnnual leave calendar notes for annual leave planning.\n",
+        encoding="utf-8",
+    )
+    ingest(corpus, profile="POLICY", collection="rerank_where", persist_dir=tmp_persist_dir)
+
+    seen_sources: list[set[str]] = []
+
+    with _clean_registry(RERANKERS):
+
+        @register_reranker("rec_rerank")
+        class RecordingReranker:
+            name = "rec_rerank"
+
+            def rerank(
+                self,
+                query: str,
+                chunks: list[RetrievedChunk],
+                *,
+                top_k: int,
+            ) -> list[RetrievedChunk]:
+                _ = query
+                seen_sources.append({c.metadata["source"] for c in chunks})
+                return chunks[:top_k]
+
+        for mode in ("default", "fts5_hybrid"):
+            hits = retrieve(
+                "annual leave",
+                collection="rerank_where",
+                persist_dir=tmp_persist_dir,
+                searcher=mode,
+                rerank=True,
+                reranker="rec_rerank",
+                where={"source": "policy.md"},
+            )
+            assert hits
+            assert all(h.metadata["source"] == "policy.md" for h in hits)
+
+    assert seen_sources == [{"policy.md"}, {"policy.md"}]

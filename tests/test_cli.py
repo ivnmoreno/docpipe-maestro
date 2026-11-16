@@ -1739,3 +1739,198 @@ def test_cli_local_only_and_pii_policy_flags_and_toml_defaults(
     _ = capsys.readouterr()
     last_inline = mock_litellm_offline["completion"][-1]["messages"]
     assert any("[EMAIL_ADDRESS]" in m["content"] for m in last_inline)
+
+
+def test_cli_where_filtering_and_validation_across_subcommands(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """CLI --where works across query, ask, and eval and fails fast on invalid inputs."""
+    from docpipe_maestro import ingest
+
+    doc_a = tmp_path / "a_policy.md"
+    doc_a.write_text(
+        "## Section 1: Tier A=B\n\n1.1 Annual stipend limit is 500 euros.\n",
+        encoding="utf-8",
+    )
+    doc_b = tmp_path / "b_guide.md"
+    doc_b.write_text(
+        "## Section 1: Travel Guide\n\nUse public rail passes when traveling domestically.\n",
+        encoding="utf-8",
+    )
+    ingest(doc_a, profile="POLICY", collection="cli_where", persist_dir=tmp_persist_dir)
+    ingest(doc_b, profile="DEFAULT", collection="cli_where", persist_dir=tmp_persist_dir)
+
+    # 1. query with chunk filter, '=' preserved in value, int chunk_index, and profile filter
+    for args in (
+        [
+            "--no-config",
+            "--collection",
+            "cli_where",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "query",
+            "stipend",
+            "--where",
+            "source=a_policy.md",
+            "--where",
+            "section=Section 1: Tier A=B",
+            "--where",
+            "chunk_index=0",
+            "--expand-parent",
+            "--searcher",
+            "fts5_hybrid",
+            "--json",
+        ],
+        [
+            "--no-config",
+            "--collection",
+            "cli_where",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "query",
+            "stipend",
+            "--where",
+            "profile=policy",
+            "--json",
+        ],
+    ):
+        assert main(args) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["results"]
+        assert all(item["metadata"]["source"] == "a_policy.md" for item in payload["results"])
+
+    # 2. Repeating the same equality key performs $in set membership across multiple sources
+    assert (
+        main(
+            [
+                "--no-config",
+                "--collection",
+                "cli_where",
+                "--persist-dir",
+                str(tmp_persist_dir),
+                "query",
+                "rail passes stipend",
+                "--where",
+                "source=a_policy.md",
+                "--where",
+                "source=b_guide.md",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    multi_sources = {
+        r["metadata"]["source"] for r in json.loads(capsys.readouterr().out)["results"]
+    }
+    assert multi_sources <= {"a_policy.md", "b_guide.md"} and len(multi_sources) >= 1
+
+    # 3. ask with non-matching source yields clean EMPTY_CONTEXT_REFUSAL and 0 LLM calls
+    comp_before = len(mock_litellm_offline["completion"])
+    assert (
+        main(
+            [
+                "--no-config",
+                "--collection",
+                "cli_where",
+                "--persist-dir",
+                str(tmp_persist_dir),
+                "ask",
+                "What is the stipend?",
+                "--where",
+                "ingested_after=2099-01-01",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    ask_empty = json.loads(capsys.readouterr().out)
+    assert ask_empty["answer"] == "Not found in the provided context."
+    assert len(mock_litellm_offline["completion"]) == comp_before
+
+    # 4. eval --where filters evaluation cleanly
+    from docpipe_maestro import status as _status
+
+    st = _status(collection="cli_where", persist_dir=tmp_persist_dir)
+    a_pids = next(r.parent_ids for r in st.sources if r.source == "a_policy.md")
+    fix_path = tmp_path / "cli_where_fixture.json"
+    fix_path.write_text(
+        json.dumps(
+            {
+                "collection": "cli_where",
+                "queries": [{"question": "annual stipend limit", "relevant_ids": list(a_pids)}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        main(
+            [
+                "--no-config",
+                "--persist-dir",
+                str(tmp_persist_dir),
+                "eval",
+                "--fixture",
+                str(fix_path),
+                "--where",
+                "source=a_policy.md",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["aggregate"]["mrr"] == pytest.approx(1.0)
+
+    # 5. All invalid CLI --where arguments exit with code 1 and 0 embed/LLM calls
+    emb_before = len(mock_litellm_offline["embedding"])
+    bad_flag_lists = [
+        ["--where", "broken_no_equals"],
+        ["--where", "=val"],
+        ["--where", "source="],
+        ["--where", "source=   "],
+        ["--where", "page=abc"],
+        ["--where", "chunk_index=1.5"],
+        ["--where", "page=true"],
+        ["--where", "typo=val"],
+        ["--where", "type=parent"],
+        ["--where", "ingested_after=not-a-date"],
+        ["--where", "ingested_after=2026-01-01", "--where", "ingested_after=2026-02-01"],
+        ["--where", "ingested_before=2026-01-01", "--where", "ingested_before=2026-02-01"],
+    ]
+    for subcmd in ("query", "ask"):
+        for flags in bad_flag_lists:
+            rc = main(
+                [
+                    "--no-config",
+                    "--collection",
+                    "cli_where",
+                    "--persist-dir",
+                    str(tmp_persist_dir),
+                    subcmd,
+                    "stipend",
+                    *flags,
+                ]
+            )
+            assert rc == 1
+            assert "Error:" in capsys.readouterr().err
+
+    assert (
+        main(
+            [
+                "--no-config",
+                "--persist-dir",
+                str(tmp_persist_dir),
+                "eval",
+                "--fixture",
+                str(fix_path),
+                "--where",
+                "type=parent",
+            ]
+        )
+        == 1
+    )
+    assert "Error:" in capsys.readouterr().err
+    assert len(mock_litellm_offline["embedding"]) == emb_before
+    assert len(mock_litellm_offline["completion"]) == comp_before

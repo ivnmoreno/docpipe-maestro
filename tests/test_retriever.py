@@ -5,7 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from docpipe_maestro import ingest, retrieve
+import pytest
+
+from docpipe_maestro import ingest, retrieve, status
+from docpipe_maestro.manifest import load_manifest, save_manifest
+from docpipe_maestro.query.searcher.dense import DenseSearcher
+from docpipe_maestro.types import DocpipeError
 
 
 def test_retrieve_parent_expansion_and_deduplication(
@@ -166,3 +171,236 @@ def test_retrieve_follows_cross_document_citations(
         follow_crossrefs=False,
     )
     assert "[Crossref" not in unenriched[0].text
+
+
+def test_retrieve_chunk_attribute_filters_and_empty_dict(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+) -> None:
+    _ = mock_litellm_offline
+    corpus = tmp_path / "docs"
+    corpus.mkdir()
+    (corpus / "hr_policy.md").write_text(
+        "## Section 1: Annual Leave\n\n"
+        "1.1 Employees receive twenty days of annual leave except new hires.\n\n"
+        "## Section 2: Parking\n\n"
+        "2.1 Garage badge access requires facility approval.\n",
+        encoding="utf-8",
+    )
+    (corpus / "travel_guide.md").write_text(
+        "## Section 1: Annual Leave Travel\n\n"
+        "1.1 Annual leave flight vouchers require manager approval.\n",
+        encoding="utf-8",
+    )
+
+    ingest(corpus, profile="POLICY", collection="where_chunks", persist_dir=tmp_persist_dir)
+    st = status(collection="where_chunks", persist_dir=tmp_persist_dir)
+    hr_rec = next(r for r in st.sources if r.source == "hr_policy.md")
+
+    # Empty dict normalizes identically to None.
+    unfiltered = retrieve("annual leave", collection="where_chunks", persist_dir=tmp_persist_dir)
+    empty_dict = retrieve(
+        "annual leave", collection="where_chunks", persist_dir=tmp_persist_dir, where={}
+    )
+    assert [c.id for c in empty_dict] == [c.id for c in unfiltered]
+
+    # Single & multi-key chunk filters match strictly hr_policy.md.
+    by_source = retrieve(
+        "annual leave",
+        collection="where_chunks",
+        persist_dir=tmp_persist_dir,
+        where={"source": "hr_policy.md"},
+    )
+    assert by_source and all(c.metadata["source"] == "hr_policy.md" for c in by_source)
+
+    for key, val in (
+        ("section", "Section 1: Annual Leave"),
+        ("clause", "1.1"),
+        ("doc_version", hr_rec.doc_version),
+        ("embed_model", hr_rec.embed_model),
+        ("chunk_index", 0),
+    ):
+        hits = retrieve(
+            "annual leave",
+            collection="where_chunks",
+            persist_dir=tmp_persist_dir,
+            expand_parent=False,
+            where={"source": "hr_policy.md", key: val},
+        )
+        assert hits and all(h.metadata["source"] == "hr_policy.md" for h in hits)
+
+    # Filtering empty/nonexistent collection validates syntax cleanly before returning [].
+    assert (
+        retrieve(
+            "anything",
+            collection="never_created_col",
+            persist_dir=tmp_persist_dir,
+            where={"source": "hr_policy.md"},
+        )
+        == []
+    )
+    with pytest.raises(DocpipeError, match="Unsupported filter key"):
+        retrieve(
+            "anything",
+            collection="never_created_col",
+            persist_dir=tmp_persist_dir,
+            where={"secton": "Leave"},
+        )
+
+
+def test_retrieve_manifest_filters_intersection_and_zero_embed_shortcircuit(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+) -> None:
+    doc_a = tmp_path / "policy_a.md"
+    doc_a.write_text(
+        "## Section 1: Leave Rules\n\n1.1 Standard leave requires approval.\n",
+        encoding="utf-8",
+    )
+    doc_b = tmp_path / "guide_b.md"
+    doc_b.write_text(
+        "## Section 1: Guide Notes\n\nNormal leave guide steps for onboarding.\n",
+        encoding="utf-8",
+    )
+    doc_c = tmp_path / "policy_c.md"
+    doc_c.write_text(
+        "## Section 1: Remote Policy\n\n1.1 Remote leave tracking uses HR portal.\n",
+        encoding="utf-8",
+    )
+
+    ingest(doc_a, profile="POLICY", collection="man_flt", persist_dir=tmp_persist_dir)
+    ingest(doc_b, profile="DEFAULT", collection="man_flt", persist_dir=tmp_persist_dir)
+    ingest(doc_c, profile="POLICY", collection="man_flt", persist_dir=tmp_persist_dir)
+
+    manifest = load_manifest(tmp_persist_dir, "man_flt")
+    manifest.sources["policy_a.md"].ingested_at = "2026-11-10T08:00:00+00:00"
+    manifest.sources["guide_b.md"].ingested_at = "2026-11-15T18:30:00+00:00"
+    manifest.sources["policy_c.md"].ingested_at = "2026-11-20T09:00:00+00:00"
+    save_manifest(tmp_persist_dir, manifest)
+
+    # Profile filtering is case-insensitive and works across scalar/$in/$ne/$nin.
+    pol_hits = retrieve(
+        "leave", collection="man_flt", persist_dir=tmp_persist_dir, where={"profile": "policy"}
+    )
+    assert {h.metadata["source"] for h in pol_hits} <= {"policy_a.md", "policy_c.md"}
+    assert {h.metadata["source"] for h in pol_hits}
+
+    def_hits = retrieve(
+        "leave",
+        collection="man_flt",
+        persist_dir=tmp_persist_dir,
+        where={"profile": {"$ne": "POLICY"}},
+    )
+    assert [h.metadata["source"] for h in def_hits] == ["guide_b.md"]
+
+    # Date-only ingested_before uses inclusive UTC end-of-day bound.
+    win_hits = retrieve(
+        "leave",
+        collection="man_flt",
+        persist_dir=tmp_persist_dir,
+        where={"ingested_after": "2026-11-15", "ingested_before": "2026-11-15"},
+    )
+    assert [h.metadata["source"] for h in win_hits] == ["guide_b.md"]
+
+    # Z-suffixed, offset-aware, and naive UTC timestamps compare consistently.
+    after_hits = retrieve(
+        "leave",
+        collection="man_flt",
+        persist_dir=tmp_persist_dir,
+        where={
+            "ingested_after": "2026-11-15T19:30:00+01:00",
+            "ingested_before": "2026-11-15T18:30:00Z",
+        },
+    )
+    assert [h.metadata["source"] for h in after_hits] == ["guide_b.md"]
+
+    # Intersecting profile + source constraints scopes strictly or short-circuits cleanly.
+    inter = retrieve(
+        "leave",
+        collection="man_flt",
+        persist_dir=tmp_persist_dir,
+        where={"profile": "POLICY", "source": {"$in": ["policy_a.md", "guide_b.md"]}},
+    )
+    assert [h.metadata["source"] for h in inter] == ["policy_a.md"]
+
+    # Empty manifest / conflicting source allowlist must issue ZERO embedding requests.
+    embeds_before = len(mock_litellm_offline["embedding"])
+    empty_cases: tuple[dict[str, object], ...] = (
+        {"ingested_after": "2099-01-01T00:00:00Z"},
+        {"profile": "UNKNOWN"},
+        {"profile": "POLICY", "source": "guide_b.md"},
+        {"profile": "DEFAULT", "source": {"$ne": "guide_b.md"}},
+        {"profile": "POLICY", "ingested_after": "2026-11-25", "ingested_before": "2026-11-01"},
+    )
+    for empty_where in empty_cases:
+        assert (
+            retrieve("leave", collection="man_flt", persist_dir=tmp_persist_dir, where=empty_where)
+            == []
+        )
+        assert (
+            DenseSearcher().search(
+                "leave",
+                top_k=5,
+                collection="man_flt",
+                persist_dir=str(tmp_persist_dir),
+                embed_model="ollama/nomic-embed-text",
+                where=empty_where,
+            )
+            == []
+        )
+    assert len(mock_litellm_offline["embedding"]) == embeds_before
+
+    # Sibling malformed field still raises even when manifest matches zero sources.
+    with pytest.raises(DocpipeError, match="Unsupported filter key"):
+        retrieve(
+            "leave",
+            collection="man_flt",
+            persist_dir=tmp_persist_dir,
+            where={"profile": "UNKNOWN", "bad_key": "x"},
+        )
+
+
+def test_retrieve_where_validation_reserved_type_and_bad_operands(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+) -> None:
+    _ = mock_litellm_offline
+    doc = tmp_path / "leave.md"
+    doc.write_text("## Section 1\n\n1.1 Annual leave rule.\n", encoding="utf-8")
+    ingest(doc, profile="POLICY", collection="bad_where_col", persist_dir=tmp_persist_dir)
+
+    invalid_cases: list[Any] = [
+        "source=leave.md",
+        {"type": "parent"},
+        {"type": "child"},
+        {"$or": [{"type": "parent"}, {"page": 1}]},
+        {"secton": "Section 1"},
+        {"page": True},
+        {"page": "2"},
+        {"chunk_index": False},
+        {"page": {"$in": ["2"]}},
+        {"page": {"$gt": True}},
+        {"source": {"$in": [123]}},
+        {"source": {"$in": []}},
+        {"$and": []},
+        {"$or": []},
+        {"source": {"$regex": ".*"}},
+        {"clause": {"$gt": "1.1"}},
+        {"$or": [{"profile": "POLICY"}, {"source": "leave.md"}]},
+        {"$and": [{"ingested_after": "2026-11-01"}, {"source": "leave.md"}]},
+        {"profile": {"$gt": "A"}},
+        {"ingested_after": {"$gte": "2026-11-01"}},
+        {"ingested_before": "not-a-date"},
+        {"page": {}},
+    ]
+    for bad in invalid_cases:
+        with pytest.raises(DocpipeError):
+            retrieve(
+                "leave",
+                collection="bad_where_col",
+                persist_dir=tmp_persist_dir,
+                where=bad,
+            )

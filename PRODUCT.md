@@ -230,7 +230,7 @@ The system shall manage file updates, deletions, and model consistency through a
 
 #### 7.2.2 Similarity Search and Parent Expansion
 
-- The system shall perform similarity search against child chunks only, using a `where={"type": "child"}` filter.
+- The system shall perform similarity search against child chunks only, using a `where={"type": "child"}` filter (always enforced conjunctively with any caller metadata `where` predicates across dense and hybrid search, rejecting reserved `"type"` overrides upfront and resolving manifest `profile` / `ingested_*` filters with empty-allowlist zero-embedder short-circuiting).
 - The system shall return the top *k* child matches, where *k* is configurable and defaults to 5.
 - The system shall optionally apply a minimum similarity threshold, filtering out matches below it. This prevents the system from confidently answering when no relevant content exists.
 - The system shall expand matched children to their parent sections by fetching parents by ID.
@@ -269,12 +269,14 @@ The system shall provide a CLI aligned with the two-phase model, offering ingest
 | `docpipe-maestro status` | Phase 1 / 2 | Inspect the manifest: indexed files, hashes, embedding model, and record counts |
 | `docpipe-maestro remove <path>` | Phase 1 | Delete all records and manifest entry for a specific source document |
 | `docpipe-maestro reindex --model <m>` | Phase 1 | Re-embed and re-ingest all tracked corpus sources under a new embedding model |
-| `docpipe-maestro query "<question>"` | Phase 2 (retrieval only) | Return relevant sections without generating an answer (supports `--json`) |
-| `docpipe-maestro ask "<question>"` | Phase 2 (full RAG) | Generate an answer using retrieved sections |
+| `docpipe-maestro query "<question>"` | Phase 2 (retrieval only) | Return relevant sections without generating an answer (supports `--json`, `--where`) |
+| `docpipe-maestro ask "<question>"` | Phase 2 (full RAG) | Generate an answer using retrieved sections (supports `--where`, `--pii-policy`, `--local-only`) |
+| `docpipe-maestro eval --fixture <p>` | Phase 2 (evaluation) | Evaluate retrieval metrics read-only against labeled fixtures (supports `--where`, `--rerank`) |
 
 - `ingest` and `sync` shall accept a `--profile` flag selecting a chunking profile.
 - All commands shall accept a `--collection` flag selecting the target collection.
 - `query` and `ask` shall accept a `--top-k` flag.
+- `query`, `ask`, and `eval` shall accept repeatable `--where KEY=VALUE` metadata filter flags (supporting stored chunk fields as well as manifest-derived `profile` / `ingested_after` / `ingested_before`).
 - `query` shall accept `--expand-parent` / `--no-expand-parent` and `--json` flags.
 - `ask` shall accept a `--model` flag taking a `provider/model` string.
 - The CLI shall be the **only** component permitted to read a user configuration file, if the user supplies one. All library modules shall take configuration via arguments.
@@ -681,6 +683,8 @@ These are explicitly **out of scope for v0.1** but noted for continuity.
 | `ingest/chunker.py` | 1 | Clean text → child chunks + parent sections |
 | `ingest/pipeline.py` | 1 | Orchestrate Phase 1 (`ingest`, `sync`, `remove`, `status`, `reindex`) |
 | `ingest/enricher/` | 1 | Pre-chunking `pii` (`PiiEnricher`) and `crossrefs` (`CrossrefsEnricher`) strategies |
+| `_crossrefs.py` | 1 and 2 | Phase-neutral cross-reference matching, target indexing, and bounded excerpt truncation |
+| `_filters.py` | 1 and 2 | Phase-neutral metadata filter validation, manifest allowlist resolution, Chroma conjunction & SQLite FTS5 SQL compilation |
 | `_pii.py` | 1 and 2 | Phase-neutral PII policy validation, built-in/custom recognizers, HMAC tokenization, and optional `[pii]` multi-lang Presidio adapter |
 | `query/egress.py` | 2 | Pre-network `local_only` enforcement and outbound PII egress guard for remote LLMs |
 | `query/retriever.py` | 2 | Question → parent sections or matched child chunks |

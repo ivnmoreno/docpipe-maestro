@@ -11,9 +11,9 @@ Welcome to the documentation for **`docpipe-maestro`** — a minimal, provider-a
 | Guide | Audience | What It Covers |
 |---|---|---|
 | **[README](../README.md)** | Everyone | Quickstart, installation extras, provider setup, and high-level workflow examples |
-| **[Architecture & Internals](architecture.md)** | Engineers & Architects | Two-phase pipeline data flow, format parsing heuristics, pre-chunking `PiiEnricher` & crossref resolution, ChromaDB + SQLite FTS5 storage, `.audit.jsonl`, and Phase 2 egress guard |
-| **[Python API Reference](api-reference.md)** | Application Developers | Exact signatures, defaults, stage registries, searcher strategies, data models, constants, and exception hierarchy |
-| **[CLI Reference (`docpipe-maestro`)](cli-reference.md)** | CLI Users & Ops | Global flags, `docpipe.toml` schema, all 8 subcommands (including `eval`), `--local-only`, `--pii-policy`, `--searcher` modes, exact output formats, exit codes, and troubleshooting |
+| **[Architecture & Internals](architecture.md)** | Engineers & Architects | Two-phase pipeline data flow, format parsing heuristics, pre-chunking `PiiEnricher` & crossref resolution, ChromaDB + SQLite FTS5 storage & `where` filtering, `.audit.jsonl`, and Phase 2 egress guard |
+| **[Python API Reference](api-reference.md)** | Application Developers | Exact signatures (`retrieve(..., where=...)`, `evaluate(..., where=...)`), defaults, stage registries, searcher strategies, data models, constants, and exception hierarchy |
+| **[CLI Reference (`docpipe-maestro`)](cli-reference.md)** | CLI Users & Ops | Global flags, `docpipe.toml` schema, all 8 subcommands (including `eval`), repeatable `--where` pre-filtering, `--local-only`, `--pii-policy`, `--searcher` modes, exact output formats, exit codes, and troubleshooting |
 | **[Retrieval Evaluation Baselines](eval-baseline.md)** | Engineers & Maintainers | Side-by-side offline retrieval benchmark (`default` dense vs `fts5_hybrid`) on the curated policy corpus ([eval-baseline.json](eval-baseline.json)) |
 | **[Development & Testing Guide](development.md)** | Contributors | Dev setup, `ruff`/`mypy --strict`/`pytest` quality gates, Release Gates #1 (`reverse`) & #2 (`pii`), live Ollama testing, and extension guidelines |
 | **[Future Features Backlog](future-features.md)** | Maintainers & Roadmap | Deferred post-v0.1 enhancements aligned with scope discipline (`LEGAL` profile, differential re-embedding, hybrid search, storage adapters) |

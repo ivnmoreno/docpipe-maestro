@@ -84,11 +84,9 @@ This document aggregates all architectural suggestions, deferred backlog items, 
   - Provide optional pre-retrieval query expansion (e.g., Hypothetical Document Embeddings / HyDE, or multi-query generation).
   - Pure function transform over queries before embedding.
 
-### 4.4 Structured Metadata Pre-Filtering
-- **Problem**: Users may want to restrict retrieval to specific files, document versions, dates, or custom tags.
-- **Proposed Upgrade**:
-  - Expose structured metadata filters through `retrieve(where={...})` and the CLI (`docpipe-maestro query --filter 'source == "hr_policy.md"'`).
-  - Pass filter predicates directly to ChromaDB's `where` query engine.
+### 4.4 Structured Metadata Pre-Filtering — *Implemented*
+- **Status**: Implemented in `010-metadata-filtering` (`src/docpipe_maestro/_filters.py`, `retrieve(..., where=...)`, `evaluate(..., where=...)`, and repeatable CLI `--where KEY=VALUE` across `query`, `ask`, and `eval`).
+- **Details**: Supports stored chunk attributes (`source`, `section`, `clause`, `page`, `chunk_index`, `doc_version`, `embed_model`), top-level manifest attributes (`profile` case-insensitively and ISO-8601 UTC `ingested_after` / `ingested_before` inclusive bounds) with zero re-ingestion migration and empty-allowlist short-circuiting prior to embeddings, full 10-operator parity across ChromaDB and SQLite FTS5 (`$eq`, `$ne`, `$in`, `$nin`, `$gt`–`$lte` for integer fields, `$and`/`$or`), upfront unknown-key and reserved `"type"` rejection, and mandatory `{"$and": [{"type": "child"}, ...]}` defense-in-depth. (Arbitrary custom user metadata tags at ingest time remain out of scope.)
 
 ---
 
