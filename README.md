@@ -690,6 +690,7 @@ docpipe-maestro/
 │   ├── _crossrefs.py        # Shared phase-neutral cross-reference matching & excerpt helpers
 │   ├── _filters.py          # Shared phase-neutral metadata filter validation, manifest resolution & SQL compiler
 │   ├── _pii.py              # Shared phase-neutral PII recognizers, HMAC tokenizer & lazy NER
+│   ├── log.py               # Opt-in structured JSON/text telemetry, NullHandler logger & ContextVar correlation IDs
 │   ├── embedder/            # Batched LiteLLM embedding adapter, locality checks & registry
 │   ├── manifest.py          # Atomic sha256/mtime manifest, model lock & .audit.jsonl logger
 │   ├── store/               # ChromaDB vector store (`chroma.py`) & SQLite FTS5 (`lexical.py`)

@@ -22,12 +22,15 @@ from docpipe_maestro.config import (
     DEFAULT_TOP_K,
 )
 from docpipe_maestro.embedder import EMBEDDERS
+from docpipe_maestro.log import correlation_id, get_logger, stage_event
 from docpipe_maestro.manifest import check_model_lock, load_manifest
 from docpipe_maestro.query.reranker import validate_rerank_options
 from docpipe_maestro.query.searcher import SEARCHERS
 from docpipe_maestro.query.stages import Reranker, Searcher
 from docpipe_maestro.store import STORES
 from docpipe_maestro.types import EmbeddedChunk, RetrievedChunk
+
+logger = get_logger(__name__)
 
 
 def _enrich_crossdoc_references(
@@ -173,6 +176,47 @@ def retrieve(
         DocpipeError: If embedding, reranking, ``local_only``, ``where`` filter validation,
             or store lookup fails.
     """
+    with correlation_id():
+        return _retrieve_impl(
+            question,
+            collection=collection,
+            persist_dir=persist_dir,
+            embed_model=embed_model,
+            top_k=top_k,
+            threshold=threshold,
+            expand_parent=expand_parent,
+            follow_crossrefs=follow_crossrefs,
+            embedder=embedder,
+            store=store,
+            searcher=searcher,
+            rerank=rerank,
+            reranker=reranker,
+            rerank_top_n=rerank_top_n,
+            local_only=local_only,
+            where=where,
+        )
+
+
+def _retrieve_impl(
+    question: str,
+    *,
+    collection: str,
+    persist_dir: str | Path,
+    embed_model: str,
+    top_k: int,
+    threshold: float | None,
+    expand_parent: bool,
+    follow_crossrefs: bool,
+    embedder: str,
+    store: str,
+    searcher: str,
+    rerank: bool,
+    reranker: str,
+    rerank_top_n: int,
+    local_only: bool,
+    where: Mapping[str, Any] | None,
+) -> list[RetrievedChunk]:
+    """Execute validated read-only retrieval inside an active correlation scope."""
     if local_only:
         from docpipe_maestro.embedder import enforce_local_only
 
@@ -209,14 +253,24 @@ def retrieve(
     active_versions = {k: v.doc_version for k, v in manifest.sources.items()}
     base_child_k = top_k * 3 if expand_parent else top_k
     child_top_k = max(rerank_top_n, base_child_k) if rerank else base_child_k
-    child_matches = searcher_inst.search(
-        question,
-        top_k=child_top_k,
+    with stage_event(
+        logger,
+        "search",
         collection=collection,
-        persist_dir=str(persist_path),
-        embed_model=embed_model,
-        where=resolved_where.chunk_where,
-    )
+        searcher=searcher,
+        has_where=where is not None,
+        top_k=child_top_k,
+        expand_parent=expand_parent,
+    ) as search_ev:
+        child_matches = searcher_inst.search(
+            question,
+            top_k=child_top_k,
+            collection=collection,
+            persist_dir=str(persist_path),
+            embed_model=embed_model,
+            where=resolved_where.chunk_where,
+        )
+        search_ev["hits"] = len(child_matches)
 
     if threshold is not None:
         child_matches = [c for c in child_matches if c.score >= threshold]
@@ -226,7 +280,14 @@ def retrieve(
 
     if reranker_cls is not None:
         rerank_limit = len(child_matches) if expand_parent else top_k
-        child_matches = reranker_cls().rerank(question, child_matches, top_k=rerank_limit)
+        with stage_event(
+            logger,
+            "rerank",
+            reranker=reranker,
+            candidates=len(child_matches),
+        ) as rerank_ev:
+            child_matches = reranker_cls().rerank(question, child_matches, top_k=rerank_limit)
+            rerank_ev["kept"] = len(child_matches)
         if not child_matches:
             return []
 

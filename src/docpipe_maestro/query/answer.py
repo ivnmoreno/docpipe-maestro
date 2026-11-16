@@ -15,8 +15,11 @@ from docpipe_maestro.embedder import (
     raise_litellm_error,
     validate_api_base,
 )
+from docpipe_maestro.log import correlation_id, get_logger, stage_event
 from docpipe_maestro.query.egress import guard_egress
 from docpipe_maestro.types import DocpipeError, GenerationResult, PiiPolicy
+
+logger = get_logger(__name__)
 
 EMPTY_CONTEXT_REFUSAL = "Not found in the provided context."
 
@@ -165,6 +168,37 @@ def answer_detailed(
         DocpipeError: If validation fails, truncation enforcement trips, ``local_only``
             rejects a remote target, or the completion request fails.
     """
+    with correlation_id():
+        return _answer_detailed_impl(
+            prompt,
+            model=model,
+            api_base=api_base,
+            has_context=has_context,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            model_kwargs=model_kwargs,
+            fail_on_truncation=fail_on_truncation,
+            pii_policy=pii_policy,
+            local_only=local_only,
+        )
+
+
+def _answer_detailed_impl(
+    prompt: str | Sequence[Mapping[str, str]],
+    *,
+    model: str,
+    api_base: str | None,
+    has_context: bool,
+    temperature: float | None,
+    max_tokens: int | None,
+    timeout: float,
+    model_kwargs: Mapping[str, Any] | None,
+    fail_on_truncation: bool,
+    pii_policy: PiiPolicy | None,
+    local_only: bool,
+) -> GenerationResult:
+    """Execute validated, egress-guarded generation inside an active correlation scope."""
     messages = _normalize_messages(prompt)
     valid_temp, valid_max_tokens, valid_timeout, extra_kwargs = _validate_generation_params(
         temperature=temperature,
@@ -209,21 +243,28 @@ def answer_detailed(
         kwargs.update(extra_kwargs)
 
     t0 = time.perf_counter()
-    try:
-        response = litellm.completion(**kwargs)
-    except Exception as exc:
-        raise_litellm_error(exc, operation="generation", model=model)
-    elapsed = time.perf_counter() - t0
+    with stage_event(logger, "answer", model=model) as answer_ev:
+        try:
+            response = litellm.completion(**kwargs)
+        except Exception as exc:
+            raise_litellm_error(exc, operation="generation", model=model)
+        elapsed = time.perf_counter() - t0
 
-    text, finish_reason, prompt_tok, comp_tok, reason_tok, total_tok = _extract_completion_details(
-        response, model=model
-    )
-    truncated = finish_reason == "length"
-    if truncated and fail_on_truncation:
-        raise DocpipeError(
-            f"Generation model {model!r} output was truncated at max_tokens limit "
-            "(finish_reason='length'). Increase or omit max_tokens and retry."
+        text, finish_reason, prompt_tok, comp_tok, reason_tok, total_tok = (
+            _extract_completion_details(response, model=model)
         )
+        truncated = finish_reason == "length"
+        answer_ev["finish_reason"] = finish_reason
+        answer_ev["truncated"] = truncated
+        answer_ev["prompt_tokens"] = prompt_tok
+        answer_ev["completion_tokens"] = comp_tok
+        answer_ev["reasoning_tokens"] = reason_tok
+        answer_ev["total_tokens"] = total_tok
+        if truncated and fail_on_truncation:
+            raise DocpipeError(
+                f"Generation model {model!r} output was truncated at max_tokens limit "
+                "(finish_reason='length'). Increase or omit max_tokens and retry."
+            )
 
     return GenerationResult(
         text=text,

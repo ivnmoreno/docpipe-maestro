@@ -686,6 +686,7 @@ These are explicitly **out of scope for v0.1** but noted for continuity.
 | `_crossrefs.py` | 1 and 2 | Phase-neutral cross-reference matching, target indexing, and bounded excerpt truncation |
 | `_filters.py` | 1 and 2 | Phase-neutral metadata filter validation, manifest allowlist resolution, Chroma conjunction & SQLite FTS5 SQL compilation |
 | `_pii.py` | 1 and 2 | Phase-neutral PII policy validation, built-in/custom recognizers, HMAC tokenization, and optional `[pii]` multi-lang Presidio adapter |
+| `log.py` | 1 and 2 | Phase-neutral stdlib telemetry (`JsonFormatter`, `TextFormatter`, `get_logger` with passive `NullHandler`, `ContextVar` `correlation_id()`, and `stage_event`) |
 | `query/egress.py` | 2 | Pre-network `local_only` enforcement and outbound PII egress guard for remote LLMs |
 | `query/retriever.py` | 2 | Question → parent sections or matched child chunks |
 | `query/prompts.py` | 2 | Sections + question → prompt / chat messages |

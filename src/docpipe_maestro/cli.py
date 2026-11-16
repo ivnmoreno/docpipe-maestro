@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -23,6 +25,7 @@ from docpipe_maestro.config import (
     DEFAULT_TOP_K,
 )
 from docpipe_maestro.embedder import DEFAULT_REQUEST_TIMEOUT
+from docpipe_maestro.log import JsonFormatter, TextFormatter, correlation_id, get_logger
 from docpipe_maestro.types import DocpipeError
 
 if TYPE_CHECKING:
@@ -268,6 +271,52 @@ def _add_rerank_args(
     )
 
 
+_LOG_LEVEL_CHOICES: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR")
+
+
+def _add_logging_args(target: argparse.ArgumentParser, *, suppress_default: bool) -> None:
+    """Register CLI-only telemetry flags on root and shared parent parsers."""
+    target.add_argument(
+        "--log-json",
+        action="store_true",
+        default=argparse.SUPPRESS if suppress_default else False,
+        help="Emit single-line JSON stage telemetry to stderr (defaults to INFO severity)",
+    )
+    target.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=_LOG_LEVEL_CHOICES,
+        default=argparse.SUPPRESS if suppress_default else None,
+        help="Enable telemetry on stderr at DEBUG, INFO, WARNING, or ERROR severity",
+    )
+
+
+@contextmanager
+def _cli_logging_scope(*, log_json: bool, log_level: str | None) -> Iterator[None]:
+    """Attach a transient stderr handler to ``docpipe_maestro`` during CLI dispatch."""
+    if not log_json and log_level is None:
+        yield
+        return
+
+    pkg_logger = get_logger()
+    prev_level = pkg_logger.level
+    effective_name = log_level if log_level is not None else "INFO"
+    numeric_level = int(getattr(logging, effective_name))
+
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setLevel(numeric_level)
+    handler.setFormatter(JsonFormatter() if log_json else TextFormatter())
+
+    pkg_logger.setLevel(numeric_level)
+    pkg_logger.addHandler(handler)
+    try:
+        yield
+    finally:
+        pkg_logger.removeHandler(handler)
+        handler.close()
+        pkg_logger.setLevel(prev_level)
+
+
 def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentParser:
     """Construct the ``docpipe-maestro`` CLI parser with shared global options.
 
@@ -327,6 +376,7 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         default=None,
         help="Path to JSON or TOML PII policy config (supported by ingest, sync, ask)",
     )
+    _add_logging_args(parser, suppress_default=False)
 
     # Shared parent parser so global flags work both before and after any subcommand
     common = argparse.ArgumentParser(add_help=False)
@@ -352,6 +402,7 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         default=argparse.SUPPRESS,
         help="Disallow non-local/non-loopback models and endpoints before network I/O",
     )
+    _add_logging_args(common, suppress_default=True)
 
     # Parent parsers for --pii-policy: advertised on policy commands, cleanly rejected on others.
     pii_supported = argparse.ArgumentParser(add_help=False)
@@ -757,6 +808,188 @@ def _handle_eval(args: argparse.Namespace, *, cfg_collection: str | None) -> int
     return 0
 
 
+def _dispatch_command(
+    args: argparse.Namespace,
+    *,
+    cfg_defaults: dict[str, Any],
+    cfg_collection: str | None,
+    effective_cfg: str | None,
+) -> int:
+    """Dispatch parsed CLI subcommand after telemetry and correlation scopes open."""
+    cfg_dir = Path(effective_cfg).parent if effective_cfg else Path.cwd()
+    resolved_pii_policy = _resolve_cli_pii_policy(args, cfg_defaults, config_dir=cfg_dir)
+
+    if args.command == "ingest":
+        from docpipe_maestro.ingest.pipeline import ingest
+
+        res = ingest(
+            args.path,
+            profile=args.profile,
+            collection=args.collection,
+            persist_dir=args.persist_dir,
+            embed_model=args.embed_model,
+            force=args.force,
+            pii_policy=resolved_pii_policy,
+            local_only=args.local_only,
+        )
+        print(
+            f"Ingested {len(res.ingested)} file(s), skipped {len(res.skipped)} unchanged "
+            f"({res.chunks_written} children, {res.parents_written} parents) "
+            f"into collection '{res.collection}'."
+        )
+        return 0
+
+    if args.command == "sync":
+        from docpipe_maestro.ingest.pipeline import sync
+
+        sres = sync(
+            args.directory,
+            profile=args.profile,
+            collection=args.collection,
+            persist_dir=args.persist_dir,
+            embed_model=args.embed_model,
+            pii_policy=resolved_pii_policy,
+            local_only=args.local_only,
+        )
+        print(
+            f"Synced '{sres.collection}': added={len(sres.added)}, "
+            f"updated={len(sres.updated)}, skipped={len(sres.skipped)}, "
+            f"removed={len(sres.removed)}."
+        )
+        return 0
+
+    if args.command == "status":
+        from docpipe_maestro.ingest.pipeline import status
+
+        st = status(collection=args.collection, persist_dir=args.persist_dir)
+        if args.as_json:
+            print(
+                json.dumps(
+                    {
+                        "collection": st.collection,
+                        "embed_model": st.embed_model,
+                        "embed_dim": st.embed_dim,
+                        "total_sources": st.total_sources,
+                        "total_children": st.total_children,
+                        "total_parents": st.total_parents,
+                        "sources": [s.to_dict() for s in st.sources],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            print(
+                f"Collection: {st.collection} | Model: {st.embed_model} "
+                f"(dim={st.embed_dim}) | Sources: {st.total_sources} | "
+                f"Children: {st.total_children} | Parents: {st.total_parents}"
+            )
+            for rec in st.sources:
+                print(
+                    f"  - {rec.source} [{rec.doc_version}] "
+                    f"({len(rec.chunk_ids)} children, {len(rec.parent_ids)} parents)"
+                )
+        return 0
+
+    if args.command == "remove":
+        from docpipe_maestro.ingest.pipeline import remove
+
+        removed = remove(
+            args.source,
+            collection=args.collection,
+            persist_dir=args.persist_dir,
+        )
+        if not removed:
+            print(f"Source not found in collection '{args.collection}': {args.source}")
+            return 1
+        print(f"Removed '{args.source}' from collection '{args.collection}'.")
+        return 0
+
+    if args.command == "reindex":
+        from docpipe_maestro.ingest.pipeline import reindex
+
+        count = reindex(
+            embed_model=args.model,
+            collection=args.collection,
+            persist_dir=args.persist_dir,
+            local_only=args.local_only,
+        )
+        print(
+            f"Reindexed {count} child chunk(s) in collection '{args.collection}' "
+            f"with model '{args.model}'."
+        )
+        return 0
+
+    if args.command == "query":
+        from docpipe_maestro._filters import parse_cli_where
+        from docpipe_maestro.query.retriever import retrieve
+
+        if args.threshold is not None and (
+            not math.isfinite(args.threshold) or not 0.0 <= args.threshold <= 1.0
+        ):
+            raise ValueError("--threshold must be finite and between 0.0 and 1.0")
+
+        parsed_where = parse_cli_where(args.where)
+
+        results = retrieve(
+            args.question,
+            collection=args.collection,
+            persist_dir=args.persist_dir,
+            embed_model=args.embed_model,
+            top_k=args.top_k,
+            threshold=args.threshold,
+            expand_parent=args.expand_parent,
+            searcher=args.searcher,
+            rerank=args.rerank,
+            reranker=args.reranker,
+            rerank_top_n=args.rerank_top_n,
+            local_only=args.local_only,
+            where=parsed_where,
+        )
+        if args.as_json:
+            print(
+                json.dumps(
+                    {
+                        "query": args.question,
+                        "collection": args.collection,
+                        "expand_parent": args.expand_parent,
+                        "results": [
+                            {
+                                "id": item.id,
+                                "parent_id": item.parent_id,
+                                "score": float(item.score),
+                                "text": item.text,
+                                "metadata": dict(item.metadata),
+                            }
+                            for item in results
+                        ],
+                    },
+                    indent=2,
+                )
+            )
+            return 0
+        if not results:
+            print("No matching sections found.")
+            return 0
+        for idx, item in enumerate(results, start=1):
+            meta = item.metadata
+            page_info = f" | Page: {meta['page']}" if meta["page"] is not None else ""
+            print(
+                f"[{idx}] score={item.score:.4f} | Source: {meta['source']} | "
+                f"Section: {meta['section']}{page_info}"
+            )
+            print(item.text)
+            print("-" * 60)
+        return 0
+
+    if args.command == "ask":
+        return _handle_ask(args, pii_policy=resolved_pii_policy)
+
+    if args.command == "eval":
+        return _handle_eval(args, cfg_collection=cfg_collection)
+
+    return 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the ``docpipe-maestro`` CLI entry point and return a process exit code.
 
@@ -777,181 +1010,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         cfg_collection = _cfg_opt_str(cfg_defaults, "collection")
         parser = build_parser(cfg_defaults)
         args = parser.parse_args(arg_list)
-        cfg_dir = Path(effective_cfg).parent if effective_cfg else Path.cwd()
-        resolved_pii_policy = _resolve_cli_pii_policy(args, cfg_defaults, config_dir=cfg_dir)
-
-        if args.command == "ingest":
-            from docpipe_maestro.ingest.pipeline import ingest
-
-            res = ingest(
-                args.path,
-                profile=args.profile,
-                collection=args.collection,
-                persist_dir=args.persist_dir,
-                embed_model=args.embed_model,
-                force=args.force,
-                pii_policy=resolved_pii_policy,
-                local_only=args.local_only,
+        with (
+            _cli_logging_scope(
+                log_json=bool(args.log_json),
+                log_level=args.log_level,
+            ),
+            correlation_id(),
+        ):
+            return _dispatch_command(
+                args,
+                cfg_defaults=cfg_defaults,
+                cfg_collection=cfg_collection,
+                effective_cfg=effective_cfg,
             )
-            print(
-                f"Ingested {len(res.ingested)} file(s), skipped {len(res.skipped)} unchanged "
-                f"({res.chunks_written} children, {res.parents_written} parents) "
-                f"into collection '{res.collection}'."
-            )
-            return 0
-
-        if args.command == "sync":
-            from docpipe_maestro.ingest.pipeline import sync
-
-            sres = sync(
-                args.directory,
-                profile=args.profile,
-                collection=args.collection,
-                persist_dir=args.persist_dir,
-                embed_model=args.embed_model,
-                pii_policy=resolved_pii_policy,
-                local_only=args.local_only,
-            )
-            print(
-                f"Synced '{sres.collection}': added={len(sres.added)}, "
-                f"updated={len(sres.updated)}, skipped={len(sres.skipped)}, "
-                f"removed={len(sres.removed)}."
-            )
-            return 0
-
-        if args.command == "status":
-            from docpipe_maestro.ingest.pipeline import status
-
-            st = status(collection=args.collection, persist_dir=args.persist_dir)
-            if args.as_json:
-                print(
-                    json.dumps(
-                        {
-                            "collection": st.collection,
-                            "embed_model": st.embed_model,
-                            "embed_dim": st.embed_dim,
-                            "total_sources": st.total_sources,
-                            "total_children": st.total_children,
-                            "total_parents": st.total_parents,
-                            "sources": [s.to_dict() for s in st.sources],
-                        },
-                        indent=2,
-                    )
-                )
-            else:
-                print(
-                    f"Collection: {st.collection} | Model: {st.embed_model} "
-                    f"(dim={st.embed_dim}) | Sources: {st.total_sources} | "
-                    f"Children: {st.total_children} | Parents: {st.total_parents}"
-                )
-                for rec in st.sources:
-                    print(
-                        f"  - {rec.source} [{rec.doc_version}] "
-                        f"({len(rec.chunk_ids)} children, {len(rec.parent_ids)} parents)"
-                    )
-            return 0
-
-        if args.command == "remove":
-            from docpipe_maestro.ingest.pipeline import remove
-
-            removed = remove(
-                args.source,
-                collection=args.collection,
-                persist_dir=args.persist_dir,
-            )
-            if not removed:
-                print(f"Source not found in collection '{args.collection}': {args.source}")
-                return 1
-            print(f"Removed '{args.source}' from collection '{args.collection}'.")
-            return 0
-
-        if args.command == "reindex":
-            from docpipe_maestro.ingest.pipeline import reindex
-
-            count = reindex(
-                embed_model=args.model,
-                collection=args.collection,
-                persist_dir=args.persist_dir,
-                local_only=args.local_only,
-            )
-            print(
-                f"Reindexed {count} child chunk(s) in collection '{args.collection}' "
-                f"with model '{args.model}'."
-            )
-            return 0
-
-        if args.command == "query":
-            from docpipe_maestro._filters import parse_cli_where
-            from docpipe_maestro.query.retriever import retrieve
-
-            if args.threshold is not None and (
-                not math.isfinite(args.threshold) or not 0.0 <= args.threshold <= 1.0
-            ):
-                raise ValueError("--threshold must be finite and between 0.0 and 1.0")
-
-            parsed_where = parse_cli_where(args.where)
-
-            results = retrieve(
-                args.question,
-                collection=args.collection,
-                persist_dir=args.persist_dir,
-                embed_model=args.embed_model,
-                top_k=args.top_k,
-                threshold=args.threshold,
-                expand_parent=args.expand_parent,
-                searcher=args.searcher,
-                rerank=args.rerank,
-                reranker=args.reranker,
-                rerank_top_n=args.rerank_top_n,
-                local_only=args.local_only,
-                where=parsed_where,
-            )
-            if args.as_json:
-                print(
-                    json.dumps(
-                        {
-                            "query": args.question,
-                            "collection": args.collection,
-                            "expand_parent": args.expand_parent,
-                            "results": [
-                                {
-                                    "id": item.id,
-                                    "parent_id": item.parent_id,
-                                    "score": float(item.score),
-                                    "text": item.text,
-                                    "metadata": dict(item.metadata),
-                                }
-                                for item in results
-                            ],
-                        },
-                        indent=2,
-                    )
-                )
-                return 0
-            if not results:
-                print("No matching sections found.")
-                return 0
-            for idx, item in enumerate(results, start=1):
-                meta = item.metadata
-                page_info = f" | Page: {meta['page']}" if meta["page"] is not None else ""
-                print(
-                    f"[{idx}] score={item.score:.4f} | Source: {meta['source']} | "
-                    f"Section: {meta['section']}{page_info}"
-                )
-                print(item.text)
-                print("-" * 60)
-            return 0
-
-        if args.command == "ask":
-            return _handle_ask(args, pii_policy=resolved_pii_policy)
-
-        if args.command == "eval":
-            return _handle_eval(args, cfg_collection=cfg_collection)
     except (DocpipeError, ValueError, TypeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
-
-    return 1
 
 
 if __name__ == "__main__":
