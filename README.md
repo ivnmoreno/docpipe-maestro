@@ -24,7 +24,7 @@
   - [Development Setup](#development-setup)
 - [Configuration Guide](#configuration-guide)
   - [1. Local Execution (Default: Zero Cloud Accounts Required)](#1-local-execution-default-zero-cloud-accounts-required)
-  - [2. Cloud Provider API Keys](#2-cloud-provider-api-keys)
+  - [2. Cloud Provider API Keys (`.env` or Shell Environment)](#2-cloud-provider-api-keys-env-or-shell-environment)
   - [3. Local Persistence Storage Directory](#3-local-persistence-storage-directory)
   - [4. CLI Configuration File (`docpipe.toml`)](#4-cli-configuration-file-docpipetoml)
   - [5. Chunking Profiles (`DEFAULT`, `POLICY`, and Custom Profiles)](#5-chunking-profiles-default-policy-and-custom-profiles)
@@ -41,6 +41,7 @@
   - [Phase 1: Ingestion & Lifecycle Workflow](#phase-1-ingestion--lifecycle-workflow)
   - [Phase 2: Semantic Retrieval & Grounded RAG Workflow](#phase-2-semantic-retrieval--grounded-rag-workflow)
   - [Retrieval Evaluation (`docpipe_maestro.eval`)](#retrieval-evaluation-docpipe_maestroeval)
+  - [Opt-In Structured Logging (`docpipe_maestro.log`)](#opt-in-structured-logging-docpipe_maestrolog)
   - [Core Data Shapes & Exceptions](#core-data-shapes--exceptions)
 - [Security, Privacy & Grounding Notes](#security-privacy--grounding-notes)
 - [Safety & Verification](#safety--verification)
@@ -55,12 +56,16 @@
 
 | Common RAG Failure Mode | How `docpipe-maestro` Solves It |
 |---|---|
-| **Orphaned exceptions** (*"20 days leave"* retrieved without *"except probationary hires"*) | **Parent-child retrieval** searches fine-grained child chunks and returns deduplicated full parent sections, enforced by a mandatory Reverse Safety Gate (`tests/test_reverse_safety.py`). |
-| **Broken intra-document references** (*"subject to Section 4.2"* without knowing what Section 4.2 says) | **`POLICY` cross-reference resolution** appends cycle-safe `[Crossref ...]` excerpts directly onto referring sections during ingestion. |
-| **Orphaned vectors when files shrink or change** | **Transactional `doc_version` staging** writes new chunks, flips the JSON manifest atomically, and deletes stale versions afterward. Failed runs leave the prior version intact. |
+| **Orphaned exceptions** (*"20 days leave"* retrieved without *"except probationary hires"*) | **Parent-child retrieval + `POLICY` clause preservation** searches fine-grained child chunks and returns deduplicated full parent sections, enforced by the mandatory Reverse Safety Gate (`tests/test_reverse_safety.py`). |
+| **Broken intra-document references** (*"subject to Section 4.2"* without knowing what Section 4.2 says) | **`POLICY` `CrossrefsEnricher`** (`enrichers=("crossrefs",)`) appends cycle-safe `[Crossref ...]` excerpts directly onto referring sections during Phase 1 ingestion (toggleable at query time via `--no-crossrefs` / `follow_crossrefs=False`). |
+| **Exact identifiers & ranking misses in dense-only search** (`SEC-101`, `IR-15M`) | **Hybrid search + child-first reranking** pairs collocated SQLite FTS5 BM25 + dense vector RRF (`fts5_hybrid`) with optional local cross-encoder reranking (`--rerank` / `rerank=True`). |
+| **Cross-corpus noise across files, sections, profiles, or dates** | **Unified `where` metadata & manifest filtering** compiles validated filter operators (`$eq`, `$ne`, `$in`, `$nin`, `$gt`, `$gte`, `$lt`, `$lte`, `$and`, `$or`) over chunk fields and manifest attributes (`profile`, `ingested_after`, `ingested_before`) with ChromaDB and FTS5 parity and zero re-ingestion. |
+| **Orphaned vectors when files shrink or change** | **Transactional `doc_version` staging** writes new chunks, flips the JSON manifest atomically, and deletes stale versions afterward (with startup `sweep_uncommitted()` recovery). Failed runs leave the prior version intact. |
 | **Silent embedding vector-space corruption** | **Manifest model lock** pins each collection to one `embed_model` and raises `ModelMismatchError` unless migrated explicitly via `reindex`. |
-| **Hallucinations when nothing relevant matches** | **Deterministic empty-context refusal** short-circuits before calling the LLM whenever `retrieve()` returns no chunks above `--threshold`. |
-| **Sensitive PII stored or sent to remote LLMs** | **Pre-chunking `PiiEnricher` + outbound `guard_egress()`** redact, HMAC-tokenize, or block entities cleanly (`PiiBlockedError`), log zero-raw-PII `.audit.jsonl` records (`0o700`), and enforce `--local-only` pre-network. |
+| **Hallucinations when nothing relevant matches** | **Deterministic empty-context refusal** returns `"Not found in the provided context."` without calling the LLM (`ask` checks retrieved hits automatically; `answer()`/`answer_detailed()` short-circuit when `has_context=False`). |
+| **Sensitive PII stored or sent to remote LLMs** | **Opt-in pre-chunking `PiiEnricher` + outbound `guard_egress()`** redact, HMAC-tokenize, or block entities cleanly (`PiiBlockedError`), log zero-raw-PII `.audit.jsonl` records (`0o700`/`0o600`), and enforce `--local-only` pre-network across embeddings and generation. |
+| **Hidden HTML prompt injections & unsafe archives** | **Hardened intake** strips hidden DOM elements (`display:none`, `hidden`, `aria-hidden`, `<template>`), enforces DOCX uncompressed size caps, and skips directory symlinks. |
+| **Blind retrieval regressions, vendor lock-in & library bloat** | **Offline `eval` harness, Strategy registries & Library Purity** deliver reproducible `MRR` / `Precision@k` / `Recall@k` checks, 9 `@register_*` extension points, `NullHandler`-only `docpipe_maestro.log` (`--log-json` `stderr` telemetry), zero config-file reads in library code, and LiteLLM routing with zero hardcoded provider registry. |
 
 ---
 
@@ -121,7 +126,7 @@ flowchart LR
    - In policy and legal documents, a rule without its exception is actively misleading (e.g., *"Employees receive 20 days leave"* without *"unless probationary"*). In `POLICY` profile, clauses are kept intact even when exceeding target chunk size, and parent sections ensure exceptions always accompany their rules.
 4. **Crash-Safe Transactional Synchronization**:
    - Ingestion maintains an atomic database-collocated manifest (`.docpipe/manifests/<collection>.json`) tracking `sha256` content hashes, `mtime`, and `doc_version` prefixes.
-   - Modifying a document performs staged delete-then-reinsert, preventing orphaned clauses when documents shrink.
+   - Modifying a document writes new versioned chunks, commits the manifest atomically, and deletes stale versions afterward, preventing orphaned clauses when documents shrink.
 5. **Embedding Model Lock**:
    - The manifest locks the collection to the embedding model used during ingestion. Attempting to ingest or query with a different model raises `ModelMismatchError` rather than silently mixing incompatible vector spaces. Model migration is handled cleanly via `reindex`.
 
@@ -139,7 +144,7 @@ flowchart LR
 
 - **Extensionless files**: `detect_format()` inspects the first 4 KiB for `%PDF-`, ZIP `word/document.xml`, HTML root tags (`<!doctype html` / `<html`), Markdown headings, or valid UTF-8 text.
 - **Current scope & limitations**:
-  - Image-only / scanned PDFs without an embedded text layer yield empty text (OCR is outside v0.1 scope).
+  - Image-only / scanned PDFs without an embedded text layer yield empty text (OCR is out of scope).
   - Legacy binary `.doc` files are not supported (`.docx` only).
   - `docpipe-maestro` is a library and CLI engine — it deliberately excludes web servers, auth layers, streaming UIs, and multi-tenant isolation.
 
@@ -266,12 +271,13 @@ You can then pass any `provider/model` string directly to `--embed-model` or `--
 By default, data is stored in `./.docpipe`:
 ```text
 .docpipe/
-├── chroma.sqlite3          # ChromaDB embedded vector database
-├── <uuid>/                 # ChromaDB vector segments and HNSW index files
+├── chroma.sqlite3                    # ChromaDB embedded vector database
+├── <uuid>/                           # ChromaDB vector segments and HNSW index files
 ├── lexical/
-│   └── <collection>.db     # Collocated SQLite FTS5 BM25 lexical index (`fts5_hybrid`)
+│   └── <collection>.db               # Collocated SQLite FTS5 BM25 lexical index (`fts5_hybrid`)
 └── manifests/
-    └── <collection>.json   # Atomic JSON manifest tracking file hashes, versions, and locked model
+    ├── <collection>.json             # Atomic JSON manifest tracking file hashes, versions, and locked model
+    └── <collection>.audit.jsonl      # Append-only zero-raw-PII audit log (written when PII policy is active)
 ```
 Customize the persistence directory with `--persist-dir` on the CLI or `persist_dir=` in Python. Never commit `.docpipe/` to version control if your corpus is private.
 
@@ -309,6 +315,23 @@ Pass an explicit config path with `--config`, or ignore `./docpipe.toml` with `-
 docpipe-maestro query "What is the probation period?" --config docpipe.toml
 docpipe-maestro ask "What is the probation period?" --no-config
 ```
+
+#### Optional PII Policy File (`--pii-policy`)
+
+When enabling `--pii-policy ./pii-policy.json` (or `.toml`) on `ingest`, `sync`, or `ask`, configure actions (`"redact"`, `"tokenize"`, `"block"`) per entity type (`EMAIL_ADDRESS`, `IBAN_CODE`, `CREDIT_CARD`, `US_SSN`, `IP_ADDRESS`, `PHONE_NUMBER`, `ES_DNI`, plus optional `[pii]` Presidio `ner: true`):
+
+```json
+{
+  "types": {
+    "EMAIL_ADDRESS": "tokenize",
+    "IBAN_CODE": "redact",
+    "US_SSN": "block"
+  },
+  "token_salt_env": "DOCPIPE_PII_SALT",
+  "egress": "redact"
+}
+```
+*(In `docpipe.toml`, set `pii_policy = "./pii-policy.json"` or define an inline `[pii_policy]` table. Use `token_salt_env` outside the repository for deterministic cross-run tokens.)*
 
 ### 5. Chunking Profiles (`DEFAULT`, `POLICY`, and Custom Profiles)
 
@@ -436,9 +459,11 @@ docpipe-maestro query "annual leave" --no-expand-parent --collection hr_policy
 
 # Scope search by document metadata or manifest profile/ingestion window (without re-ingestion)
 docpipe-maestro query "annual leave" --where profile=POLICY --where page=2 --collection hr_policy
+docpipe-maestro query "annual leave" --where ingested_after=2026-01-01 --collection hr_policy
 
-# Emit structured JSON (for evaluation fixtures and scripts)
+# Emit structured JSON (for evaluation fixtures and scripts) or add --log-json telemetry on stderr
 docpipe-maestro query "annual leave" --json --collection hr_policy
+docpipe-maestro --log-json --log-level INFO query "annual leave" --collection hr_policy 2>trace.jsonl
 ```
 
 **Example output**:
@@ -620,6 +645,25 @@ report = evaluate(
 print(report["aggregate"]["mrr"], report["aggregate"]["recall_at_k"])
 ```
 
+### Opt-In Structured Logging (`docpipe_maestro.log`)
+
+Library calls stay silent by default (`NullHandler` only). Attach a formatter on `"docpipe_maestro"` when integrating with your application logs:
+
+```python
+import logging
+from docpipe_maestro.log import JsonFormatter, correlation_id, get_logger
+
+handler = logging.StreamHandler()
+handler.setFormatter(JsonFormatter())
+logger = get_logger()
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+
+with correlation_id("req-42"):
+    # All internal stage.end telemetry events share correlation_id="req-42"
+    ...
+```
+
 ### Core Data Shapes & Exceptions
 
 Exported from `docpipe_maestro` (`docpipe_maestro.types`):
@@ -681,7 +725,7 @@ uv run pytest -m integration -v
 
 ```text
 docpipe-maestro/
-├── .github/                 # CI workflows, issue templates & PR template
+├── .github/                 # CI (ci.yml), release publishing (release.yml) & issue/PR templates
 ├── .specify/
 │   └── memory/
 │       └── constitution.md  # Non-negotiable architectural & safety principles
@@ -694,6 +738,9 @@ docpipe-maestro/
 │   ├── _crossrefs.py        # Shared phase-neutral cross-reference matching & excerpt helpers
 │   ├── _filters.py          # Shared phase-neutral metadata filter validation, manifest resolution & SQL compiler
 │   ├── _pii.py              # Shared phase-neutral PII recognizers, HMAC tokenizer & lazy NER
+│   ├── _registry.py         # Lazy Strategy + Registry core (`register_*` decorators)
+│   ├── _resolve.py          # Format-to-parser key resolution helper
+│   ├── _stages.py           # Top-level stage re-exports and protocols
 │   ├── log.py               # Opt-in structured JSON/text telemetry, NullHandler logger & ContextVar correlation IDs
 │   ├── embedder/            # Batched LiteLLM embedding adapter, locality checks & registry
 │   ├── manifest.py          # Atomic sha256/mtime manifest, model lock & .audit.jsonl logger
@@ -707,7 +754,8 @@ docpipe-maestro/
 ├── docs/                    # Architecture, API, CLI, baselines, dev guide & roadmap
 ├── specs/                   # Feature specification, plan & contracts
 ├── .env.example             # Template for local/cloud provider environment variables
-├── .pre-commit-config.yaml  # Commitizen Conventional Commits hook configuration
+├── .gitattributes           # Cross-OS LF line-ending enforcement (keeps binary PDFs/DOCX untouched)
+├── .pre-commit-config.yaml  # Commitizen Conventional Commits & Ruff hook configuration
 ├── CHANGELOG.md             # Release history
 ├── CONTRIBUTING.md          # Contribution workflow & quality gate checklist
 ├── LICENSE                  # MIT License
@@ -739,7 +787,7 @@ For security vulnerabilities, see [SECURITY.md](SECURITY.md).
 - **[CLI Reference](docs/cli-reference.md)** — `docpipe-maestro` commands, TOML config, outputs, and troubleshooting
 - **[Retrieval Evaluation Baselines](docs/eval-baseline.md)** — Offline dense vs `fts5_hybrid` comparison metrics ([JSON](docs/eval-baseline.json))
 - **[Development & Testing Guide](docs/development.md)** — Setup, quality gates, offline test doubles, and Ollama live runs
-- **[Future Features Backlog](docs/future-features.md)** — Post-v0.1 roadmap
+- **[Future Features Backlog](docs/future-features.md)** — Implementation status and post-v0.1 roadmap
 - **[Changelog](CHANGELOG.md)** — Release history
 
 ---

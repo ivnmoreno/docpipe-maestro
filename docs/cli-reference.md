@@ -73,6 +73,22 @@ pii_policy = "./pii-policy.json"   # Path string or inline `[pii_policy]` TOML t
 
 > **Security Rule**: Never place API keys or secrets in `docpipe.toml`. Use exported shell variables or a local `.env` file (`chmod 600 .env`; ignored by Git — see `.env.example`).
 
+### Optional PII Policy Schema (`--pii-policy`)
+
+`--pii-policy` accepts a JSON or TOML file matching `PiiPolicy` (`types` map of entity label -> `"redact"`, `"tokenize"`, or `"block"`, optional `min_confidence`, `languages`, `ner`, `on_error`, `egress`, `token_salt`, `token_salt_env`). Example `pii-policy.json`:
+
+```json
+{
+  "types": {
+    "EMAIL_ADDRESS": "tokenize",
+    "IBAN_CODE": "redact",
+    "US_SSN": "block"
+  },
+  "token_salt_env": "DOCPIPE_PII_SALT",
+  "egress": "redact"
+}
+```
+
 ---
 
 ## 3. Phase 1 Subcommands (Offline Ingestion & Lifecycle)
@@ -102,7 +118,7 @@ docpipe-maestro ingest [--config CONFIG] [--collection COLLECTION]
 
 ### `docpipe-maestro sync <directory>`
 
-Three-way reconcile `<directory>` against the stored manifest (adds new files, skips unchanged files, replaces changed files via staged delete-then-reinsert, deletes missing files).
+Three-way reconcile `<directory>` against the stored manifest (adds new files, skips unchanged files, updates changed files under a new `doc_version` before pruning stale versions, deletes missing files).
 
 ```text
 docpipe-maestro sync [--config CONFIG] [--collection COLLECTION]
