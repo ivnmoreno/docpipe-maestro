@@ -296,7 +296,7 @@ searcher = "default"               # "default" (dense vector) or "fts5_hybrid" (
 # Optional online/gateway defaults for `docpipe-maestro ask` (CLI flags override these):
 # api_base = "https://api.groq.com/openai/v1"
 # temperature = 0.0
-# max_tokens = 512
+# max_tokens = 512                 # Keep omitted (or >= 4096) for reasoning models
 # timeout = 60.0
 # fail_on_truncation = false
 # Privacy & PII defaults (JSON/TOML path string or `[pii_policy]` table applied in CLI only):
@@ -589,7 +589,7 @@ response = answer(
     prompt=messages,
     model="ollama/llama3.2",
     temperature=0.0,  # Omit (None) for reasoning models that reject temperature
-    max_tokens=512,
+    max_tokens=512,  # Omit (None) or pass model_kwargs={"reasoning_effort": "low"} for reasoning models
     timeout=60.0,
     has_context=bool(retrieved_sections),  # Short-circuits with refusal if context is empty
 )

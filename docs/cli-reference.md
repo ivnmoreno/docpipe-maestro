@@ -50,7 +50,7 @@ reranker = "cross_encoder"         # Registered reranker key in RERANKERS
 rerank_top_n = 20                  # Minimum candidate child pool size before reranking (>= 1)
 api_base = "https://api.groq.com/openai/v1" # Optional custom/OpenAI-compatible endpoint
 temperature = 0.0                  # Optional sampling temperature (>= 0.0)
-max_tokens = 512                   # Optional completion token limit (>= 1); omit or raise (>= 2048) for reasoning models
+# max_tokens = 512                 # Optional completion token limit (>= 1); keep omitted (or >= 4096) for reasoning models
 timeout = 60.0                     # Request timeout in seconds (default: 120.0)
 fail_on_truncation = false         # Exit non-zero if `ask` response hits max_tokens (`finish_reason == "length"`)
 local_only = false                 # Refuse remote/non-loopback endpoints when true (`--no-local-only` overrides)

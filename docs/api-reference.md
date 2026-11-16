@@ -287,7 +287,7 @@ Lazily loaded (`__getattr__` on `docpipe_maestro`) completion wrappers powered b
 - **Locality & Egress Guard**: Runs `guard_egress()` across plain string prompts and role-separated message sequences before `has_context` short-circuiting or network requests: `local_only=True` rejects remote models/endpoints before transport I/O, and active `pii_policy` rules scrub or block outbound text for remote providers (`"redact"`/`"block"`/`"allow"` egress modes, honoring per-entity `redact`/`tokenize`/`block` rules).
 - **Empty Context Refusal**: Validates inputs and egress rules first, then immediately returns `EMPTY_CONTEXT_REFUSAL` (`"Not found in the provided context."`) — or a `GenerationResult` carrying it with zero token telemetry — with zero LLM calls when `has_context=False`.
 - **Truncation Guard & Telemetry**: `answer_detailed()` captures `finish_reason`, `truncated` (`finish_reason == "length"`), `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `total_tokens`, and wall `elapsed_seconds`. Passing `fail_on_truncation=True` raises `DocpipeError` when the provider stops due to token limit (`finish_reason == "length"`).
-- **Reasoning-Model Parameter Safety**: `temperature` (`>= 0.0`) and `max_tokens` (`>= 1`) are omitted completely from the LiteLLM request when `None` (while explicit `temperature=0.0` is preserved verbatim). `timeout` defaults to `120.0` seconds.
+- **Reasoning-Model Parameter Safety**: `temperature` (`>= 0.0`) and `max_tokens` (`>= 1`) are omitted completely from the LiteLLM request when `None` (while explicit `temperature=0.0` is preserved verbatim). Keeping `max_tokens=None` avoids truncating reasoning models that consume thinking tokens before answering; if you must cap `max_tokens` tightly, pass provider-supported controls via `model_kwargs` (e.g., `model_kwargs={"reasoning_effort": "low"}`). `timeout` defaults to `120.0` seconds.
 - **Extra Generation Controls (`model_kwargs`)**: Forwarded to `litellm.completion` (e.g., `top_p`, `frequency_penalty`), excluding reserved/conflicting keys (`model`, `messages`, `prompt`, `api_base`, `base_url`, `api_key`, `temperature`, `max_tokens`, `timeout`, `num_retries`) which raise `DocpipeError`.
 - **Transport Security (`api_base`)**: Plain `http://` is permitted only for loopback hosts (`localhost`, `127.0.0.0/8`, `::1`); remote endpoints must use `https://`.
 - **Provider Examples**:
@@ -303,7 +303,7 @@ groq_reply = answer(
     messages,
     model="groq/llama-3.3-70b-versatile",
     temperature=0.0,
-    max_tokens=512,
+    max_tokens=512,  # Omit (None) or pair with model_kwargs={"reasoning_effort": "low"} for reasoning models
     timeout=30.0,
     has_context=bool(sections),
 )
@@ -320,7 +320,7 @@ detailed = answer_detailed(
 print(detailed.text, detailed.total_tokens, detailed.elapsed_seconds)
 ```
 
-- **Fail-Fast Resilience & Privacy**: Passes `num_retries=0` so HTTP `429` fails fast with a sanitized `DocpipeError`; HTTP `401`/`403` raise `MissingCredentialError`; empty `choices`, populated `message.refusal`, or `None`/whitespace-only `content` raise `DocpipeError`; active env secrets and token patterns are scrubbed from error chains.
+- **Fail-Fast Resilience & Privacy**: Passes `num_retries=0` so HTTP `429` fails fast with a sanitized `DocpipeError`; HTTP `401`/`403` raise `MissingCredentialError`; empty `choices`, populated `message.refusal`, or `None`/whitespace-only `content` raise `DocpipeError` (specifically diagnosing `max_tokens` exhaustion with `finish_reason='length'` and consumed `reasoning_tokens` when thinking tokens exhaust the budget before producing answer text); active env secrets and token patterns are scrubbed from error chains.
 
 **Raises**: `MissingExtraError` (if import fails), `MissingCredentialError`, `PiiBlockedError`, `DocpipeError`.
 
