@@ -103,16 +103,32 @@ Before adding features, verify compliance with [`.specify/memory/constitution.md
 
 ## 4. Commits, Versioning & Releases
 
-`docpipe-maestro` uses **Conventional Commits** (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`) and derives package versions automatically from annotated Git tags via `hatch-vcs`.
+`docpipe-maestro` uses **Conventional Commits** (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`, `ci:`) and derives package versions automatically from annotated Git tags via `hatch-vcs`.
 
 ```bash
 # Validate commit messages against Commitizen rules
-uv run cz check --rev-range HEAD~5..HEAD
+uv run cz check --rev-range origin/main..HEAD
 
 # Update CHANGELOG.md from conventional commits (use cz changelog, NOT cz bump)
 uv run cz changelog
 
-# Verify wheel and sdist artifacts cleanly
-uv run python -m build
-uv run twine check dist/*
+# Verify lockfile, build artifacts, and package metadata cleanly
+uv lock --check
+uv build
+uv run twine check --strict dist/*
 ```
+
+### Automated CI & Trusted Publishing Workflows
+
+- **Continuous Integration ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)):** Runs on pushes and pull requests to `main`:
+  - `quality`: Ubuntu matrix across Python `3.10`–`3.13` (`uv lock --check`, Ruff format/lint/security `S`, strict `mypy`, `@pytest.mark.reverse`, `@pytest.mark.pii`, and full `pytest --cov` branch coverage >= 80%).
+  - `commits`: Pull-request Commitizen check across PR commits.
+  - `minimal-core`: Python `3.10` core-only install without optional extras (`--group dev`), verifying core tests, CLI entrypoint, and fail-loud `MissingExtraError` guards.
+  - `packaging`: `uv build`, `twine check --strict`, and isolated clean-venv wheel + sdist installation smoke tests.
+  - `dependency-audit`: `pip-audit` against exported locked dependencies.
+  - `os-smoke`: Cross-OS offline test matrix on `macos-latest` and `windows-latest`.
+- **Trusted Release Pipeline ([`.github/workflows/release.yml`](../.github/workflows/release.yml)):** Triggered by version tags matching `v[0-9]*` (e.g., `v0.2.0`):
+  1. Verifies quality/safety gates, builds sdist + wheel with `hatch-vcs`, asserts the built wheel version matches the pushed tag (no `.dev`/local versions), and runs `twine check --strict`.
+  2. Publishes artifacts to TestPyPI (`testpypi` environment) via OIDC Trusted Publishing (`id-token: write`).
+  3. Smoke-tests `pip install --no-deps` from TestPyPI into a fresh environment (`docpipe-maestro --version`).
+  4. Publishes artifacts to PyPI (`pypi` environment) via OIDC Trusted Publishing and creates a GitHub Release with attached distributions and generated notes.

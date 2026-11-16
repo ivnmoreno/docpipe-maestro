@@ -1,0 +1,195 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-and-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout tag with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Verify lockfile is up to date
+        run: uv lock --check
+
+      - name: Install project and dev dependencies
+        run: uv sync --locked --python 3.12 --all-extras --group dev
+
+      - name: Run quality and safety gates
+        env:
+          LITELLM_LOCAL_MODEL_COST_MAP: "true"
+        run: |
+          uv run --no-sync ruff format --check .
+          uv run --no-sync ruff check .
+          uv run --no-sync ruff check --select S src/
+          uv run --no-sync mypy src tests
+          uv run --no-sync pytest -m reverse -v
+          uv run --no-sync pytest -m pii -v
+          uv run --no-sync pytest -v
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Verify tag matches built package version
+        shell: bash
+        run: |
+          EXPECTED_VERSION="${GITHUB_REF_NAME#v}"
+          BUILT_VERSION="$(uv run --no-sync python -c "import pathlib, re; wheels = list(pathlib.Path('dist').glob('*.whl')); assert len(wheels) == 1, wheels; m = re.match(r'^docpipe_maestro-([^-]+)-', wheels[0].name); assert m, wheels[0].name; print(m.group(1))")"
+          echo "Tag version: ${EXPECTED_VERSION} | Wheel version: ${BUILT_VERSION}"
+          if [[ "${BUILT_VERSION}" != "${EXPECTED_VERSION}" ]]; then
+            echo "::error::Built wheel version (${BUILT_VERSION}) does not match tag (${EXPECTED_VERSION})"
+            exit 1
+          fi
+          if [[ "${BUILT_VERSION}" == *"dev"* || "${BUILT_VERSION}" == *"+"* ]]; then
+            echo "::error::Refusing to publish non-release version: ${BUILT_VERSION}"
+            exit 1
+          fi
+
+      - name: Validate distributions with twine
+        run: uv run --no-sync twine check --strict dist/*
+
+      - name: Upload built distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dists
+          path: dist/*
+          if-no-files-found: error
+
+  publish-testpypi:
+    needs: verify-and-build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/docpipe-maestro
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dists
+          path: dist
+
+      - name: Publish package distributions to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  verify-testpypi:
+    needs: [verify-and-build, publish-testpypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Download built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dists
+          path: dist
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Smoke-test released wheel from TestPyPI
+        shell: bash
+        env:
+          LITELLM_LOCAL_MODEL_COST_MAP: "true"
+        run: |
+          EXPECTED_VERSION="${GITHUB_REF_NAME#v}"
+          uv venv /tmp/testpypi-smoke --python 3.12
+          # Resolve runtime dependencies strictly from PyPI first, then replace docpipe-maestro from TestPyPI.
+          uv pip install --python /tmp/testpypi-smoke/bin/python dist/*.whl
+          uv pip uninstall --python /tmp/testpypi-smoke/bin/python docpipe-maestro
+
+          installed=0
+          for attempt in 1 2 3 4 5 6; do
+            if uv pip install --python /tmp/testpypi-smoke/bin/python \
+              --refresh \
+              --no-deps \
+              --index-url https://test.pypi.org/simple/ \
+              "docpipe-maestro==${EXPECTED_VERSION}"; then
+              installed=1
+              break
+            fi
+            echo "Attempt ${attempt}/6: waiting for TestPyPI index propagation..."
+            sleep 10
+          done
+          if [[ "${installed}" -ne 1 ]]; then
+            echo "::error::Failed to install docpipe-maestro==${EXPECTED_VERSION} from TestPyPI"
+            exit 1
+          fi
+
+          /tmp/testpypi-smoke/bin/docpipe-maestro --version
+          /tmp/testpypi-smoke/bin/docpipe-maestro --help > /dev/null
+          /tmp/testpypi-smoke/bin/python -c "import docpipe_maestro as dp; assert dp.__version__ == '${EXPECTED_VERSION}' and len(dp.__all__) == 36"
+
+  publish-pypi:
+    needs: [verify-and-build, verify-testpypi]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/docpipe-maestro
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dists
+          path: dist
+
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: [verify-and-build, publish-pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dists
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') || contains(github.ref_name, 'rc') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}

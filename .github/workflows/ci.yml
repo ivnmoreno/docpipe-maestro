@@ -9,16 +9,23 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   quality:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -28,27 +35,249 @@ jobs:
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
 
+      - name: Verify lockfile is up to date
+        run: uv lock --check
+
       - name: Install project and dev dependencies
-        run: uv sync --python ${{ matrix.python-version }} --all-extras --group dev
+        run: uv sync --locked --python ${{ matrix.python-version }} --all-extras --group dev
 
       - name: Check formatting with Ruff
-        run: uv run ruff format --check .
+        run: uv run --no-sync ruff format --check .
 
       - name: Run Ruff linter and security rules
         run: |
-          uv run ruff check .
-          uv run ruff check --select S src/
+          uv run --no-sync ruff check .
+          uv run --no-sync ruff check --select S src/
 
       - name: Run strict type checks with mypy
-        run: uv run mypy src tests
+        run: uv run --no-sync mypy src tests
 
       - name: Verify Reverse Safety Gate
-        run: uv run pytest -m reverse -v
+        run: uv run --no-sync pytest -m reverse -v
 
       - name: Verify PII Safety Gate
-        run: uv run pytest -m pii -v
+        run: uv run --no-sync pytest -m pii -v
 
       - name: Run full test suite with coverage
         env:
           LITELLM_LOCAL_MODEL_COST_MAP: "true"
-        run: uv run pytest -v --cov
+        run: uv run --no-sync pytest -v --cov
+
+  commits:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dev tools
+        run: uv sync --locked --python 3.12 --only-group dev
+
+      - name: Validate PR commits follow Conventional Commits
+        run: |
+          uv run --no-sync cz check --rev-range \
+            "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+
+  minimal-core:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.10
+        run: uv python install 3.10
+
+      - name: Install core dependencies only (no optional extras)
+        run: uv sync --locked --python 3.10 --group dev
+
+      - name: Run core-only test suite without optional extras
+        env:
+          LITELLM_LOCAL_MODEL_COST_MAP: "true"
+        run: |
+          uv run --no-sync pytest -q \
+            --ignore=tests/test_extended_complex.py \
+            --ignore=tests/test_intake_clean.py \
+            --ignore=tests/test_security_hardening.py \
+            --ignore=tests/test_pii_safety.py
+
+      - name: Verify CLI and core fail-loud MissingExtraError behavior
+        env:
+          LITELLM_LOCAL_MODEL_COST_MAP: "true"
+        run: |
+          uv run --no-sync docpipe-maestro --version
+          uv run --no-sync docpipe-maestro --help > /dev/null
+          uv run --no-sync python - <<'PY'
+          import tempfile
+          from pathlib import Path
+          from unittest.mock import patch
+
+          import docpipe_maestro as dp
+          from docpipe_maestro.ingest.intake import parse_file
+
+          assert len(dp.__all__) == 36
+
+          with tempfile.TemporaryDirectory() as tmp:
+              root = Path(tmp)
+              corpus = root / "corpus"
+              persist = root / ".docpipe"
+              corpus.mkdir()
+
+              for ext in (".pdf", ".docx", ".html"):
+                  sample = root / f"sample{ext}"
+                  sample.write_bytes(b"%PDF-1.4\n" if ext == ".pdf" else b"PK\x03\x04" if ext == ".docx" else b"<p>hi</p>")
+                  try:
+                      parse_file(sample, source_key=sample.name)
+                  except dp.MissingExtraError:
+                      pass
+                  else:
+                      raise AssertionError(f"Expected MissingExtraError for {ext} without extras")
+
+              (corpus / "policy.md").write_text("## Section 1\n\nCore markdown works.\n", encoding="utf-8")
+              with patch(
+                  "litellm.embedding",
+                  side_effect=lambda input, **kwargs: {
+                      "data": [
+                          {"index": idx, "embedding": [0.1, 0.2, 0.3, 0.4]}
+                          for idx, _ in enumerate(input)
+                      ]
+                  },
+              ):
+                  res = dp.ingest(corpus, collection="core_smoke", persist_dir=persist)
+                  assert res.ingested == ["policy.md"]
+                  hits = dp.retrieve("Core markdown", collection="core_smoke", persist_dir=persist)
+                  assert hits and "Core markdown works." in hits[0].text
+                  try:
+                      dp.retrieve(
+                          "Core markdown",
+                          collection="core_smoke",
+                          persist_dir=persist,
+                          rerank=True,
+                      )
+                  except dp.MissingExtraError:
+                      pass
+                  else:
+                      raise AssertionError("Expected MissingExtraError for rerank=True without extras")
+          PY
+
+  packaging:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Verify lockfile is up to date
+        run: uv lock --check
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Install dev tools for twine validation
+        run: uv sync --locked --python 3.12 --only-group dev
+
+      - name: Validate distributions with twine
+        run: uv run --no-sync twine check --strict dist/*
+
+      - name: Verify isolated wheel and sdist installation
+        env:
+          LITELLM_LOCAL_MODEL_COST_MAP: "true"
+        run: |
+          uv venv /tmp/wheel-smoke --python 3.12
+          uv pip install --python /tmp/wheel-smoke/bin/python dist/*.whl
+          /tmp/wheel-smoke/bin/docpipe-maestro --version
+          /tmp/wheel-smoke/bin/docpipe-maestro --help > /dev/null
+          /tmp/wheel-smoke/bin/python -c "import docpipe_maestro as dp; assert len(dp.__all__) == 36"
+
+          uv venv /tmp/sdist-smoke --python 3.12
+          uv pip install --python /tmp/sdist-smoke/bin/python dist/*.tar.gz
+          /tmp/sdist-smoke/bin/docpipe-maestro --version
+          /tmp/sdist-smoke/bin/python -c "import docpipe_maestro as dp; assert dp.__version__"
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Audit locked dependencies for known vulnerabilities
+        run: |
+          uv export --locked --all-groups --all-extras --no-emit-project -o requirements-audit.txt
+          # Ignore upstream-unpatched ChromaDB HTTP-server advisories (PYSEC-2026-311, 3813, 3814, 3815);
+          # docpipe-maestro uses local embedded PersistentClient only and no fixed chromadb > 1.5.9 exists.
+          uvx pip-audit -r requirements-audit.txt --disable-pip \
+            --ignore-vuln PYSEC-2026-311 \
+            --ignore-vuln PYSEC-2026-3813 \
+            --ignore-vuln PYSEC-2026-3814 \
+            --ignore-vuln PYSEC-2026-3815
+
+  os-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install project and dev dependencies
+        run: uv sync --locked --python 3.12 --all-extras --group dev
+
+      - name: Verify Reverse Safety Gate
+        run: uv run --no-sync pytest -m reverse -v
+
+      - name: Verify PII Safety Gate
+        run: uv run --no-sync pytest -m pii -v
+
+      - name: Run offline test suite
+        env:
+          LITELLM_LOCAL_MODEL_COST_MAP: "true"
+        run: uv run --no-sync pytest -v
