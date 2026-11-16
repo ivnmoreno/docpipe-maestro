@@ -72,11 +72,9 @@ This document aggregates all architectural suggestions, deferred backlog items, 
 - **Status**: Implemented in `005-hybrid-search` (`Fts5HybridSearcher` registered as `"fts5_hybrid"` alongside collocated `LexicalIndex` in `store/lexical.py`).
 - **Details**: Uses SQLite FTS5 (`unicode61`) BM25 fused with dense ChromaDB cosine rankings via theoretical-max normalized Reciprocal Rank Fusion (`k=60`, weights `0.5`/`0.5`), exposed via `retrieve(..., searcher="fts5_hybrid")`, `--searcher fts5_hybrid`, and TOML `searcher`.
 
-### 4.2 Pluggable Reranking Stage
-- **Problem**: Vector similarity matches the closest candidates, but a dedicated cross-encoder reranker can dramatically increase top-1 precision.
-- **Proposed Upgrade**:
-  - Insert an optional reranker between child-chunk retrieval and parent expansion.
-  - Support local rerankers (e.g., FlashRank, BGE-reranker) and cloud reranking APIs (e.g., Cohere Rerank) via a unified provider interface.
+### 4.2 Pluggable Reranking Stage — *Local Reranker Implemented (`007-cross-encoder-rerank`); Cloud Adapters Post-v0.1*
+- **Implemented (`007-cross-encoder-rerank`)**: Child-first `Reranker` protocol (`@register_reranker` / `RERANKERS` registry), `validate_rerank_options()`, and lazy optional `[rerank]` `CrossEncoderReranker` (`BAAI/bge-reranker-base`, sigmoid `[0.0, 1.0]` scores, `--rerank`, `--reranker`, `--rerank-top-n`) executing prior to parent expansion.
+- **Remaining Proposed Upgrade (Post-v0.1)**: Add optional cloud reranking adapters (e.g., Cohere Rerank) implementing the same `Reranker` protocol.
 
 ### 4.3 Query Rewriting & Expansion
 - **Problem**: Ambiguous, brief, or poorly phrased user questions can lead to suboptimal semantic retrieval.
@@ -169,7 +167,9 @@ This document aggregates all architectural suggestions, deferred backlog items, 
 | **Streaming Output (`docpipe-maestro ask`)** | Generation | Post-v0.1 | High (UX) | Low |
 | **`--dry-run` for `sync`/`reindex`** | CLI / Ops | Post-v0.1 | Medium (Safety) | Low |
 | **Inter-Document Crossrefs** | Ingestion | Post-v0.1 | Medium (Completeness) | High |
-| **Pluggable Reranker** | Retrieval | Post-v0.1 | High (Precision) | Low |
+| **Pluggable Reranker** | Retrieval | *Local Implemented* (`007-cross-encoder-rerank`; Cloud Post-v0.1) | High (Precision) | Low |
+| **Metadata Pre-Filtering (`where`)** | Retrieval / Eval | *Implemented* (`010-metadata-filtering`) | High (Precision / Scoping) | Medium |
+| **Structured JSON Telemetry (`docpipe_maestro.log`)** | Telemetry / CLI | *Implemented* (`011-structured-logging`; OTel Post-v0.1) | Medium (Observability) | Low |
 | **Additional Parsers (XLSX, PPTX)** | Intake | Post-v0.1 | Medium (Coverage) | Low |
 | **Two-Collection Split** | Storage | Post-v0.1 | Medium (Scale) | High |
 | **Storage Adapters (Qdrant, LanceDB)** | Storage | Post-v0.1 | Medium (Flexibility) | Medium |

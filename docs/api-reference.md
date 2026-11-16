@@ -101,7 +101,7 @@ def sync(
 Performs three-way reconciliation between `directory` and `<persist_dir>/manifests/<collection>.json` (with pre-chunking `pii_policy` scrubbing/audit logging and `local_only` preflight identical to `ingest`):
 
 1. **Added**: New files on disk are parsed, chunked, embedded, and inserted into both vector and lexical stores.
-2. **Updated**: Modified files (different `sha256`) undergo staged delete-then-reinsert under a new `doc_version`, preventing orphaned clauses if the file shrank.
+2. **Updated**: Modified files (different `sha256`) write new chunks tagged with a new `doc_version`, commit the manifest atomically, and delete stale versions afterward, preventing orphaned clauses if the file shrank.
 3. **Skipped**: Files matching manifest hashes (even after `touch`) are skipped.
 4. **Removed**: Source keys tracked in the manifest that no longer exist under `directory` are purged from ChromaDB, SQLite FTS5, and the manifest. (An empty existing directory cleanly purges all tracked sources.)
 
@@ -419,7 +419,7 @@ ingest("./manual.md", profile=custom, collection="manuals")
 ```text
 DocpipeError (Exception)
 ├── UnsupportedFormatError   # Unknown extension, missing file/dir, corrupted/binary content
-├── MissingExtraError        # Optional dependency missing (pypdf, python-docx, bs4, presidio-analyzer)
+├── MissingExtraError        # Optional dependency missing (pypdf, python-docx, bs4, sentence-transformers, presidio-analyzer)
 ├── ModelMismatchError       # Requested embed_model conflicts with manifest.embed_model
 ├── MissingCredentialError   # Provider rejected missing or invalid API key env var
 ├── PiiBlockedError          # Configured PII "block" rule or egress="block" matched content

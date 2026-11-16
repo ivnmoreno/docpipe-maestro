@@ -121,6 +121,16 @@ def test_store_query_and_get_skip_embeddings_by_default(tmp_persist_dir: Path) -
     assert [p.id for p in by_source] == [parent.id]
     assert by_source[0].vector == []
 
+    all_children_default = store.get_all_children()
+    all_parents_default = store.get_all_parents()
+    assert len(all_children_default) == 1 and all_children_default[0].vector == []
+    assert len(all_parents_default) == 1 and all_parents_default[0].vector == []
+
+    all_children_vecs = store.get_all_children(include_embeddings=True)
+    all_parents_vecs = store.get_all_parents(include_embeddings=True)
+    assert len(all_children_vecs[0].vector) == EMBED_DIM
+    assert len(all_parents_vecs[0].vector) == EMBED_DIM
+
 
 def test_store_where_defense_in_depth_and_optional_nulls(tmp_persist_dir: Path) -> None:
     store = VectorStore(tmp_persist_dir, "store_where")

@@ -39,7 +39,8 @@ All contributions must uphold the guardrails in [`.specify/memory/constitution.m
 Before opening a pull request, ensure every CI gate passes locally:
 
 ```bash
-# Formatting, lint, and Bandit security rules
+# Lockfile & formatting, lint, and Bandit security rules
+uv lock --check
 uv run ruff format --check .
 uv run ruff check .
 uv run ruff check --select S src/

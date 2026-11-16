@@ -16,7 +16,7 @@ Welcome to the documentation for **`docpipe-maestro`** — a minimal, provider-a
 | **[CLI Reference (`docpipe-maestro`)](cli-reference.md)** | CLI Users & Ops | Global flags (`--log-json`, `--log-level`, `--local-only`, `--pii-policy`), `docpipe.toml` schema, all 8 subcommands (including `eval`), repeatable `--where` pre-filtering, `--searcher` modes, exact output formats, exit codes, and troubleshooting |
 | **[Retrieval Evaluation Baselines](eval-baseline.md)** | Engineers & Maintainers | Side-by-side offline retrieval benchmark (`default` dense vs `fts5_hybrid`) on the curated policy corpus ([eval-baseline.json](eval-baseline.json)) |
 | **[Development & Testing Guide](development.md)** | Contributors | Dev setup, `ruff`/`mypy --strict`/`pytest` quality gates, Release Gates #1 (`reverse`) & #2 (`pii`), live Ollama testing, and extension guidelines |
-| **[Future Features Backlog](future-features.md)** | Maintainers & Roadmap | Deferred post-v0.1 enhancements aligned with scope discipline (`LEGAL` profile, differential re-embedding, hybrid search, storage adapters) |
+| **[Future Features Backlog](future-features.md)** | Maintainers & Roadmap | Implementation status and remaining deferred enhancements (`LEGAL` profile, differential re-embedding, streaming generation, storage adapters) |
 
 ## Project & Design Context
 
