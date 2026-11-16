@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import math
 import os
 import re
+import sys
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -36,6 +39,39 @@ def deterministic_embed(texts: list[str], dim: int = EMBED_DIM) -> list[list[flo
             vec[0] = 1.0
         vectors.append(vec)
     return vectors
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_chroma_shared_systems(tmp_path: Path) -> Iterator[None]:
+    """Release ChromaDB SharedSystemClient handles rooted under finished test dirs."""
+    yield
+    if "chromadb" not in sys.modules:
+        return
+    try:
+        from chromadb.api.shared_system_client import SharedSystemClient
+    except ImportError:
+        return
+
+    resolved_root = tmp_path.resolve()
+    stale_systems: list[Any] = []
+    with SharedSystemClient._refcount_lock:
+        stale_keys: list[str] = []
+        for key in SharedSystemClient._identifier_to_system:
+            try:
+                key_path = Path(key).resolve()
+            except OSError:
+                continue
+            if key_path == resolved_root or resolved_root in key_path.parents:
+                stale_keys.append(key)
+        for key in stale_keys:
+            SharedSystemClient._identifier_to_refcount.pop(key, None)
+            system = SharedSystemClient._identifier_to_system.pop(key, None)
+            if system is not None:
+                stale_systems.append(system)
+
+    for system in stale_systems:
+        with contextlib.suppress(Exception):
+            system.stop()
 
 
 @pytest.fixture

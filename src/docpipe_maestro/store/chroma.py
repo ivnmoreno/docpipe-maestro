@@ -209,19 +209,19 @@ class ChromaStore:
             fields.append("embeddings")
         return fields
 
-    def get_all_children(self) -> list[EmbeddedChunk]:
+    def get_all_children(self, *, include_embeddings: bool = False) -> list[EmbeddedChunk]:
         """Fetch all child records in the collection (used by reindex)."""
         results = self._collection.get(
             where={"type": "child"},
-            include=["documents", "metadatas", "embeddings"],
+            include=cast(Any, self._build_include_fields(include_embeddings)),
         )
         return self._hydrate_get_results(results)
 
-    def get_all_parents(self) -> list[EmbeddedChunk]:
+    def get_all_parents(self, *, include_embeddings: bool = False) -> list[EmbeddedChunk]:
         """Fetch all parent records in the collection (used by reindex)."""
         results = self._collection.get(
             where={"type": "parent"},
-            include=["documents", "metadatas", "embeddings"],
+            include=cast(Any, self._build_include_fields(include_embeddings)),
         )
         return self._hydrate_get_results(results)
 
