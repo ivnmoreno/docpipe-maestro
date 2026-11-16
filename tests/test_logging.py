@@ -6,6 +6,7 @@ import asyncio
 import io
 import json
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -158,7 +159,7 @@ def test_json_and_text_formatters_envelope_collision_paths_and_no_tracebacks() -
     assert parsed["msg"] == "stage.end"
     assert parsed["correlation_id"] is None
     assert parsed["fields"]["ts"] == "evil-override"
-    assert parsed["fields"]["path"] == "docs/a.md"
+    assert parsed["fields"]["path"] == os.fspath(Path("docs/a.md"))
     assert parsed["fields"]["tags"] == ["a", "b"]
     assert "SECRET_CREDENTIAL" not in rendered_json
     assert "Traceback" not in rendered_json

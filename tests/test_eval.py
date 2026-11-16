@@ -435,6 +435,26 @@ def _strip_persist_dir(report: dict[str, Any]) -> dict[str, Any]:
     return dict(copied)
 
 
+def _assert_eval_report_matches_baseline(
+    actual: dict[str, Any],
+    expected: dict[str, Any],
+) -> None:
+    """Assert exact structural/metric parity with float32 score tolerance across CPUs."""
+    actual_clean = _strip_persist_dir(actual)
+    expected_clean = _strip_persist_dir(expected)
+    assert actual_clean["config"] == expected_clean["config"]
+    assert actual_clean["aggregate"] == expected_clean["aggregate"]
+
+    actual_queries = actual_clean["per_query"]
+    expected_queries = expected_clean["per_query"]
+    assert len(actual_queries) == len(expected_queries)
+    for got, exp in zip(actual_queries, expected_queries, strict=True):
+        assert {k: v for k, v in got.items() if k != "retrieved_scores"} == {
+            k: v for k, v in exp.items() if k != "retrieved_scores"
+        }
+        assert got["retrieved_scores"] == pytest.approx(exp["retrieved_scores"], abs=1e-6)
+
+
 def test_curated_policy_suite_and_baseline_replay(
     tmp_persist_dir: Path,
     mock_litellm_offline: dict[str, Any],
@@ -482,7 +502,7 @@ def test_curated_policy_suite_and_baseline_replay(
         recorded = baseline["modes"][mode]
         assert recorded["config"]["persist_dir"] == ".docpipe"
         replayed = evaluate(fixture_path, persist_dir=tmp_persist_dir, searcher=mode)
-        assert _strip_persist_dir(dict(replayed)) == _strip_persist_dir(recorded)
+        _assert_eval_report_matches_baseline(dict(replayed), recorded)
 
     # CLI end-to-end replay matches committed default baseline with zero storage drift
     before_hashes = _snapshot_tree_hashes(tmp_persist_dir)
@@ -500,7 +520,7 @@ def test_curated_policy_suite_and_baseline_replay(
     assert rc == 0
     assert _snapshot_tree_hashes(tmp_persist_dir) == before_hashes
     cli_report = json.loads(capsys.readouterr().out)
-    assert _strip_persist_dir(cli_report) == _strip_persist_dir(baseline["modes"]["default"])
+    _assert_eval_report_matches_baseline(cli_report, baseline["modes"]["default"])
 
 
 def test_evaluate_reranking_conditional_config_preflight_and_zero_drift(

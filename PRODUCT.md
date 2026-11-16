@@ -517,7 +517,7 @@ A release shall not be published if any of these checks fail.
 | Distribution name | `docpipe-maestro` |
 | Import name | `docpipe_maestro` |
 | CLI command | `docpipe-maestro` |
-| License | MIT or Apache-2.0 (to be finalized) |
+| License | MIT |
 | Minimum Python | 3.10 |
 
 ### 14.2 Build

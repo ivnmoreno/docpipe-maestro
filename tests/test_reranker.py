@@ -302,6 +302,7 @@ def test_child_first_parent_dedup_max_score_and_crossrefs(
         return orig_rerank(self, query, chunks, top_k=top_k)
 
     with _clean_model_cache():
+        monkeypatch.setattr(ce_mod, "_has_sentence_transformers", lambda: True)
         monkeypatch.setattr(
             ce_mod,
             "_instantiate_cross_encoder",
@@ -395,6 +396,7 @@ def test_rerank_pool_depth_threshold_doc_version_and_hybrid(
         return [3.0 if "CURRENT_BONUS" in t else 99.0 for _, t in pairs]
 
     with _clean_model_cache():
+        monkeypatch.setattr(ce_mod, "_has_sentence_transformers", lambda: True)
         monkeypatch.setattr(
             ce_mod,
             "_instantiate_cross_encoder",

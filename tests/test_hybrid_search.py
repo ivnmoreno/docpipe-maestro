@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import subprocess
 import sys
@@ -269,8 +270,9 @@ def test_lexical_lifecycle_ingest_sync_remove_and_empty_file(
 
     lex = LexicalIndex(tmp_persist_dir, "life_lex")
     assert lex.db_path.is_file()
-    mode = stat.S_IMODE(lex.db_path.stat().st_mode)
-    assert (mode & 0o077) == 0
+    if os.name == "posix":
+        mode = stat.S_IMODE(lex.db_path.stat().st_mode)
+        assert (mode & 0o077) == 0
 
     mtime_before = lex.db_path.stat().st_mtime_ns
     hits_before = retrieve(
