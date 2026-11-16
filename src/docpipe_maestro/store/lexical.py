@@ -6,9 +6,11 @@ import contextlib
 import os
 import re
 import sqlite3
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
+from docpipe_maestro._filters import compile_lexical_where
 from docpipe_maestro.manifest import ensure_private_dir, validate_collection_name
 from docpipe_maestro.types import (
     Chunk,
@@ -196,8 +198,10 @@ class LexicalIndex:
         *,
         top_k: int = 20,
         active_versions: dict[str, str] | None = None,
+        where: Mapping[str, Any] | None = None,
     ) -> list[RetrievedChunk]:
         """Execute a read-only BM25 lexical search over committed child chunks."""
+        compiled_where = compile_lexical_where(where)
         if top_k <= 0 or not self.exists():
             return []
         fts_query = sanitize_fts_query(query)
@@ -205,17 +209,27 @@ class LexicalIndex:
             return []
 
         fetch_limit = max(top_k * 4, top_k) if active_versions is not None else top_k
+        where_parts = ["chunks_fts MATCH ?"]
+        sql_params: list[object] = [fts_query]
+        if compiled_where is not None:
+            extra_sql, extra_params = compiled_where
+            where_parts.append(extra_sql)
+            sql_params.extend(extra_params)
+        sql_params.append(fetch_limit)
+
+        # Identifiers strictly allowlisted in _filters.CHUNK_FILTER_FIELDS; values '?' bound.
+        where_sql = " AND ".join(where_parts)
         sql = (
             "SELECT chunk_id, parent_id, source, doc_version, section, clause, "
             "page, chunk_index, embed_model, content "
             "FROM chunks_fts "
-            "WHERE chunks_fts MATCH ? "
-            "ORDER BY bm25(chunks_fts, 1.5, 2.0, 1.0) ASC, chunk_id ASC "
-            "LIMIT ?"
+            "WHERE "
+            + where_sql
+            + " ORDER BY bm25(chunks_fts, 1.5, 2.0, 1.0) ASC, chunk_id ASC LIMIT ?"
         )
         with self._open_ro() as conn:
             try:
-                rows = conn.execute(sql, (fts_query, fetch_limit)).fetchall()
+                rows = conn.execute(sql, tuple(sql_params)).fetchall()
             except sqlite3.Error as exc:
                 raise DocpipeError(
                     f"Lexical search failed for {self._collection_name!r}: {exc}"

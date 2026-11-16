@@ -139,6 +139,7 @@ def test_public_callable_signatures_and_keyword_only_selectors() -> None:
         ("reranker", kw_only, "cross_encoder"),
         ("rerank_top_n", kw_only, DEFAULT_RERANK_TOP_N),
         ("local_only", kw_only, False),
+        ("where", kw_only, None),
     ]
     assert _params_info(root.build_prompt) == [
         ("question", pos_kw, empty),
@@ -182,6 +183,7 @@ def test_public_callable_signatures_and_keyword_only_selectors() -> None:
         ("reranker", kw_only, "cross_encoder"),
         ("rerank_top_n", kw_only, DEFAULT_RERANK_TOP_N),
         ("local_only", kw_only, False),
+        ("where", kw_only, None),
         ("retrieve_kwargs", inspect.Parameter.VAR_KEYWORD, empty),
     ]
 

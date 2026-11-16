@@ -224,6 +224,20 @@ class _StoreExplicitCollection(argparse.Action):
         namespace._collection_explicit = True
 
 
+def _add_where_arg(subparser: argparse.ArgumentParser) -> None:
+    """Register repeatable ``--where KEY=VALUE`` metadata filter argument."""
+    subparser.add_argument(
+        "--where",
+        action="append",
+        default=None,
+        metavar="KEY=VALUE",
+        help=(
+            "Filter retrieval by metadata attribute (repeatable; e.g., "
+            "--where source=policy.md, --where page=2, --where profile=POLICY)"
+        ),
+    )
+
+
 def _add_rerank_args(
     subparser: argparse.ArgumentParser,
     *,
@@ -429,6 +443,7 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         default_reranker=default_reranker,
         default_rerank_top_n=default_rerank_top_n,
     )
+    _add_where_arg(p_query)
     p_query.add_argument(
         "--json",
         action="store_true",
@@ -461,6 +476,7 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         default_reranker=default_reranker,
         default_rerank_top_n=default_rerank_top_n,
     )
+    _add_where_arg(p_ask)
     p_ask.add_argument(
         "--api-base", default=default_api_base, help="Optional OpenAI-compatible base URL"
     )
@@ -536,6 +552,7 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         default_reranker=default_reranker,
         default_rerank_top_n=default_rerank_top_n,
     )
+    _add_where_arg(p_eval)
     p_eval.add_argument(
         "--json",
         action="store_true",
@@ -553,6 +570,7 @@ def _handle_ask(
     pii_policy: PiiPolicy | None = None,
 ) -> int:
     """Execute the ``ask`` subcommand with timing, context inspection, and truncation warnings."""
+    from docpipe_maestro._filters import parse_cli_where
     from docpipe_maestro.query.answer import answer_detailed
     from docpipe_maestro.query.retriever import retrieve
 
@@ -561,6 +579,8 @@ def _handle_ask(
 
         enforce_local_only(args.embed_model, operation="retrieval")
         enforce_local_only(args.model, args.api_base, operation="generation")
+
+    parsed_where = parse_cli_where(args.where)
 
     t_ret = time.perf_counter()
     sections = retrieve(
@@ -576,6 +596,7 @@ def _handle_ask(
         reranker=args.reranker,
         rerank_top_n=args.rerank_top_n,
         local_only=args.local_only,
+        where=parsed_where,
     )
     retrieval_elapsed = time.perf_counter() - t_ret
 
@@ -703,12 +724,14 @@ def _format_eval_text(report: EvalReport) -> str:
 
 def _handle_eval(args: argparse.Namespace, *, cfg_collection: str | None) -> int:
     """Execute the ``eval`` subcommand read-only with lazy harness imports."""
+    from docpipe_maestro._filters import parse_cli_where
     from docpipe_maestro.eval.harness import (
         DEFAULT_EVAL_K_VALUES,
         evaluate,
         load_eval_fixture,
     )
 
+    parsed_where = parse_cli_where(args.where)
     loaded_fixture = load_eval_fixture(args.fixture)
     resolved_collection = _resolve_eval_collection(args, loaded_fixture, cfg_collection)
     k_values = DEFAULT_EVAL_K_VALUES if args.k_values is None else args.k_values
@@ -725,6 +748,7 @@ def _handle_eval(args: argparse.Namespace, *, cfg_collection: str | None) -> int
         reranker=args.reranker,
         rerank_top_n=args.rerank_top_n,
         local_only=args.local_only,
+        where=parsed_where,
     )
     if args.as_json:
         print(json.dumps(report, indent=2))
@@ -857,12 +881,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.command == "query":
+            from docpipe_maestro._filters import parse_cli_where
             from docpipe_maestro.query.retriever import retrieve
 
             if args.threshold is not None and (
                 not math.isfinite(args.threshold) or not 0.0 <= args.threshold <= 1.0
             ):
                 raise ValueError("--threshold must be finite and between 0.0 and 1.0")
+
+            parsed_where = parse_cli_where(args.where)
 
             results = retrieve(
                 args.question,
@@ -877,6 +904,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 reranker=args.reranker,
                 rerank_top_n=args.rerank_top_n,
                 local_only=args.local_only,
+                where=parsed_where,
             )
             if args.as_json:
                 print(

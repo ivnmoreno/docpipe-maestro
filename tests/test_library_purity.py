@@ -131,6 +131,12 @@ def test_phase2_query_does_not_import_phase1_stage_contracts() -> None:
             ("docpipe_maestro.ingest", "docpipe_maestro.query"),
         )
     )
+    violations.extend(
+        _find_forbidden_imports(
+            [SRC_ROOT / "_filters.py"],
+            ("docpipe_maestro.ingest", "docpipe_maestro.query", "docpipe_maestro.store"),
+        )
+    )
     assert violations == []
 
 

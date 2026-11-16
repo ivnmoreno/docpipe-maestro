@@ -192,16 +192,21 @@ def retrieve(
     reranker: str = "cross_encoder",
     rerank_top_n: int = 20,
     local_only: bool = False,
+    where: Mapping[str, Any] | None = None,
 ) -> list[RetrievedChunk]
 ```
 
 Read-only retrieval enforcing the collection's embedding model lock (and `local_only` pre-network check when `True`):
 
-- Validates `rerank`, `reranker`, and `rerank_top_n` upfront via `validate_rerank_options()` (`rerank_top_n >= 1` integer excluding `bool`, `RERANKERS` resolution and `validate_available()` check when `rerank=True`) alongside `EMBEDDERS` / `STORES` / `SEARCHERS` resolution before manifest or early-return checks.
+- Validates `rerank`, `reranker`, and `rerank_top_n` upfront via `validate_rerank_options()` (`rerank_top_n >= 1` integer excluding `bool`, `RERANKERS` resolution and `validate_available()` check when `rerank=True`) and validates `where` upfront via `validate_where()` alongside `EMBEDDERS` / `STORES` / `SEARCHERS` resolution before manifest or early-return checks.
+- Evaluates structured metadata filters (`where`):
+  - **Chunk attributes**: `source`, `doc_version`, `section`, `clause`, `embed_model` (`str`: shorthand or `$eq`/`$ne`/`$in`/`$nin`), and `page`, `chunk_index` (strict non-`bool` `int`: shorthand or `$eq`/`$ne`/`$in`/`$nin`/`$gt`/`$gte`/`$lt`/`$lte`), plus `$and`/`$or`.
+  - **Top-level manifest attributes** (no re-ingestion required): `profile` (case-insensitive scalar/`$eq`/`$ne`/`$in`/`$nin`), `ingested_after`, and `ingested_before` (ISO-8601 UTC inclusive bounds; date-only `YYYY-MM-DD` expands to start/end of day UTC), intersected conjunctively with top-level `source` predicates; empty allowlists short-circuit immediately to `[]` with zero embedding calls.
+  - **Validation & §IV Defense-in-Depth**: Rejects unknown keys, reserved `"type"`, nested manifest keys inside `$and`/`$or`, `bool` ints, bad dates, and empty `$in`/`$and` lists via `DocpipeError`; both `ChromaStore.query_children()` (`{"$and": [{"type": "child"}, ...]}`) and `LexicalIndex.search()` enforce matching predicates identically (including absent `page` / `clause` semantics).
 - Checks `manifest.embed_model` via `check_model_lock()`; raises `ModelMismatchError` if locked to a different model.
 - Resolves `searcher` via `SEARCHERS`:
-  - `"default"` (`DenseSearcher`): queries dense child chunks exclusively (`where={"type": "child"}`) with `include_embeddings=False`, filtering out uncommitted `doc_version` entries (`score` is cosine similarity in `[0.0, 1.0]`).
-  - `"fts5_hybrid"` (`Fts5HybridSearcher`): fuses dense vector candidates with read-only SQLite FTS5 BM25 candidates (`candidate_k = max(child_top_k * 2, 20)`) using Reciprocal Rank Fusion (`k = 60`, weights `0.5` / `0.5`), normalized by theoretical maximum `1 / 61` into `[0.0, 1.0]` (dual rank-1 agreement `== 1.0`; single-signal rank-1 `== 0.5`). Short-circuits whitespace/punctuation-only queries to `[]`, and raises `DocpipeError` recommending `reindex` if a non-empty collection lacks an FTS5 index.
+  - `"default"` (`DenseSearcher`): queries dense child chunks exclusively (`{"type": "child"}` conjunctively combined with normalized `where`) with `include_embeddings=False`, filtering out uncommitted `doc_version` entries (`score` is cosine similarity in `[0.0, 1.0]`).
+  - `"fts5_hybrid"` (`Fts5HybridSearcher`): fuses dense vector candidates with filtered read-only SQLite FTS5 BM25 candidates (`candidate_k = max(child_top_k * 2, 20)`) using Reciprocal Rank Fusion (`k = 60`, weights `0.5` / `0.5`), normalized by theoretical maximum `1 / 61` into `[0.0, 1.0]` (dual rank-1 agreement `== 1.0`; single-signal rank-1 `== 0.5`). Short-circuits whitespace/punctuation-only queries (and empty manifest allowlists before checking FTS index existence) to `[]`, and raises `DocpipeError` recommending `reindex` if a non-empty collection lacks an FTS5 index.
 - Returns `[]` immediately without calling the embedder if the collection is empty or `top_k <= 0`.
 - Applies optional score cutoff `score >= threshold` (`[0.0, 1.0]`) to Stage 1 child scores.
 - When `rerank=True`, expands the Stage 1 candidate budget to `max(rerank_top_n, top_k * 3)` when `expand_parent=True` (`max(rerank_top_n, top_k)` otherwise), instantiates the registered `Reranker` (default `"cross_encoder"` -> `CrossEncoderReranker` using `BAAI/bge-reranker-base`, sigmoid-normalized `[0.0, 1.0]` scores, lazy thread-safe `_MODEL_CACHE`), and reranks surviving children **before** parent aggregation (`top_k=len(child_matches)` when expanding parents, `top_k=top_k` otherwise).
@@ -486,10 +491,10 @@ from docpipe_maestro.eval import (
 ### Read-Only Runner (`docpipe_maestro.eval.harness`)
 
 - `load_eval_fixture(fixture: str | Path | EvalFixture) -> EvalFixture`: Loads and normalizes a JSON file or mapping without mutating caller inputs; raises `DocpipeError` on missing files, malformed JSON, empty `queries`, blank `question`, or empty/blank `relevant_ids`.
-- `evaluate(fixture, *, collection=None, persist_dir=".docpipe", embed_model="ollama/nomic-embed-text", k_values=(1, 3, 5, 10), expand_parent=True, follow_crossrefs=True, threshold=None, embedder="default", store="default", searcher="default", rerank=False, reranker="cross_encoder", rerank_top_n=20, local_only=False, **retrieve_kwargs) -> EvalReport`:
-  1. Validates `k_values`, finite `threshold` (`[0.0, 1.0]`), fixture schema, stage selectors (`EMBEDDERS`, `STORES`, `SEARCHERS`), and reranking options via `validate_rerank_options(...)` upfront.
+- `evaluate(fixture, *, collection=None, persist_dir=".docpipe", embed_model="ollama/nomic-embed-text", k_values=(1, 3, 5, 10), expand_parent=True, follow_crossrefs=True, threshold=None, embedder="default", store="default", searcher="default", rerank=False, reranker="cross_encoder", rerank_top_n=20, local_only=False, where=None, **retrieve_kwargs) -> EvalReport`:
+  1. Validates `k_values`, finite `threshold` (`[0.0, 1.0]`), fixture schema, `where` filter syntax/keys/types (via `validate_where(..., reject_reserved_type=True)`), stage selectors (`EMBEDDERS`, `STORES`, `SEARCHERS`), and reranking options via `validate_rerank_options(...)` upfront (before checking or touching storage directories).
   2. Resolves target collection: explicit non-`None` `collection` `>` non-empty `fixture["collection"]` `>` `"default"`.
-  3. Checks `manifest_path.exists()`, `check_model_lock()`, and committed sources **before** touching `ChromaStore` so missing or empty collections cause zero disk mutations.
-  4. Executes `retrieve(..., top_k=max(k_values), rerank=rerank, reranker=reranker, rerank_top_n=rerank_top_n)` once per query read-only and returns `EvalReport` (`config`, `aggregate`, `per_query`). `EvalConfig` includes `"rerank": True`, `"reranker"`, and `"rerank_top_n"` **only** when `rerank=True` (`total=False` optional fields).
+  3. Checks `manifest_path.exists()`, `check_model_lock()`, committed sources, and manifest filter keys (`resolve_retrieve_where(where, manifest)`) **before** touching `ChromaStore` so missing collections or bad filters cause zero disk mutations or embedder calls.
+  4. Executes `retrieve(..., top_k=max(k_values), rerank=rerank, reranker=reranker, rerank_top_n=rerank_top_n, where=where)` once per query read-only and returns `EvalReport` (`config`, `aggregate`, `per_query`). `EvalConfig` includes `"rerank": True`, `"reranker"`, and `"rerank_top_n"` **only** when `rerank=True` (`total=False` optional fields).
 
 Canonical `TypedDict` schemas (`EvalQuery`, `EvalFixture`, `EvalConfig`, `PerQueryResult`, `EvalMetricsSummary`, `EvalReport`) are defined once in [`src/docpipe_maestro/types.py`](../src/docpipe_maestro/types.py) and re-exported by `docpipe_maestro.eval`.

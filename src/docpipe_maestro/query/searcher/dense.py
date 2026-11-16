@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
+from docpipe_maestro._filters import resolve_retrieve_where
 from docpipe_maestro._stages import Embedder, Store
 from docpipe_maestro.embedder import EMBEDDERS
 from docpipe_maestro.manifest import check_model_lock, load_manifest
@@ -31,13 +34,14 @@ class DenseSearcher:
         collection: str,
         persist_dir: str,
         embed_model: str,
-        where: dict[str, object] | None = None,
+        where: Mapping[str, Any] | None = None,
     ) -> list[RetrievedChunk]:
         """Execute cosine vector search against committed child chunks."""
         persist_path = Path(persist_dir)
         manifest = load_manifest(persist_path, collection)
         check_model_lock(manifest, embed_model)
-        if not manifest.sources or top_k <= 0:
+        resolved = resolve_retrieve_where(where, manifest, reject_reserved_type=True)
+        if not manifest.sources or top_k <= 0 or resolved.short_circuit_empty:
             return []
 
         embedder_inst: Embedder = EMBEDDERS.resolve(self._embedder_key)()
@@ -49,6 +53,6 @@ class DenseSearcher:
             query_vec,
             top_k=top_k,
             active_versions=active_versions,
-            where=where,
+            where=resolved.chunk_where,
             include_embeddings=False,
         )

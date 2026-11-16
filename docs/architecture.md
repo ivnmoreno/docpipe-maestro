@@ -42,6 +42,7 @@ Every file's execution role is visible from the package layout under `src/docpip
 | [`config.py`](../src/docpipe_maestro/config.py) | Shared | Static constants (`DEFAULT_*`) and immutable chunking profiles (`DEFAULT`, `POLICY`, `resolve_profile`) |
 | [`_registry.py`](../src/docpipe_maestro/_registry.py) | Shared | Lazy Strategy + Registry core with collision/lookup `RegistryError` guards |
 | [`_crossrefs.py`](../src/docpipe_maestro/_crossrefs.py) | Shared | Phase-neutral cross-reference pattern matching, `index_section_targets`, `match_source_key`, and bounded excerpt truncation |
+| [`_filters.py`](../src/docpipe_maestro/_filters.py) | Shared | Phase-neutral `where` filter parser, schema/operator validator, top-level manifest allowlist resolver, Chroma conjunction builder & SQLite SQL compiler |
 | [`_pii.py`](../src/docpipe_maestro/_pii.py) | Shared | Phase-neutral PII policy validation, built-in/custom `PII_RECOGNIZERS`, HMAC tokenization (`tokenize_value`), and lazy multi-lang optional `[pii]` Presidio adapter |
 | [`embedder/`](../src/docpipe_maestro/embedder/__init__.py) | Shared | Batched provider-agnostic embeddings via `litellm.embedding` (`batch_size=64`), `is_local_target` / `enforce_local_only`, and auth error normalization |
 | [`manifest.py`](../src/docpipe_maestro/manifest.py) | Shared | Atomic DB-collocated JSON manifest (`sha256`, `mtime`/`size` fast-path, model lock) and owner-only `.audit.jsonl` writer |
@@ -170,7 +171,8 @@ If the process crashes between steps `4a` and `4b`:
 ## 4. Phase 2: Exception Preservation & "Search Small, Return Big"
 
 ```text
-Question ──► searcher (Dense or FTS5 Hybrid RRF) over committed child chunks
+Question ──► validate & resolve `where` (`_filters.py`: chunk fields + manifest profile/dates; [] short-circuit if empty)
+         ──► searcher (Dense or FTS5 Hybrid RRF) over committed child chunks (`type="child"` $and user where)
              (child_top_k = max(rerank_top_n, top_k * 3) if rerank & expand_parent)
                                      │
                                      ▼ (filter uncommitted doc_version & Stage 1 score >= threshold)

@@ -817,3 +817,190 @@ def test_lexical_search_latency_under_20ms_for_5000_chunks(tmp_persist_dir: Path
 
     assert hits and hits[0].id == "c_04321"
     assert elapsed_ms < 20.0, f"5,000-chunk FTS5 lookup took {elapsed_ms:.2f} ms (>= 20 ms)"
+
+
+def test_hybrid_vs_dense_where_operator_parity_with_nulls_and_shortcircuit(
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+) -> None:
+    """Every documented operator behaves identically across default and fts5_hybrid searchers."""
+    from docpipe_maestro.manifest import save_manifest
+    from docpipe_maestro.query.searcher.hybrid import Fts5HybridSearcher
+    from docpipe_maestro.types import Manifest, SourceRecord
+    from tests.conftest import deterministic_embed
+
+    col = "hyb_where_parity"
+    store = STORES.resolve("default")(tmp_persist_dir, col)
+    lex = LexicalIndex(tmp_persist_dir, col)
+
+    specs = [
+        ("c_a1", "a.md", "v1", "Section A", "1.1", 1, 0, "leave policy standard allowance"),
+        ("c_a2", "a.md", "v1", "Section A", "1.2", 2, 1, "leave policy manager approval"),
+        ("c_b0", "b.md", "v2", "Section B", None, None, 0, "leave policy emergency waiver"),
+        ("c_c4", "c.md", "v3", "Section C", "4.1", 4, 3, "leave policy contractor exclusion"),
+    ]
+    parents: list[EmbeddedChunk] = []
+    children: list[Chunk] = []
+    emb_children: list[EmbeddedChunk] = []
+
+    for cid, src, ver, sec, cls, pg, idx, body in specs:
+        pid = f"p_{cid}"
+        text = f"[Source: {src} | Section: {sec}]\n{body}"
+        vec = deterministic_embed([text])[0]
+        parents.append(
+            EmbeddedChunk(
+                id=pid,
+                text=body,
+                parent_id=None,
+                metadata=ChunkMetadata(
+                    type="parent",
+                    source=src,
+                    doc_version=ver,
+                    section=sec,
+                    clause=cls,
+                    page=pg,
+                    chunk_index=0,
+                    embed_model="ollama/nomic-embed-text",
+                ),
+                vector=[0.0] * len(vec),
+            )
+        )
+        ch = Chunk(
+            id=cid,
+            text=text,
+            parent_id=pid,
+            metadata=ChunkMetadata(
+                type="child",
+                source=src,
+                doc_version=ver,
+                section=sec,
+                clause=cls,
+                page=pg,
+                chunk_index=idx,
+                embed_model="ollama/nomic-embed-text",
+            ),
+        )
+        children.append(ch)
+        emb_children.append(
+            EmbeddedChunk(
+                id=ch.id,
+                text=ch.text,
+                parent_id=ch.parent_id,
+                metadata=ch.metadata,
+                vector=vec,
+            )
+        )
+
+    store.add_chunks([*parents, *emb_children])
+    lex.add_chunks(children)
+
+    manifest = Manifest(
+        collection=col,
+        embed_model="ollama/nomic-embed-text",
+        embed_dim=len(emb_children[0].vector),
+        sources={
+            "a.md": SourceRecord(
+                source="a.md",
+                content_hash="sha256:a",
+                doc_version="v1",
+                size=10,
+                mtime=1.0,
+                ingested_at="2026-11-10T10:00:00+00:00",
+                embed_model="ollama/nomic-embed-text",
+                profile="POLICY",
+                chunk_ids=["c_a1", "c_a2"],
+                parent_ids=["p_c_a1", "p_c_a2"],
+            ),
+            "b.md": SourceRecord(
+                source="b.md",
+                content_hash="sha256:b",
+                doc_version="v2",
+                size=10,
+                mtime=1.0,
+                ingested_at="2026-11-15T10:00:00Z",
+                embed_model="ollama/nomic-embed-text",
+                profile="DEFAULT",
+                chunk_ids=["c_b0"],
+                parent_ids=["p_c_b0"],
+            ),
+            "c.md": SourceRecord(
+                source="c.md",
+                content_hash="sha256:c",
+                doc_version="v3",
+                size=10,
+                mtime=1.0,
+                ingested_at="2026-11-20T10:00:00+00:00",
+                embed_model="ollama/nomic-embed-text",
+                profile="POLICY",
+                chunk_ids=["c_c4"],
+                parent_ids=["p_c_c4"],
+            ),
+        },
+    )
+    save_manifest(tmp_persist_dir, manifest)
+
+    operator_cases: list[tuple[dict[str, Any], set[str]]] = [
+        ({"source": "a.md"}, {"c_a1", "c_a2"}),
+        ({"source": {"$eq": "b.md"}}, {"c_b0"}),
+        ({"source": {"$in": ["a.md", "c.md"]}}, {"c_a1", "c_a2", "c_c4"}),
+        ({"source": {"$nin": ["a.md", "c.md"]}}, {"c_b0"}),
+        ({"page": {"$ne": 2}}, {"c_a1", "c_b0", "c_c4"}),
+        ({"page": {"$nin": [1, 2]}}, {"c_b0", "c_c4"}),
+        ({"clause": {"$ne": "1.1"}}, {"c_a2", "c_b0", "c_c4"}),
+        ({"clause": {"$nin": ["1.1", "4.1"]}}, {"c_a2", "c_b0"}),
+        ({"clause": ""}, set()),
+        ({"clause": {"$in": [""]}}, set()),
+        ({"clause": {"$in": ["1.2", "4.1"]}}, {"c_a2", "c_c4"}),
+        ({"page": {"$gt": 1, "$lt": 4}}, {"c_a2"}),
+        ({"page": {"$gte": 2}}, {"c_a2", "c_c4"}),
+        ({"chunk_index": {"$gte": 1, "$lte": 3}}, {"c_a2", "c_c4"}),
+        ({"$or": [{"source": "b.md"}, {"page": {"$eq": 4}}]}, {"c_b0", "c_c4"}),
+        ({"$and": [{"source": "a.md"}]}, {"c_a1", "c_a2"}),
+        ({"profile": "POLICY", "page": {"$gte": 2}}, {"c_a2", "c_c4"}),
+    ]
+
+    for expr, expected_ids in operator_cases:
+        dense_hits = retrieve(
+            "leave policy",
+            collection=col,
+            persist_dir=tmp_persist_dir,
+            top_k=10,
+            expand_parent=False,
+            searcher="default",
+            where=expr,
+        )
+        hybrid_hits = retrieve(
+            "leave policy",
+            collection=col,
+            persist_dir=tmp_persist_dir,
+            top_k=10,
+            expand_parent=False,
+            searcher="fts5_hybrid",
+            where=expr,
+        )
+        assert {h.id for h in dense_hits} == expected_ids, f"dense mismatch for {expr}"
+        assert {h.id for h in hybrid_hits} == expected_ids, f"hybrid mismatch for {expr}"
+
+    # Direct Fts5HybridSearcher short-circuits empty manifest match before FTS/embed calls.
+    col_no_lex = "no_lex_col"
+    save_manifest(
+        tmp_persist_dir,
+        Manifest(
+            collection=col_no_lex,
+            embed_model="ollama/nomic-embed-text",
+            sources={"only.md": manifest.sources["a.md"]},
+        ),
+    )
+    embeds_before = len(mock_litellm_offline["embedding"])
+    assert (
+        Fts5HybridSearcher().search(
+            "leave policy",
+            top_k=5,
+            collection=col_no_lex,
+            persist_dir=str(tmp_persist_dir),
+            embed_model="ollama/nomic-embed-text",
+            where={"profile": "NONEXISTENT"},
+        )
+        == []
+    )
+    assert len(mock_litellm_offline["embedding"]) == embeds_before

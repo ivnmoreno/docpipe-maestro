@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -11,6 +12,7 @@ from docpipe_maestro._crossrefs import (
     match_source_key,
     truncate_excerpt,
 )
+from docpipe_maestro._filters import resolve_retrieve_where, validate_where
 from docpipe_maestro._stages import Store
 from docpipe_maestro.config import (
     DEFAULT_COLLECTION,
@@ -123,6 +125,7 @@ def retrieve(
     reranker: str = "cross_encoder",
     rerank_top_n: int = DEFAULT_RERANK_TOP_N,
     local_only: bool = False,
+    where: Mapping[str, Any] | None = None,
 ) -> list[RetrievedChunk]:
     """Retrieve relevant parent sections (or child chunks) for a question.
 
@@ -153,6 +156,10 @@ def retrieve(
         rerank_top_n: Minimum candidate child pool size fetched prior to reranking.
         local_only: When ``True``, reject non-local embedding providers before
             query execution.
+        where: Optional structured metadata filter mapping scoped to chunk fields
+            (``source``, ``section``, ``clause``, ``page``, ``chunk_index``,
+            ``doc_version``, ``embed_model``) or top-level manifest attributes
+            (``profile``, ``ingested_after``, ``ingested_before``).
 
     Returns:
         Matched ``RetrievedChunk`` objects ordered by descending ``score``.
@@ -163,12 +170,15 @@ def retrieve(
         ModelMismatchError: If ``embed_model`` mismatches the collection lock.
         MissingCredentialError: If provider credentials are missing or invalid.
         RegistryError: If ``embedder``, ``store``, ``searcher``, or ``reranker`` is unregistered.
-        DocpipeError: If embedding, reranking, ``local_only``, or store lookup fails.
+        DocpipeError: If embedding, reranking, ``local_only``, ``where`` filter validation,
+            or store lookup fails.
     """
     if local_only:
         from docpipe_maestro.embedder import enforce_local_only
 
         enforce_local_only(embed_model, operation="retrieval")
+
+    validate_where(where, reject_reserved_type=True)
 
     if embedder != "default":
         EMBEDDERS.resolve(embedder)
@@ -185,7 +195,8 @@ def retrieve(
     manifest = load_manifest(persist_path, collection)
     check_model_lock(manifest, embed_model)
 
-    if not manifest.sources or top_k <= 0:
+    resolved_where = resolve_retrieve_where(where, manifest, reject_reserved_type=True)
+    if not manifest.sources or top_k <= 0 or resolved_where.short_circuit_empty:
         return []
 
     if (embedder != "default" or store != "default") and getattr(
@@ -204,6 +215,7 @@ def retrieve(
         collection=collection,
         persist_dir=str(persist_path),
         embed_model=embed_model,
+        where=resolved_where.chunk_where,
     )
 
     if threshold is not None:

@@ -4,12 +4,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from docpipe_maestro.store import VectorStore
-from docpipe_maestro.types import EmbeddedChunk
+import pytest
+
+from docpipe_maestro.store import LexicalIndex, VectorStore
+from docpipe_maestro.types import DocpipeError, EmbeddedChunk
 from tests.conftest import EMBED_DIM, deterministic_embed
 
 
-def _make_pair(source: str, doc_version: str, text: str) -> tuple[EmbeddedChunk, EmbeddedChunk]:
+def _make_pair(
+    source: str,
+    doc_version: str,
+    text: str,
+    *,
+    clause: str | None = "1.1",
+    page: int | None = 2,
+    chunk_index: int = 0,
+) -> tuple[EmbeddedChunk, EmbeddedChunk]:
     parent_id = f"p_{doc_version}_{source}"
     child_id = f"c_{doc_version}_{source}"
     parent = EmbeddedChunk(
@@ -37,9 +47,9 @@ def _make_pair(source: str, doc_version: str, text: str) -> tuple[EmbeddedChunk,
             "source": source,
             "doc_version": doc_version,
             "section": "Section 1",
-            "clause": "1.1",
-            "page": 2,
-            "chunk_index": 0,
+            "clause": clause,
+            "page": page,
+            "chunk_index": chunk_index,
             "embed_model": "ollama/nomic-embed-text",
         },
         vector=deterministic_embed([text])[0],
@@ -110,3 +120,79 @@ def test_store_query_and_get_skip_embeddings_by_default(tmp_persist_dir: Path) -
     by_source = store.get_parents_by_source("policy.md", active_doc_version="v1")
     assert [p.id for p in by_source] == [parent.id]
     assert by_source[0].vector == []
+
+
+def test_store_where_defense_in_depth_and_optional_nulls(tmp_persist_dir: Path) -> None:
+    store = VectorStore(tmp_persist_dir, "store_where")
+    lexical = LexicalIndex(tmp_persist_dir, "store_where")
+    p1, c1 = _make_pair(
+        "a.md",
+        "v1",
+        "Leave requests require notice and manager approval.",
+        clause="1.1",
+        page=2,
+        chunk_index=0,
+    )
+    p2, c2 = _make_pair(
+        "b.md",
+        "v2",
+        "Emergency leave requests waive advance notice.",
+        clause=None,
+        page=None,
+        chunk_index=5,
+    )
+    store.add_chunks([p1, c1, p2, c2])
+    lexical.add_chunks([c1, c2])
+    active = {"a.md": "v1", "b.md": "v2"}
+
+    qvec = deterministic_embed(["leave notice approval"])[0]
+
+    # Defense-in-depth: direct store or lexical lookup with type='parent' never returns parents.
+    assert (
+        store.query_children(qvec, top_k=5, active_versions=active, where={"type": "parent"}) == []
+    )
+    assert lexical.search("leave", top_k=5, active_versions=active, where={"type": "parent"}) == []
+    assert (
+        lexical.search(
+            "leave", top_k=5, active_versions=active, where={"type": {"$in": ["parent"]}}
+        )
+        == []
+    )
+
+    # Direct store accepts type='child' safely.
+    assert [
+        m.id
+        for m in store.query_children(
+            qvec, top_k=5, active_versions=active, where={"type": "child"}
+        )
+    ]
+
+    # Multi-operator dict and missing-attribute $ne/$nin behave identically across stores.
+    for expr in (
+        {"page": {"$gte": 1, "$lte": 3}},
+        {"chunk_index": {"$gte": 5}},
+        {"$or": [{"source": "a.md"}, {"chunk_index": 5}]},
+    ):
+        v_ids = {
+            m.id for m in store.query_children(qvec, top_k=5, active_versions=active, where=expr)
+        }
+        l_ids = {m.id for m in lexical.search("leave", top_k=5, active_versions=active, where=expr)}
+        assert v_ids == l_ids and v_ids
+
+    # Absent page (None) and absent clause (None in Chroma, '' in FTS5) match $ne and $nin.
+    for neg_expr in ({"page": {"$ne": 2}}, {"page": {"$nin": [2]}}, {"clause": {"$ne": "1.1"}}):
+        v_ids = {
+            m.id
+            for m in store.query_children(qvec, top_k=5, active_versions=active, where=neg_expr)
+        }
+        l_ids = {
+            m.id for m in lexical.search("leave", top_k=5, active_versions=active, where=neg_expr)
+        }
+        assert v_ids == {c2.id}
+        assert l_ids == {c2.id}
+
+    # Unknown keys fail cleanly in direct store & lexical lookup.
+    with pytest.raises(DocpipeError, match="Unsupported filter key"):
+        store.query_children(qvec, top_k=5, where={"author": "alice"})
+    with pytest.raises(DocpipeError, match="Unsupported filter key"):
+        lexical.search("leave", top_k=5, where={"author": "alice"})

@@ -431,6 +431,9 @@ docpipe-maestro query "SEV-1 escalation window" --searcher fts5_hybrid --rerank 
 # Return raw child chunks instead of expanded parent sections
 docpipe-maestro query "annual leave" --no-expand-parent --collection hr_policy
 
+# Scope search by document metadata or manifest profile/ingestion window (without re-ingestion)
+docpipe-maestro query "annual leave" --where profile=POLICY --where page=2 --collection hr_policy
+
 # Emit structured JSON (for evaluation fixtures and scripts)
 docpipe-maestro query "annual leave" --json --collection hr_policy
 ```
@@ -467,6 +470,7 @@ docpipe-maestro ask "Summarize travel limits." --json --fail-on-truncation --col
 
 # Enforce local-only execution pre-network or scrub outbound remote prompts via --pii-policy
 docpipe-maestro ask "Summarize travel limits." --local-only --collection hr_policy
+docpipe-maestro ask "Summarize travel limits." --where source=travel_policy.md --collection hr_policy
 docpipe-maestro ask "Summarize employee contacts." --model openai/gpt-4o-mini --pii-policy ./pii-policy.json --collection hr_policy
 ```
 *(By default, if a provider hits `--max-tokens` and sets `finish_reason == "length"`, `ask` prints a `Warning:` on `stderr`; pass `--fail-on-truncation` to fail non-zero instead.)*
@@ -482,8 +486,8 @@ docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --searcher
 # Benchmark with local cross-encoder reranking enabled
 docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --searcher fts5_hybrid --rerank
 
-# Customize cutoff values, inspect raw child chunks, or emit machine-readable JSON
-docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --k 1 3 5 --no-expand-parent --json
+# Customize cutoff values, filter subset by metadata, inspect raw child chunks, or emit JSON
+docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --where profile=POLICY --k 1 3 5 --no-expand-parent --json
 ```
 
 *(Target collection resolves in order: explicit `--collection` > fixture `collection` > `docpipe.toml` `collection` > `"default"`.)*
@@ -574,6 +578,7 @@ retrieved_sections = retrieve(
     expand_parent=True,  # Expand child matches to full parent section
     searcher="default",  # "default" or "fts5_hybrid"
     rerank=False,  # Set True (with `[rerank]` extra installed) for cross-encoder rescoring
+    where={"profile": "POLICY"},  # Optional chunk/manifest metadata filter
 )
 
 for section in retrieved_sections:
@@ -607,6 +612,7 @@ report = evaluate(
     persist_dir=".docpipe",
     k_values=normalize_k_values([10, 3, 3, 1]),  # -> (1, 3, 10)
     searcher="fts5_hybrid",
+    where={"profile": "POLICY"},  # Optional chunk/manifest metadata filter
 )
 print(report["aggregate"]["mrr"], report["aggregate"]["recall_at_k"])
 ```
@@ -682,6 +688,7 @@ docpipe-maestro/
 │   ├── cli.py               # `docpipe-maestro` CLI + TOML config loader
 │   ├── config.py            # Default constants & immutable chunking profiles
 │   ├── _crossrefs.py        # Shared phase-neutral cross-reference matching & excerpt helpers
+│   ├── _filters.py          # Shared phase-neutral metadata filter validation, manifest resolution & SQL compiler
 │   ├── _pii.py              # Shared phase-neutral PII recognizers, HMAC tokenizer & lazy NER
 │   ├── embedder/            # Batched LiteLLM embedding adapter, locality checks & registry
 │   ├── manifest.py          # Atomic sha256/mtime manifest, model lock & .audit.jsonl logger
