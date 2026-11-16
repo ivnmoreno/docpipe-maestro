@@ -9,7 +9,7 @@ import sys
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from dotenv import load_dotenv
 
@@ -26,7 +26,7 @@ from docpipe_maestro.embedder import DEFAULT_REQUEST_TIMEOUT
 from docpipe_maestro.types import DocpipeError
 
 if TYPE_CHECKING:
-    from docpipe_maestro.types import EvalReport
+    from docpipe_maestro.types import EvalReport, PiiPolicy
 
 
 def _load_cli_dotenv(config_path: str | None) -> None:
@@ -41,6 +41,17 @@ def _load_cli_dotenv(config_path: str | None) -> None:
         load_dotenv(dotenv_path=env_path, override=False)
 
 
+def _parse_toml_file(path: Path) -> dict[str, Any]:
+    """Parse a TOML file into a top-level dictionary (CLI boundary only)."""
+    if sys.version_info >= (3, 11):
+        import tomllib
+    else:
+        import tomli as tomllib  # type: ignore[import-not-found,unused-ignore]
+    with path.open("rb") as fh:
+        data = tomllib.load(fh)
+    return dict(data)
+
+
 def _load_toml_config(config_path: str | None, *, no_config: bool = False) -> dict[str, Any]:
     """Load an optional TOML user configuration file (permitted in CLI only).
 
@@ -49,8 +60,9 @@ def _load_toml_config(config_path: str | None, *, no_config: bool = False) -> di
     into parent directories). Supported keys include ``collection``, ``persist_dir``,
     ``embed_model``, ``model``, ``profile``, ``top_k``, ``threshold``, ``searcher``,
     ``rerank``, ``reranker``, ``rerank_top_n``, ``api_base``, ``temperature``,
-    ``max_tokens``, ``timeout``, and ``fail_on_truncation``.
-    Credentials must never be stored here; use environment variables or ``.env``.
+    ``max_tokens``, ``timeout``, ``fail_on_truncation``, ``local_only``, and
+    ``pii_policy``. Credentials must never be stored here; use environment
+    variables or ``.env``.
     """
     if no_config:
         return {}
@@ -63,13 +75,7 @@ def _load_toml_config(config_path: str | None, *, no_config: bool = False) -> di
         path = Path(config_path)
         if not path.is_file():
             raise DocpipeError(f"Config file not found: {config_path}")
-    if sys.version_info >= (3, 11):
-        import tomllib
-    else:
-        import tomli as tomllib  # type: ignore[import-not-found,unused-ignore]
-    with path.open("rb") as fh:
-        data = tomllib.load(fh)
-    return dict(data)
+    return _parse_toml_file(path)
 
 
 def _cfg_bool(cfg: dict[str, Any], key: str, fallback: bool) -> bool:
@@ -122,6 +128,86 @@ def _cfg_opt_float(cfg: dict[str, Any], key: str) -> float | None:
     if isinstance(val, bool) or not isinstance(val, (int, float)) or not math.isfinite(float(val)):
         raise DocpipeError(f"Invalid TOML config value for {key!r}: expected number")
     return float(val)
+
+
+class _StoreExplicitPiiPolicy(argparse.Action):
+    """Store ``--pii-policy`` path while recording explicit CLI flag presence."""
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: Any,
+        option_string: str | None = None,
+    ) -> None:
+        setattr(namespace, self.dest, values)
+        namespace._pii_policy_explicit = True
+
+
+def _load_pii_policy_file(path: Path) -> PiiPolicy:
+    """Parse and validate a JSON or TOML PII policy file (permitted in CLI only)."""
+    if not path.is_file():
+        raise DocpipeError(f"PII policy file not found: {path}")
+
+    raw: Any
+    try:
+        if path.suffix.lower() in {".toml", ".tml"}:
+            raw = _parse_toml_file(path)
+        else:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise DocpipeError(f"Invalid or unreadable PII policy file {path.name}: {exc}") from exc
+
+    if not isinstance(raw, Mapping):
+        raise ValueError("PII policy file must decode to a JSON or TOML object")
+
+    payload_dict = dict(raw)
+    if list(payload_dict.keys()) == ["pii_policy"] and isinstance(
+        payload_dict["pii_policy"], Mapping
+    ):
+        payload_dict = dict(payload_dict["pii_policy"])
+
+    from docpipe_maestro._pii import validate_pii_policy
+
+    validate_pii_policy(cast("PiiPolicy", payload_dict))
+    return cast("PiiPolicy", payload_dict)
+
+
+def _resolve_cli_pii_policy(
+    args: argparse.Namespace,
+    cfg_defaults: Mapping[str, Any],
+    *,
+    config_dir: Path,
+) -> PiiPolicy | None:
+    """Enforce CLI subcommand policy rules and resolve JSON/TOML/config policies."""
+    allowed_commands = {"ingest", "sync", "ask"}
+    if getattr(args, "_pii_policy_explicit", False) and args.command not in allowed_commands:
+        raise ValueError(
+            f"--pii-policy is only supported for ingest, sync, and ask (got {args.command!r})"
+        )
+    if args.command not in allowed_commands:
+        return None
+
+    if args.pii_policy is not None:
+        return _load_pii_policy_file(Path(args.pii_policy))
+
+    cfg_val = cfg_defaults.get("pii_policy")
+    if cfg_val is None:
+        return None
+    if isinstance(cfg_val, str):
+        candidate = Path(cfg_val)
+        if not candidate.is_absolute() and not candidate.is_file():
+            rel_cfg = config_dir / candidate
+            if rel_cfg.is_file():
+                candidate = rel_cfg
+        return _load_pii_policy_file(candidate)
+    if isinstance(cfg_val, Mapping):
+        from docpipe_maestro._pii import validate_pii_policy
+
+        cfg_policy = dict(cfg_val)
+        validate_pii_policy(cast("PiiPolicy", cfg_policy))
+        return cast("PiiPolicy", cfg_policy)
+    raise DocpipeError("Invalid TOML config value for 'pii_policy': expected path string or table")
 
 
 class _StoreExplicitCollection(argparse.Action):
@@ -193,12 +279,13 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     toml_timeout = _cfg_opt_float(cfg, "timeout")
     default_timeout = DEFAULT_REQUEST_TIMEOUT if toml_timeout is None else toml_timeout
     default_fail_on_truncation = _cfg_bool(cfg, "fail_on_truncation", False)
+    default_local_only = _cfg_bool(cfg, "local_only", False)
 
     parser = argparse.ArgumentParser(
         prog="docpipe-maestro",
         description="Minimal, structure-aware RAG pipeline CLI.",
     )
-    parser.set_defaults(_collection_explicit=False)
+    parser.set_defaults(_collection_explicit=False, _pii_policy_explicit=False)
     parser.add_argument("--version", action="version", version=f"docpipe-maestro {__version__}")
     parser.add_argument("--config", default=None, help="Optional TOML config file path")
     parser.add_argument(
@@ -214,6 +301,18 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         help="Target collection name",
     )
     parser.add_argument("--persist-dir", default=default_persist_dir, help="Local store directory")
+    parser.add_argument(
+        "--local-only",
+        action=argparse.BooleanOptionalAction,
+        default=default_local_only,
+        help="Disallow non-local/non-loopback models and endpoints before network I/O",
+    )
+    parser.add_argument(
+        "--pii-policy",
+        action=_StoreExplicitPiiPolicy,
+        default=None,
+        help="Path to JSON or TOML PII policy config (supported by ingest, sync, ask)",
+    )
 
     # Shared parent parser so global flags work both before and after any subcommand
     common = argparse.ArgumentParser(add_help=False)
@@ -233,11 +332,35 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         help="Target collection name",
     )
     common.add_argument("--persist-dir", default=argparse.SUPPRESS, help="Local store directory")
+    common.add_argument(
+        "--local-only",
+        action=argparse.BooleanOptionalAction,
+        default=argparse.SUPPRESS,
+        help="Disallow non-local/non-loopback models and endpoints before network I/O",
+    )
+
+    # Parent parsers for --pii-policy: advertised on policy commands, cleanly rejected on others.
+    pii_supported = argparse.ArgumentParser(add_help=False)
+    pii_supported.add_argument(
+        "--pii-policy",
+        action=_StoreExplicitPiiPolicy,
+        default=argparse.SUPPRESS,
+        help="Path to JSON or TOML PII policy config",
+    )
+    pii_unsupported = argparse.ArgumentParser(add_help=False)
+    pii_unsupported.add_argument(
+        "--pii-policy",
+        action=_StoreExplicitPiiPolicy,
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # Phase 1: ingest
-    p_ingest = subparsers.add_parser("ingest", parents=[common], help="Ingest a file or directory")
+    p_ingest = subparsers.add_parser(
+        "ingest", parents=[common, pii_supported], help="Ingest a file or directory"
+    )
     p_ingest.add_argument("path", help="File or directory path to ingest")
     p_ingest.add_argument("--profile", default=default_profile, help="Chunking profile")
     p_ingest.add_argument("--embed-model", default=default_embed_model, help="Embedding model")
@@ -245,7 +368,9 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
 
     # Phase 1: sync
     p_sync = subparsers.add_parser(
-        "sync", parents=[common], help="Reconcile a directory against the manifest"
+        "sync",
+        parents=[common, pii_supported],
+        help="Reconcile a directory against the manifest",
     )
     p_sync.add_argument("directory", help="Directory path to synchronize")
     p_sync.add_argument("--profile", default=default_profile, help="Chunking profile")
@@ -253,25 +378,33 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
 
     # Phase 1/2: status
     p_status = subparsers.add_parser(
-        "status", parents=[common], help="Inspect collection manifest status"
+        "status",
+        parents=[common, pii_unsupported],
+        help="Inspect collection manifest status",
     )
     p_status.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON output")
 
     # Phase 1: remove
     p_remove = subparsers.add_parser(
-        "remove", parents=[common], help="Remove a source document from the collection"
+        "remove",
+        parents=[common, pii_unsupported],
+        help="Remove a source document from the collection",
     )
     p_remove.add_argument("source", help="Source key to remove")
 
     # Phase 1: reindex
     p_reindex = subparsers.add_parser(
-        "reindex", parents=[common], help="Re-embed collection under a new model"
+        "reindex",
+        parents=[common, pii_unsupported],
+        help="Re-embed collection under a new model",
     )
     p_reindex.add_argument("--model", required=True, help="New embedding provider/model string")
 
     # Phase 2: query
     p_query = subparsers.add_parser(
-        "query", parents=[common], help="Retrieve relevant sections without generation"
+        "query",
+        parents=[common, pii_unsupported],
+        help="Retrieve relevant sections without generation",
     )
     p_query.add_argument("question", help="Question to search for")
     p_query.add_argument("--top-k", type=int, default=default_top_k, help="Max child matches")
@@ -306,7 +439,9 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
 
     # Phase 2: ask
     p_ask = subparsers.add_parser(
-        "ask", parents=[common], help="Generate a grounded answer for a question"
+        "ask",
+        parents=[common, pii_supported],
+        help="Generate a grounded answer for a question",
     )
     p_ask.add_argument("question", help="Question to answer")
     p_ask.add_argument("--top-k", type=int, default=default_top_k, help="Max child matches")
@@ -370,7 +505,7 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     # Phase 2: eval
     p_eval = subparsers.add_parser(
         "eval",
-        parents=[common],
+        parents=[common, pii_unsupported],
         help="Evaluate retrieval quality read-only against a ground-truth fixture",
     )
     p_eval.add_argument("--fixture", required=True, help="Path to evaluation JSON fixture")
@@ -412,10 +547,20 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     return parser
 
 
-def _handle_ask(args: argparse.Namespace) -> int:
+def _handle_ask(
+    args: argparse.Namespace,
+    *,
+    pii_policy: PiiPolicy | None = None,
+) -> int:
     """Execute the ``ask`` subcommand with timing, context inspection, and truncation warnings."""
     from docpipe_maestro.query.answer import answer_detailed
     from docpipe_maestro.query.retriever import retrieve
+
+    if args.local_only:
+        from docpipe_maestro.embedder import enforce_local_only
+
+        enforce_local_only(args.embed_model, operation="retrieval")
+        enforce_local_only(args.model, args.api_base, operation="generation")
 
     t_ret = time.perf_counter()
     sections = retrieve(
@@ -430,6 +575,7 @@ def _handle_ask(args: argparse.Namespace) -> int:
         rerank=args.rerank,
         reranker=args.reranker,
         rerank_top_n=args.rerank_top_n,
+        local_only=args.local_only,
     )
     retrieval_elapsed = time.perf_counter() - t_ret
 
@@ -457,6 +603,8 @@ def _handle_ask(args: argparse.Namespace) -> int:
         max_tokens=args.max_tokens,
         timeout=args.timeout,
         fail_on_truncation=args.fail_on_truncation,
+        pii_policy=pii_policy,
+        local_only=args.local_only,
     )
 
     if gen.truncated:
@@ -576,6 +724,7 @@ def _handle_eval(args: argparse.Namespace, *, cfg_collection: str | None) -> int
         rerank=args.rerank,
         reranker=args.reranker,
         rerank_top_n=args.rerank_top_n,
+        local_only=args.local_only,
     )
     if args.as_json:
         print(json.dumps(report, indent=2))
@@ -604,6 +753,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         cfg_collection = _cfg_opt_str(cfg_defaults, "collection")
         parser = build_parser(cfg_defaults)
         args = parser.parse_args(arg_list)
+        cfg_dir = Path(effective_cfg).parent if effective_cfg else Path.cwd()
+        resolved_pii_policy = _resolve_cli_pii_policy(args, cfg_defaults, config_dir=cfg_dir)
 
         if args.command == "ingest":
             from docpipe_maestro.ingest.pipeline import ingest
@@ -615,6 +766,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 persist_dir=args.persist_dir,
                 embed_model=args.embed_model,
                 force=args.force,
+                pii_policy=resolved_pii_policy,
+                local_only=args.local_only,
             )
             print(
                 f"Ingested {len(res.ingested)} file(s), skipped {len(res.skipped)} unchanged "
@@ -632,6 +785,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 collection=args.collection,
                 persist_dir=args.persist_dir,
                 embed_model=args.embed_model,
+                pii_policy=resolved_pii_policy,
+                local_only=args.local_only,
             )
             print(
                 f"Synced '{sres.collection}': added={len(sres.added)}, "
@@ -693,6 +848,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 embed_model=args.model,
                 collection=args.collection,
                 persist_dir=args.persist_dir,
+                local_only=args.local_only,
             )
             print(
                 f"Reindexed {count} child chunk(s) in collection '{args.collection}' "
@@ -720,6 +876,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 rerank=args.rerank,
                 reranker=args.reranker,
                 rerank_top_n=args.rerank_top_n,
+                local_only=args.local_only,
             )
             if args.as_json:
                 print(
@@ -758,7 +915,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.command == "ask":
-            return _handle_ask(args)
+            return _handle_ask(args, pii_policy=resolved_pii_policy)
 
         if args.command == "eval":
             return _handle_eval(args, cfg_collection=cfg_collection)

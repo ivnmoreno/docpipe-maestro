@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Literal
 
-from docpipe_maestro.types import DocpipeError, Manifest, ModelMismatchError
+from docpipe_maestro.types import DocpipeError, Manifest, ModelMismatchError, PiiAuditRecord
 
 ChangeStatus = Literal["new", "unchanged", "changed"]
 
@@ -31,11 +31,11 @@ def validate_collection_name(collection: str) -> str:
     return collection
 
 
-def manifest_path(persist_dir: Path, collection: str) -> Path:
-    """Return the validated path to the collection's collocated manifest JSON file."""
+def _validated_manifests_file(persist_dir: Path, collection: str, suffix: str) -> Path:
+    """Resolve a collection-scoped file inside ``manifests/`` with traversal protection."""
     safe_name = validate_collection_name(collection)
     manifests_dir = persist_dir / "manifests"
-    candidate = manifests_dir / f"{safe_name}.json"
+    candidate = manifests_dir / f"{safe_name}{suffix}"
     if not candidate.resolve().is_relative_to(manifests_dir.resolve()):
         raise DocpipeError(
             f"Invalid or unusable collection {collection!r}: resolves outside manifests directory"
@@ -43,11 +43,47 @@ def manifest_path(persist_dir: Path, collection: str) -> Path:
     return candidate
 
 
+def manifest_path(persist_dir: Path, collection: str) -> Path:
+    """Return the validated path to the collection's collocated manifest JSON file."""
+    return _validated_manifests_file(persist_dir, collection, ".json")
+
+
+def audit_log_path(persist_dir: Path, collection: str) -> Path:
+    """Return the validated path to the collection's ``.audit.jsonl`` log file."""
+    return _validated_manifests_file(persist_dir, collection, ".audit.jsonl")
+
+
 def ensure_private_dir(path: Path) -> None:
     """Create a directory if missing and restrict permissions to owner-only when supported."""
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     with contextlib.suppress(OSError):
         os.chmod(path, 0o700)
+
+
+def append_audit_record(persist_dir: Path, collection: str, record: PiiAuditRecord) -> None:
+    """Append a zero-raw-PII audit record JSON line with owner-only permissions."""
+    target = audit_log_path(persist_dir, collection)
+    ensure_private_dir(persist_dir)
+    ensure_private_dir(target.parent)
+    normalized: dict[str, object] = {
+        "timestamp": record["timestamp"],
+        "collection": record["collection"],
+        "source": record["source"],
+        "doc_version": record["doc_version"],
+        "threshold": record["threshold"],
+        "entity_counts": dict(sorted(record["entity_counts"].items())),
+        "actions": dict(sorted(record["actions"].items())),
+        "blocked": bool(record["blocked"]),
+        "mode": record["mode"],
+    }
+    line = json.dumps(normalized, separators=(",", ":")) + "\n"
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as fh:
+        fh.write(line)
+        fh.flush()
+        os.fsync(fh.fileno())
+    with contextlib.suppress(OSError):
+        os.chmod(target, 0o600)
 
 
 def load_manifest(persist_dir: Path, collection: str) -> Manifest:

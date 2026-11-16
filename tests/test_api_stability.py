@@ -27,6 +27,8 @@ EXPECTED_ALL = {
     "MissingCredentialError",
     "MissingExtraError",
     "ModelMismatchError",
+    "PiiBlockedError",
+    "PiiPolicy",
     "RegistryError",
     "RetrievedChunk",
     "SourceRecord",
@@ -43,6 +45,7 @@ EXPECTED_ALL = {
     "register_embedder",
     "register_enricher",
     "register_parser",
+    "register_pii_recognizer",
     "register_reranker",
     "register_searcher",
     "register_store",
@@ -61,10 +64,12 @@ def _params_info(fn: Callable[..., Any]) -> list[tuple[str, inspect._ParameterKi
 
 def test_top_level_all_exports_and_exception_hierarchy() -> None:
     assert set(root.__all__) == EXPECTED_ALL
-    assert len(root.__all__) == 33
+    assert len(root.__all__) == 36
     for name in EXPECTED_ALL:
         assert hasattr(root, name), f"Missing top-level export: {name}"
+    assert callable(root.register_pii_recognizer)
     assert issubclass(root.RegistryError, root.DocpipeError)
+    assert issubclass(root.PiiBlockedError, root.DocpipeError)
 
 
 def test_public_callable_signatures_and_keyword_only_selectors() -> None:
@@ -83,6 +88,8 @@ def test_public_callable_signatures_and_keyword_only_selectors() -> None:
         ("chunker", kw_only, "default"),
         ("embedder", kw_only, "default"),
         ("store", kw_only, "default"),
+        ("pii_policy", kw_only, None),
+        ("local_only", kw_only, False),
     ]
     assert _params_info(root.sync) == [
         ("directory", pos_kw, empty),
@@ -94,6 +101,8 @@ def test_public_callable_signatures_and_keyword_only_selectors() -> None:
         ("chunker", kw_only, "default"),
         ("embedder", kw_only, "default"),
         ("store", kw_only, "default"),
+        ("pii_policy", kw_only, None),
+        ("local_only", kw_only, False),
     ]
     assert _params_info(root.remove) == [
         ("source", pos_kw, empty),
@@ -112,6 +121,7 @@ def test_public_callable_signatures_and_keyword_only_selectors() -> None:
         ("persist_dir", kw_only, DEFAULT_PERSIST_DIR),
         ("embedder", kw_only, "default"),
         ("store", kw_only, "default"),
+        ("local_only", kw_only, False),
     ]
     assert _params_info(root.retrieve) == [
         ("question", pos_kw, empty),
@@ -128,6 +138,7 @@ def test_public_callable_signatures_and_keyword_only_selectors() -> None:
         ("rerank", kw_only, False),
         ("reranker", kw_only, "cross_encoder"),
         ("rerank_top_n", kw_only, DEFAULT_RERANK_TOP_N),
+        ("local_only", kw_only, False),
     ]
     assert _params_info(root.build_prompt) == [
         ("question", pos_kw, empty),
@@ -147,9 +158,32 @@ def test_public_callable_signatures_and_keyword_only_selectors() -> None:
         ("timeout", kw_only, DEFAULT_REQUEST_TIMEOUT),
         ("model_kwargs", kw_only, None),
         ("fail_on_truncation", kw_only, False),
+        ("pii_policy", kw_only, None),
+        ("local_only", kw_only, False),
     ]
     assert _params_info(root.answer) == expected_answer_params
     assert _params_info(root.answer_detailed) == expected_answer_params
+
+    from docpipe_maestro.eval import evaluate
+
+    assert _params_info(evaluate) == [
+        ("fixture", pos_kw, empty),
+        ("collection", kw_only, None),
+        ("persist_dir", kw_only, DEFAULT_PERSIST_DIR),
+        ("embed_model", kw_only, DEFAULT_EMBED_MODEL),
+        ("k_values", kw_only, (1, 3, 5, 10)),
+        ("expand_parent", kw_only, True),
+        ("follow_crossrefs", kw_only, True),
+        ("threshold", kw_only, None),
+        ("embedder", kw_only, "default"),
+        ("store", kw_only, "default"),
+        ("searcher", kw_only, "default"),
+        ("rerank", kw_only, False),
+        ("reranker", kw_only, "cross_encoder"),
+        ("rerank_top_n", kw_only, DEFAULT_RERANK_TOP_N),
+        ("local_only", kw_only, False),
+        ("retrieve_kwargs", inspect.Parameter.VAR_KEYWORD, empty),
+    ]
 
 
 def test_legacy_module_compatibility_reexports_intact() -> None:

@@ -45,6 +45,9 @@ jobs:
       - name: Verify Reverse Safety Gate
         run: uv run pytest -m reverse -v
 
+      - name: Verify PII Safety Gate
+        run: uv run pytest -m pii -v
+
       - name: Run full test suite with coverage
         env:
           LITELLM_LOCAL_MODEL_COST_MAP: "true"

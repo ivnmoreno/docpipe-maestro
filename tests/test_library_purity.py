@@ -127,10 +127,36 @@ def test_phase2_query_does_not_import_phase1_stage_contracts() -> None:
     violations = _find_forbidden_imports(query_files, ("docpipe_maestro.ingest",))
     violations.extend(
         _find_forbidden_imports(
-            [SRC_ROOT / "_crossrefs.py"],
+            [SRC_ROOT / "_crossrefs.py", SRC_ROOT / "_pii.py"],
             ("docpipe_maestro.ingest", "docpipe_maestro.query"),
         )
     )
+    assert violations == []
+
+
+def test_pii_modules_perform_no_config_file_io() -> None:
+    """Principle III guard: PII policy parsing stays strictly inside cli.py."""
+    pii_paths = [
+        SRC_ROOT / "_pii.py",
+        SRC_ROOT / "ingest" / "enricher" / "pii.py",
+        SRC_ROOT / "query" / "egress.py",
+    ]
+    violations: list[str] = []
+    for path in pii_paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        rel = path.relative_to(SRC_ROOT).as_posix()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Attribute) and func.attr in {
+                    "read_text",
+                    "read_bytes",
+                    "load",
+                    "loads",
+                }:
+                    violations.append(f"{rel}:{node.lineno} calls {func.attr}()")
+                elif isinstance(func, ast.Name) and func.id == "open":
+                    violations.append(f"{rel}:{node.lineno} calls open()")
     assert violations == []
 
 
@@ -148,6 +174,9 @@ def test_top_level_register_exports_and_cli_avoid_heavy_deps() -> None:
         "rerank=False, reranker='cross_encoder', rerank_top_n=20) is None; "
         "import docpipe_maestro.cli as cli; "
         "cli.build_parser(); "
+        "assert 'docpipe_maestro._pii' not in sys.modules; "
+        "assert callable(dp.register_pii_recognizer); "
+        "assert 'docpipe_maestro._pii' in sys.modules; "
         "assert 'chromadb' not in sys.modules, 'chromadb loaded eagerly'; "
         "assert 'litellm' not in sys.modules, 'litellm loaded eagerly'; "
         "assert 'pypdf' not in sys.modules, 'pypdf loaded eagerly'; "
@@ -156,6 +185,11 @@ def test_top_level_register_exports_and_cli_avoid_heavy_deps() -> None:
         "assert 'sentence_transformers' not in sys.modules, "
         "'sentence_transformers loaded eagerly'; "
         "assert 'torch' not in sys.modules, 'torch loaded eagerly'; "
+        "assert 'presidio_analyzer' not in sys.modules, 'presidio_analyzer loaded eagerly'; "
+        "assert 'presidio_anonymizer' not in sys.modules, 'presidio_anonymizer loaded eagerly'; "
+        "assert 'spacy' not in sys.modules, 'spacy loaded eagerly'; "
+        "assert 'docpipe_maestro.ingest.enricher.pii' not in sys.modules; "
+        "assert 'docpipe_maestro.query.egress' not in sys.modules; "
         "assert 'docpipe_maestro.query.reranker.cross_encoder' not in sys.modules; "
         "assert 'docpipe_maestro.ingest.enricher.crossrefs' not in sys.modules"
     )

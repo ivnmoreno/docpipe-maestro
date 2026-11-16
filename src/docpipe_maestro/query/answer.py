@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, NoReturn
 
 from docpipe_maestro.config import DEFAULT_GENERATION_MODEL
 from docpipe_maestro.embedder import (
@@ -15,7 +15,8 @@ from docpipe_maestro.embedder import (
     raise_litellm_error,
     validate_api_base,
 )
-from docpipe_maestro.types import DocpipeError, GenerationResult
+from docpipe_maestro.query.egress import guard_egress
+from docpipe_maestro.types import DocpipeError, GenerationResult, PiiPolicy
 
 EMPTY_CONTEXT_REFUSAL = "Not found in the provided context."
 
@@ -131,6 +132,8 @@ def answer_detailed(
     timeout: float = DEFAULT_REQUEST_TIMEOUT,
     model_kwargs: Mapping[str, Any] | None = None,
     fail_on_truncation: bool = False,
+    pii_policy: PiiPolicy | None = None,
+    local_only: bool = False,
 ) -> GenerationResult:
     """Generate a grounded answer plus completion telemetry via LiteLLM.
 
@@ -148,6 +151,9 @@ def answer_detailed(
         model_kwargs: Optional extra provider generation parameters.
         fail_on_truncation: When ``True``, raises ``DocpipeError`` if provider
             reports ``finish_reason == "length"``.
+        pii_policy: Optional PII policy applied at egress for non-local generation
+            targets before sending payloads over the network.
+        local_only: When ``True``, reject non-local generation targets before network I/O.
 
     Returns:
         ``GenerationResult`` containing stripped answer text, truncation flags,
@@ -155,8 +161,9 @@ def answer_detailed(
 
     Raises:
         MissingCredentialError: If the provider rejects missing/invalid API keys.
-        DocpipeError: If validation fails, truncation enforcement trips, or the
-            completion request fails.
+        PiiBlockedError: If egress policy blocks a matched PII entity.
+        DocpipeError: If validation fails, truncation enforcement trips, ``local_only``
+            rejects a remote target, or the completion request fails.
     """
     messages = _normalize_messages(prompt)
     valid_temp, valid_max_tokens, valid_timeout, extra_kwargs = _validate_generation_params(
@@ -164,6 +171,14 @@ def answer_detailed(
         max_tokens=max_tokens,
         timeout=timeout,
         model_kwargs=model_kwargs,
+    )
+
+    messages = guard_egress(
+        messages,
+        model=model,
+        api_base=api_base,
+        pii_policy=pii_policy,
+        local_only=local_only,
     )
 
     if not has_context:
@@ -234,6 +249,8 @@ def answer(
     timeout: float = DEFAULT_REQUEST_TIMEOUT,
     model_kwargs: Mapping[str, Any] | None = None,
     fail_on_truncation: bool = False,
+    pii_policy: PiiPolicy | None = None,
+    local_only: bool = False,
 ) -> str:
     """Generate a grounded answer string from a prompt or role-separated messages.
 
@@ -249,7 +266,59 @@ def answer(
         timeout=timeout,
         model_kwargs=model_kwargs,
         fail_on_truncation=fail_on_truncation,
+        pii_policy=pii_policy,
+        local_only=local_only,
     ).text
+
+
+def _extract_reasoning_tokens(usage: Any) -> int | None:
+    """Extract optional internal reasoning token count from a provider usage object."""
+    if not usage:
+        return None
+    comp_details = _item_field(usage, "completion_tokens_details", None)
+    if comp_details:
+        nested = _opt_int(_item_field(comp_details, "reasoning_tokens", None))
+        if nested is not None:
+            return nested
+    return _opt_int(_item_field(usage, "reasoning_tokens", None))
+
+
+def _raise_empty_response_error(
+    *,
+    model: str,
+    finish_reason: str | None,
+    message: Any,
+    reasoning_tokens: int | None,
+) -> NoReturn:
+    """Raise an explicit truncation/reasoning or empty-response diagnostic."""
+    has_reasoning = bool(
+        (reasoning_tokens is not None and reasoning_tokens > 0)
+        or _item_field(message, "reasoning_content", None)
+        or _item_field(message, "reasoning", None)
+    )
+    reasoning_note = (
+        f"; {reasoning_tokens} reasoning tokens used"
+        if reasoning_tokens is not None and reasoning_tokens > 0
+        else ""
+    )
+    if finish_reason == "length":
+        if has_reasoning:
+            raise DocpipeError(
+                f"Generation model {model!r} output was truncated at max_tokens limit before "
+                f"producing an answer (finish_reason='length'{reasoning_note}). "
+                "Increase or omit max_tokens and retry."
+            )
+        raise DocpipeError(
+            f"Generation model {model!r} output was truncated at max_tokens limit with an "
+            "empty response (finish_reason='length'). Increase or omit max_tokens and retry."
+        )
+    if has_reasoning:
+        raise DocpipeError(
+            f"Generation model {model!r} returned an empty response after reasoning "
+            f"(finish_reason={finish_reason!r}{reasoning_note}). "
+            "Increase or omit max_tokens and retry."
+        )
+    raise DocpipeError(f"Generation model {model!r} returned an empty response.")
 
 
 def _extract_completion_details(
@@ -270,10 +339,6 @@ def _extract_completion_details(
         raise DocpipeError(
             f"Generation model {model!r} refused the request: {str(refusal).strip()}"
         )
-    content = _item_field(message, "content", None)
-    text = str(content).strip() if content is not None else ""
-    if not text:
-        raise DocpipeError(f"Generation model {model!r} returned an empty response.")
 
     raw_finish = _item_field(choice0, "finish_reason", None)
     finish_reason = str(raw_finish).strip() if raw_finish is not None else None
@@ -282,12 +347,16 @@ def _extract_completion_details(
     prompt_tokens = _opt_int(_item_field(usage, "prompt_tokens", None)) if usage else None
     completion_tokens = _opt_int(_item_field(usage, "completion_tokens", None)) if usage else None
     total_tokens = _opt_int(_item_field(usage, "total_tokens", None)) if usage else None
-    reasoning_tokens: int | None = None
-    if usage:
-        comp_details = _item_field(usage, "completion_tokens_details", None)
-        if comp_details:
-            reasoning_tokens = _opt_int(_item_field(comp_details, "reasoning_tokens", None))
-        if reasoning_tokens is None:
-            reasoning_tokens = _opt_int(_item_field(usage, "reasoning_tokens", None))
+    reasoning_tokens = _extract_reasoning_tokens(usage)
+
+    content = _item_field(message, "content", None)
+    text = str(content).strip() if content is not None else ""
+    if not text:
+        _raise_empty_response_error(
+            model=model,
+            finish_reason=finish_reason,
+            message=message,
+            reasoning_tokens=reasoning_tokens,
+        )
 
     return text, finish_reason, prompt_tokens, completion_tokens, reasoning_tokens, total_tokens

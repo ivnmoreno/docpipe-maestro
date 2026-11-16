@@ -28,7 +28,7 @@ All contributions must uphold the guardrails in [`.specify/memory/constitution.m
 
 1. **Scope Discipline:** `docpipe-maestro` is a minimal RAG pipeline library and CLI engine — do not add HTTP servers, auth middleware, session management, or UI layers to `src/docpipe_maestro/`.
 2. **Two-Phase Separation:** Phase 1 ingestion (`ingest/`) writes offline; Phase 2 query (`query/`) treats the vector store as read-only.
-3. **Library Purity:** Only `src/docpipe_maestro/cli.py` may read TOML configuration files. Never introduce a hardcoded provider registry or store credentials outside environment variables.
+3. **Library Purity:** Only `src/docpipe_maestro/cli.py` may read TOML configuration or PII policy files. Never introduce a hardcoded provider registry or store credentials outside environment variables.
 4. **Search Small, Return Big & Exception Preservation:** Match child chunks (`type="child"`) and return deduplicated parent sections (`type="parent"`). Policy rules with exception markers must never lose their exception clauses.
 5. **Single Schema Source:** Define shared dataclasses and TypedDicts once in `src/docpipe_maestro/types.py`.
 
@@ -47,8 +47,9 @@ uv run ruff check --select S src/
 # Strict type checking
 uv run mypy src tests
 
-# Mandatory Reverse Safety Gate & full suite with branch coverage (>= 80%)
+# Mandatory safety gates (Reverse + PII) & full suite with branch coverage (>= 80%)
 uv run pytest -m reverse -v
+uv run pytest -m pii -v
 LITELLM_LOCAL_MODEL_COST_MAP=true uv run pytest -v --cov
 
 # Conventional Commits validation

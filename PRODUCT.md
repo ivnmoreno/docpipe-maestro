@@ -88,9 +88,10 @@ These terms are used throughout this document and should be preserved in the gen
 - Retrieving parent sections in response to a question
 - Constructing prompts from retrieved sections and a question
 - Optionally generating a grounded answer using a language model
+- Enforcing configurable PII redaction/tokenization/blocking pre-chunking (`PiiEnricher`), outbound LLM egress scrubbing (`guard_egress`), `--local-only` privacy mode, and zero-raw-PII audit JSONL logging
 - Exposing a Python library API and a command-line interface
 - Running entirely locally or entirely in the cloud, or in a hybrid configuration
-- Testing, including a dedicated safety test for exception-preservation
+- Testing, including dedicated release gates for exception-preservation (`@pytest.mark.reverse`) and synthetic PII safety (`@pytest.mark.pii`)
 
 ### 5.2 Explicitly Out of Scope (Non-Goals)
 
@@ -121,17 +122,17 @@ The entire library is organized around **two phases that run at different times,
 Runs once per document batch. Triggered when documents are added, updated, or removed. Latency is not critical; correctness is.
 
 ```
-files → intake → clean → crossrefs → chunker → embedder → store
+files → intake → clean → enricher (pii → crossrefs) → chunker → embedder → store + manifest/audit
 ```
 
-**Output:** a populated vector database containing child chunks (with vectors) and parent sections (fetchable by ID).
+**Output:** a populated vector database containing child chunks (with vectors) and parent sections (fetchable by ID), plus optional owner-only `.audit.jsonl` records when a `PiiPolicy` is active.
 
 ### 6.2 Phase 2 — Query (Online)
 
 Runs on every user question. Latency matters. The database is read-only in this phase.
 
 ```
-question → embed → retrieve (match children, return parents) → build prompt → [optional: generate answer]
+question → embed (local_only check) → retrieve (match children, return parents) → build prompt → [optional: egress guard → generate answer]
 ```
 
 **Output:** either a list of relevant parent sections (retrieval-only) or a grounded answer with source attribution (full RAG).
@@ -253,6 +254,10 @@ The system shall manage file updates, deletions, and model consistency through a
 - The system shall not maintain a hardcoded registry of providers. Provider resolution shall be delegated to the unified client library.
 - The system shall define a single default model, which shall be a local model, so that the default configuration requires no API key and no network access to a third-party service.
 
+- The system shall support **`local_only` mode** (`--local-only` on CLI across `ingest`, `sync`, `reindex`, `query`, `ask`, `eval`) rejecting non-local models and non-loopback endpoints prior to any network request.
+- When a `PiiPolicy` is passed programmatically (or via CLI `--pii-policy` on `ingest`, `sync`, `ask`), `PiiEnricher` shall scrub/tokenize/block headings and body text prior to chunking, `guard_egress` shall apply configured PII rules across outbound prompts and ChatML messages for remote providers (`"redact"`/`"block"`/`"allow"`), and Phase 1 runs shall append zero-raw-PII audit entries (`timestamp`, `collection`, `source`, `doc_version`, `threshold`, `entity_counts`, `actions`, `blocked`, `mode`) to `<persist_dir>/manifests/<collection>.audit.jsonl` under `0o700`/`0o600` POSIX permissions.
+- Deterministic built-in recognizers (`EMAIL_ADDRESS`, `IBAN_CODE`, `CREDIT_CARD`, `US_SSN`, `IP_ADDRESS`, `PHONE_NUMBER`, `ES_DNI`) and optional multi-language `[pii]` Presidio NER (`languages`, defaulting to `["en", "es"]`) are technical safeguards with heuristic/statistical false-positive and false-negative trade-offs rather than regulatory certification or exhaustive detection guarantees.
+
 ### 7.4 Command-Line Interface
 
 The system shall provide a CLI aligned with the two-phase model, offering ingestion and corpus lifecycle commands for Phase 1 and retrieval/RAG commands for Phase 2.
@@ -303,6 +308,9 @@ The library shall expose a deliberately minimal public surface (`docpipe_maestro
 | `MissingExtraError` | exception | Raised when an optional format parser dependency is missing |
 | `ModelMismatchError` | exception | Raised when query/ingest embedding model mismatches the collection lock |
 | `MissingCredentialError` | exception | Raised when a required provider credential environment variable is absent |
+| `PiiBlockedError` | exception | Raised when PII `"block"` rules or `egress="block"` halt ingestion or remote generation without exposing raw PII |
+| `PiiPolicy` | type | `TypedDict` controlling per-entity PII actions, confidence thresholds, languages, salt, and egress mode |
+| `register_pii_recognizer` | decorator | Register custom `PiiRecognizer` (`docpipe_maestro.types`) strategies alongside built-in deterministic recognizers |
 | `__version__` | constant | Installed package distribution version string |
 
 ---
@@ -477,6 +485,14 @@ This test shall be run against a fixture policy corpus and shall be treated as a
 
 This test is not a unit test of a single function. It is a **property test of the whole retrieval system**, and it is the primary evidence that the product's central safety claim holds.
 
+### 13.2b Release Gate #2 — Synthetic PII & Egress Safety (`@pytest.mark.pii`)
+
+The system shall include a dedicated mandatory release gate (`tests/test_pii_safety.py`, marked `@pytest.mark.pii`) verifying on purely synthetic fixtures offline:
+
+- Deterministic recognizers, custom `@register_pii_recognizer` plugins, pre-chunking `redact`/`tokenize`/`block` transformations (including headings and child provenance headers), and transactional rollback on `PiiBlockedError` before vector/manifest commit.
+- `local_only` pre-network refusal of remote models/endpoints while allowing local loopback servers, plus outbound `guard_egress` protection for string prompts and role-separated ChatML messages.
+- Owner-only (`0o700`/`0o600`) `.audit.jsonl` generation containing zero raw PII values alongside honest documentation disclosures avoiding unverified legal or accuracy overclaims.
+
 ### 13.3 Static Checks
 
 The project shall run, in CI, at minimum:
@@ -516,6 +532,7 @@ The project shall use a modern build backend with versioning derived from versio
 **Optional extras:**
 
 - Per-format extras for document parsing (`pdf`, `docx`, `html`, or `all`), so that users install only the parsers they need
+- Local neural cross-encoder reranking extra (`rerank` via `sentence-transformers`) and optional multi-language NER PII detection extra (`pii` via `presidio-analyzer` and `presidio-anonymizer`)
 
 **Development dependencies:**
 
@@ -652,17 +669,20 @@ These are explicitly **out of scope for v0.1** but noted for continuity.
 |---|---|---|
 | `__init__.py` | both | Public package exports (`__all__`) |
 | `__main__.py` | both | `python -m docpipe_maestro` entrypoint |
-| `types.py` | both | Shared data shapes and typed exceptions |
+| `types.py` | both | Shared data shapes (`PiiRecognizer`, `PiiPolicy`, `IngestContext`, chunks, manifests) and typed exceptions (`PiiBlockedError`, `DocpipeError`, ...) |
 | `config.py` | both | Chunking profiles and settings defaults as Python constants |
-| `manifest.py` | 1 and 2 | Database-collocated ingestion manifest: hash tracking, `mtime` fast path, 3-way reconciliation, and model lock |
-| `embedder.py` | 1 and 2 | Chunks and queries → vectors |
+| `manifest.py` | 1 and 2 | Database-collocated ingestion manifest: hash tracking, `mtime` fast path, 3-way reconciliation, model lock, and owner-only `.audit.jsonl` writer |
+| `embedder.py` | 1 and 2 | Chunks and queries → vectors and shared `is_local_target` / `enforce_local_only` checks |
 | `store.py` | 1 and 2 | Persist and fetch chunks, vectors, metadata, and transactional version cleanup |
-| `cli.py` | both | Command-line interface; the only module permitted to read a user config file |
+| `cli.py` | both | Command-line interface; the only module permitted to read user TOML config or `--pii-policy` files |
 | `ingest/intake.py` | 1 | File → raw text + structure metadata |
 | `ingest/clean.py` | 1 | Raw text → clean text |
 | `ingest/crossrefs.py` | 1 | Detect and resolve internal references |
 | `ingest/chunker.py` | 1 | Clean text → child chunks + parent sections |
 | `ingest/pipeline.py` | 1 | Orchestrate Phase 1 (`ingest`, `sync`, `remove`, `status`, `reindex`) |
+| `ingest/enricher/` | 1 | Pre-chunking `pii` (`PiiEnricher`) and `crossrefs` (`CrossrefsEnricher`) strategies |
+| `_pii.py` | 1 and 2 | Phase-neutral PII policy validation, built-in/custom recognizers, HMAC tokenization, and optional `[pii]` multi-lang Presidio adapter |
+| `query/egress.py` | 2 | Pre-network `local_only` enforcement and outbound PII egress guard for remote LLMs |
 | `query/retriever.py` | 2 | Question → parent sections or matched child chunks |
 | `query/prompts.py` | 2 | Sections + question → prompt / chat messages |
 | `query/answer.py` | 2 | Prompt + sections → answer / `GenerationResult` (optional to invoke; included in core deps) |

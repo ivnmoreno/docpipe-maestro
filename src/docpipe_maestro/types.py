@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, Protocol, TypedDict, runtime_checkable
 
 ChunkType = Literal["child", "parent"]
 
@@ -36,6 +36,81 @@ class MissingCredentialError(DocpipeError):
 
 class RegistryError(DocpipeError):
     """Raised when stage registration collides on a key or lookup misses a key."""
+
+
+class PiiBlockedError(DocpipeError):
+    """Raised when configured PII protection blocks ingestion or outbound generation."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        entity_counts: dict[str, int] | None = None,
+        actions: dict[str, str] | None = None,
+        blocked_entities: tuple[str, ...] = (),
+        source: str = "",
+        phase: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.entity_counts: dict[str, int] = dict(entity_counts or {})
+        self.actions: dict[str, str] = dict(actions or {})
+        self.blocked_entities: tuple[str, ...] = tuple(blocked_entities)
+        self.source: str = source
+        self.phase: str = phase
+
+
+PiiAction = Literal["redact", "tokenize", "block"]
+EgressAction = Literal["redact", "block", "allow"]
+PiiErrorMode = Literal["fail", "continue"]
+
+
+class PiiPolicy(TypedDict, total=False):
+    """Programmatic policy controlling Phase 1 and Phase 2 PII protection."""
+
+    types: dict[str, PiiAction]
+    min_confidence: float
+    languages: list[str]
+    on_error: PiiErrorMode
+    egress: EgressAction
+    ner: bool
+    token_salt: str
+    token_salt_env: str
+
+
+class PiiDetection(TypedDict):
+    """Ephemeral in-memory span metadata for a detected PII entity."""
+
+    entity_type: str
+    start: int
+    end: int
+    score: float
+    recognizer: str
+
+
+class PiiAuditRecord(TypedDict):
+    """Structured zero-raw-PII audit entry persisted to ``<collection>.audit.jsonl``."""
+
+    timestamp: str
+    collection: str
+    source: str
+    doc_version: str
+    threshold: float
+    entity_counts: dict[str, int]
+    actions: dict[str, str]
+    blocked: bool
+    mode: str
+
+
+@runtime_checkable
+class PiiRecognizer(Protocol):
+    """Strategy contract for deterministic or custom PII entity recognizers."""
+
+    name: str
+    entity_type: str
+    supported_languages: tuple[str, ...]
+
+    def detect(self, text: str, *, languages: tuple[str, ...]) -> list[PiiDetection]:
+        """Return candidate ``PiiDetection`` spans for ``text`` under ``languages``."""
 
 
 @dataclass(slots=True)
@@ -83,6 +158,7 @@ class IngestContext(_IngestContextBase, total=False):
     """Execution context passed to Phase 1 ``Enricher`` stage extensions."""
 
     extra: dict[str, Any]
+    pii_policy: PiiPolicy | None
 
 
 class ChunkMetadata(TypedDict):
