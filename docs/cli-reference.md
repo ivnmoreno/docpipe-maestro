@@ -10,6 +10,7 @@ The `docpipe-maestro` CLI (`docpipe_maestro.cli:main`, also invocable as `python
 usage: docpipe-maestro [-h] [--version] [--config CONFIG] [--no-config]
                        [--collection COLLECTION] [--persist-dir PERSIST_DIR]
                        [--local-only | --no-local-only] [--pii-policy PII_POLICY]
+                       [--log-json] [--log-level {DEBUG,INFO,WARNING,ERROR}]
                        {ingest,sync,status,remove,reindex,query,ask,eval} ...
 ```
 
@@ -21,14 +22,20 @@ usage: docpipe-maestro [-h] [--version] [--config CONFIG] [--no-config]
 | `--persist-dir <path>` | `".docpipe"` | Directory storing `chroma.sqlite3`, `manifests/<collection>.json`, `manifests/<collection>.audit.jsonl`, and `lexical/<collection>.db` |
 | `--local-only` / `--no-local-only` | `False` (or TOML `local_only`) | Refuse non-local models and non-loopback `--api-base` endpoints pre-network across `ingest`, `sync`, `reindex`, `query`, `ask`, and `eval` |
 | `--pii-policy <path>` | `None` (or TOML `pii_policy`) | JSON (`.json`) or TOML (`.toml`) PII policy file parsed strictly in `cli.py` and applied to `ingest`, `sync`, and `ask` (misplaced usage on `status`, `remove`, `reindex`, `query`, or `eval` exits with status `1`) |
+| `--log-json` | `False` (CLI-only) | Emit correlated single-line JSON `stage.end` telemetry to `stderr` (defaults to `INFO` severity unless overridden by `--log-level`), keeping `stdout` clean for `--json` output |
+| `--log-level {DEBUG,INFO,WARNING,ERROR}` | `None` (CLI-only) | Set `stderr` telemetry severity (case-insensitive); when used without `--log-json`, emits concise human-readable diagnostics on `stderr` |
 | `--version` | — | Print `docpipe-maestro <version>` and exit |
 
-All global options (`--config`, `--no-config`, `--collection`, `--persist-dir`, `--local-only` / `--no-local-only`) are attached via a shared parent parser so they work identically **before or after** any subcommand (`--pii-policy` works before or after `ingest`, `sync`, and `ask`):
+All global options (`--config`, `--no-config`, `--collection`, `--persist-dir`, `--local-only` / `--no-local-only`, `--log-json`, `--log-level`) are attached via a shared parent parser so they work identically **before or after** any subcommand (`--pii-policy` works before or after `ingest`, `sync`, and `ask`):
 
 ```bash
 docpipe-maestro --collection hr status --json
 docpipe-maestro status --json --collection hr
+docpipe-maestro --log-json --log-level INFO ingest ./docs 2>ingest.log.jsonl
+docpipe-maestro ask "When is leave allowed?" --json --log-json >ask.out.json 2>ask.log.jsonl
 ```
+
+Telemetry flags are intentionally CLI-only (`docpipe.toml` ignores `log_json` / `log_level` keys so saved collection configs never trigger unexpected diagnostic noise). Handlers attached for a CLI run emit solely to `stderr`, omit raw document text, prompts, questions, answers, raw PII, and tracebacks, and are removed automatically when CLI execution completes.
 
 ---
 

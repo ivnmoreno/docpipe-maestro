@@ -5,7 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import overload
 
+from docpipe_maestro.log import get_logger, stage_event
 from docpipe_maestro.types import DocpipeError, PiiBlockedError, PiiPolicy
+
+logger = get_logger(__name__)
 
 __all__ = ["guard_egress"]
 
@@ -89,47 +92,62 @@ def guard_egress(
         return payload if isinstance(payload, str) else list(normalized_msgs or [])
 
     if isinstance(payload, str):
-        transformed, _, _, _ = evaluate_pii_text(
-            payload,
-            validated,
-            phase="egress",
-            egress_mode=True,
-            raise_on_block=True,
-        )
-        return transformed
+        with stage_event(
+            logger,
+            "egress",
+            egress_mode=validated.egress,
+            message_count=1,
+        ) as ev:
+            transformed, counts, _, _ = evaluate_pii_text(
+                payload,
+                validated,
+                phase="egress",
+                egress_mode=True,
+                raise_on_block=True,
+            )
+            ev["entities_detected"] = sum(counts.values())
+            return transformed
 
     if normalized_msgs is None:
         return []
-    guarded_msgs: list[dict[str, str]] = []
-    agg_counts: dict[str, int] = {}
-    agg_actions: dict[str, str] = {}
-    agg_blocked: set[str] = set()
 
-    for msg in normalized_msgs:
-        new_content, counts, actions, blocked = evaluate_pii_text(
-            msg["content"],
-            validated,
-            phase="egress",
-            egress_mode=True,
-            raise_on_block=False,
-        )
-        for entity, count in counts.items():
-            agg_counts[entity] = agg_counts.get(entity, 0) + count
-        for entity, action in actions.items():
-            if agg_actions.get(entity) != "block":
-                agg_actions[entity] = action
-        agg_blocked.update(blocked)
-        guarded_msgs.append({"role": msg["role"], "content": new_content})
+    with stage_event(
+        logger,
+        "egress",
+        egress_mode=validated.egress,
+        message_count=len(normalized_msgs),
+    ) as ev:
+        guarded_msgs: list[dict[str, str]] = []
+        agg_counts: dict[str, int] = {}
+        agg_actions: dict[str, str] = {}
+        agg_blocked: set[str] = set()
 
-    if agg_blocked:
-        blocked_sorted = tuple(sorted(agg_blocked))
-        raise PiiBlockedError(
-            f"Blocked PII entity type(s) {list(blocked_sorted)!r} during outbound egress.",
-            entity_counts=dict(sorted(agg_counts.items())),
-            actions=dict(sorted(agg_actions.items())),
-            blocked_entities=blocked_sorted,
-            source="",
-            phase="egress",
-        )
+        for msg in normalized_msgs:
+            new_content, counts, actions, blocked = evaluate_pii_text(
+                msg["content"],
+                validated,
+                phase="egress",
+                egress_mode=True,
+                raise_on_block=False,
+            )
+            for entity, count in counts.items():
+                agg_counts[entity] = agg_counts.get(entity, 0) + count
+            for entity, action in actions.items():
+                if agg_actions.get(entity) != "block":
+                    agg_actions[entity] = action
+            agg_blocked.update(blocked)
+            guarded_msgs.append({"role": msg["role"], "content": new_content})
 
-    return guarded_msgs
+        ev["entities_detected"] = sum(agg_counts.values())
+        if agg_blocked:
+            blocked_sorted = tuple(sorted(agg_blocked))
+            raise PiiBlockedError(
+                f"Blocked PII entity type(s) {list(blocked_sorted)!r} during outbound egress.",
+                entity_counts=dict(sorted(agg_counts.items())),
+                actions=dict(sorted(agg_actions.items())),
+                blocked_entities=blocked_sorted,
+                source="",
+                phase="egress",
+            )
+
+        return guarded_msgs

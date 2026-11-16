@@ -22,6 +22,7 @@ from docpipe_maestro.eval.metrics import (
     recall_at_k,
     reciprocal_rank,
 )
+from docpipe_maestro.log import correlation_id
 from docpipe_maestro.manifest import (
     check_model_lock,
     load_manifest,
@@ -269,6 +270,49 @@ def evaluate(
         DocpipeError: If the fixture is invalid, the collection is missing/empty,
             ``where`` filter validation fails, or ``local_only`` blocks a remote target.
     """
+    with correlation_id():
+        return _evaluate_impl(
+            fixture,
+            collection=collection,
+            persist_dir=persist_dir,
+            embed_model=embed_model,
+            k_values=k_values,
+            expand_parent=expand_parent,
+            follow_crossrefs=follow_crossrefs,
+            threshold=threshold,
+            embedder=embedder,
+            store=store,
+            searcher=searcher,
+            rerank=rerank,
+            reranker=reranker,
+            rerank_top_n=rerank_top_n,
+            local_only=local_only,
+            where=where,
+            **retrieve_kwargs,
+        )
+
+
+def _evaluate_impl(
+    fixture: str | Path | EvalFixture,
+    *,
+    collection: str | None,
+    persist_dir: str | Path,
+    embed_model: str,
+    k_values: Sequence[int],
+    expand_parent: bool,
+    follow_crossrefs: bool,
+    threshold: float | None,
+    embedder: str,
+    store: str,
+    searcher: str,
+    rerank: bool,
+    reranker: str,
+    rerank_top_n: int,
+    local_only: bool,
+    where: Mapping[str, Any] | None,
+    **retrieve_kwargs: Any,
+) -> EvalReport:
+    """Execute read-only retrieval evaluation inside an active correlation scope."""
     norm_k = normalize_k_values(k_values)
     norm_threshold = _validate_threshold(threshold)
     if local_only:

@@ -44,6 +44,7 @@ Every file's execution role is visible from the package layout under `src/docpip
 | [`_crossrefs.py`](../src/docpipe_maestro/_crossrefs.py) | Shared | Phase-neutral cross-reference pattern matching, `index_section_targets`, `match_source_key`, and bounded excerpt truncation |
 | [`_filters.py`](../src/docpipe_maestro/_filters.py) | Shared | Phase-neutral `where` filter parser, schema/operator validator, top-level manifest allowlist resolver, Chroma conjunction builder & SQLite SQL compiler |
 | [`_pii.py`](../src/docpipe_maestro/_pii.py) | Shared | Phase-neutral PII policy validation, built-in/custom `PII_RECOGNIZERS`, HMAC tokenization (`tokenize_value`), and lazy multi-lang optional `[pii]` Presidio adapter |
+| [`log.py`](../src/docpipe_maestro/log.py) | Shared | Phase-neutral, stdlib-only structured telemetry (`JsonFormatter`, `TextFormatter`, `get_logger` with `NullHandler`, `ContextVar` `correlation_id()`, and `stage_event` timing) |
 | [`embedder/`](../src/docpipe_maestro/embedder/__init__.py) | Shared | Batched provider-agnostic embeddings via `litellm.embedding` (`batch_size=64`), `is_local_target` / `enforce_local_only`, and auth error normalization |
 | [`manifest.py`](../src/docpipe_maestro/manifest.py) | Shared | Atomic DB-collocated JSON manifest (`sha256`, `mtime`/`size` fast-path, model lock) and owner-only `.audit.jsonl` writer |
 | [`store/chroma.py`](../src/docpipe_maestro/store/chroma.py) | Shared | Embedded `chromadb.PersistentClient` wrapper (`cosine` space, `None` metadata bridge, staging cleanup) |
@@ -199,3 +200,28 @@ ensures matched child clauses bring their complete enclosing rules and exception
 `build_prompt(question, sections)` formats retrieved context strictly offline with source/section/clause/page citations, and `answer(..., has_context=bool(sections))` short-circuits immediately with `"Not found in the provided context."` when retrieval yields no qualifying sections.
 
 For longitudinal quality measurement, [`docpipe_maestro.eval`](../src/docpipe_maestro/eval/__init__.py) evaluates Phase 2 `retrieve()` outputs strictly read-only: `evaluate()` verifies manifest presence, embedding model locks, and committed sources prior to store instantiation so missing collections create zero storage artifacts and valid runs produce `0`-byte persistence drift.
+
+---
+
+## 5. Structured JSON Telemetry & Correlation Tracing (`log.py`)
+
+`docpipe-maestro` provides opt-in, PII-safe structured telemetry through [`src/docpipe_maestro/log.py`](../src/docpipe_maestro/log.py) while upholding strict **Library Purity**:
+
+- **Passive Library Default**: `get_logger()` attaches only a silent `logging.NullHandler` onto the `"docpipe_maestro"` package logger. Calling library entry points never configures or alters the host application's root logger, never writes unsolicited text to `stdout` or `stderr`, and never overrides explicit log thresholds. When no handler matches an event's severity, `stage_event()` short-circuits cleanly via `logger.isEnabledFor(...)`.
+- **Execution-Context Correlation**: All Phase 1 entry points (`ingest`, `sync`, `remove`, `status`, `reindex`), Phase 2 entry points (`retrieve`, `answer_detailed`, `evaluate`), and CLI subcommand dispatches open an async-safe and thread-safe `ContextVar`-backed `correlation_id()` scope. Active outer identifiers are inherited automatically so multi-step operations (such as CLI `ask`, `eval`, or `reindex`) share one UUID `correlation_id` and restore state cleanly in `finally`.
+- **Single-Line JSON Envelope**: `JsonFormatter` renders `{ts, level, logger, msg, correlation_id, fields}` where `ts` is UTC ISO-8601, `correlation_id` is `null` outside active scopes, and all stage attributes live nested inside `fields` (preventing reserved envelope key overwrites) with safe `os.PathLike`/`set`/`tuple` coercion.
+- **Canonical Stage Events (`msg = "stage.end"`)**:
+  - **Phase 1**: `ingest()` and `sync()` emit batch-scoped `INFO` summaries for `intake`, `clean`, `enrich`, `chunk`, `embed`, and `store` (including `docs=0` no-change runs) plus per-document `DEBUG` events for `intake`, `clean`, `enrich`, and `chunk`. `reindex()` emits `embed` + `store`; `remove()` and `status()` emit `store`.
+  - **Phase 2**: `retrieve()` emits `embed` (post-short-circuit), `search`, and conditional `rerank`; `guard_egress()` emits `egress` when active remote PII inspection runs; `answer_detailed()` emits `answer` when completion runs (`has_context=True`).
+- **Privacy & Failure Hygiene**: Both `JsonFormatter` and standalone `TextFormatter` strip `exc_info`/`exc_text` tracebacks. On stage failure, `stage_event()` emits an `ERROR` `stage.end` event recording only `duration_ms`, `status="error"`, and `error_type` (exception class name) before re-raising. Raw documents, chunks, questions, prompts, answers, synthetic/live PII, raw exception messages, and API credentials are never emitted at `INFO` or `DEBUG`.
+
+```python
+import logging
+from docpipe_maestro.log import JsonFormatter, get_logger
+
+logger = get_logger()
+handler = logging.StreamHandler()
+handler.setFormatter(JsonFormatter())
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+```

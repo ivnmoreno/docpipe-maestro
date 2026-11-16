@@ -9,10 +9,13 @@ from typing import Any
 from docpipe_maestro._filters import resolve_retrieve_where
 from docpipe_maestro._stages import Embedder, Store
 from docpipe_maestro.embedder import EMBEDDERS
+from docpipe_maestro.log import get_logger, stage_event
 from docpipe_maestro.manifest import check_model_lock, load_manifest
 from docpipe_maestro.query.searcher import SEARCHERS
 from docpipe_maestro.store import STORES, LexicalIndex
 from docpipe_maestro.types import DocpipeError, RetrievedChunk
+
+logger = get_logger(__name__)
 
 RRF_K = 60
 DENSE_WEIGHT = 0.5
@@ -67,7 +70,14 @@ class Fts5HybridSearcher:
 
         embedder_inst: Embedder = EMBEDDERS.resolve(self._embedder_key)()
         store_cls: type[Store] = STORES.resolve(self._store_key)
-        query_vec = embedder_inst.embed_query(question, model=embed_model)
+        with stage_event(
+            logger,
+            "embed",
+            operation="query",
+            collection=collection,
+            embed_model=embed_model,
+        ):
+            query_vec = embedder_inst.embed_query(question, model=embed_model)
         store_obj: Store = store_cls(persist_path, collection)
 
         dense_hits = store_obj.query_children(

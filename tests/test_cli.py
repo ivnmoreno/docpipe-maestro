@@ -1934,3 +1934,164 @@ def test_cli_where_filtering_and_validation_across_subcommands(
     assert "Error:" in capsys.readouterr().err
     assert len(mock_litellm_offline["embedding"]) == emb_before
     assert len(mock_litellm_offline["completion"]) == comp_before
+
+
+def test_cli_structured_logging_flags_isolation_and_handler_cleanup(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify --log-json/--log-level before/after subcommands, stderr-only logs, and cleanup."""
+    import logging
+
+    from docpipe_maestro.log import get_logger
+
+    corpus = tmp_path / "cli_log_docs"
+    corpus.mkdir()
+    (corpus / "leave.md").write_text(
+        "# Leave Rules\n\n## Section 1\n\n1.1 Full-time staff receive 22 days leave.\n",
+        encoding="utf-8",
+    )
+
+    root_logger = logging.getLogger()
+    root_handlers_before = list(root_logger.handlers)
+    pkg_logger = get_logger()
+    assert pkg_logger.level == logging.NOTSET
+
+    # 1. Invalid --log-level exits cleanly with argparse error.
+    with pytest.raises(SystemExit) as bad_lvl:
+        main(["--no-config", "--log-level", "TRACE", "status"])
+    assert bad_lvl.value.code == 2
+    capsys.readouterr()
+
+    # 2. --log-json before subcommand defaults to INFO (excludes DEBUG per-doc events).
+    rc = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "--collection",
+            "cli_log",
+            "--log-json",
+            "ingest",
+            str(corpus),
+        ]
+    )
+    assert rc == 0
+    cap = capsys.readouterr()
+    assert "Ingested 1 file(s)" in cap.out
+    assert "stage.end" not in cap.out
+    err_lines = [json.loads(line) for line in cap.err.strip().splitlines()]
+    assert [r["fields"]["stage"] for r in err_lines] == [
+        "intake",
+        "clean",
+        "enrich",
+        "chunk",
+        "embed",
+        "store",
+    ]
+    assert all(r["level"] == "INFO" for r in err_lines)
+    assert len({r["correlation_id"] for r in err_lines}) == 1
+
+    # 3. Flags placed AFTER subcommand keep query/ask --json stdout 100% pure JSON.
+    rc_q = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "--collection",
+            "cli_log",
+            "query",
+            "annual leave days",
+            "--json",
+            "--log-json",
+            "--log-level",
+            "debug",
+        ]
+    )
+    assert rc_q == 0
+    cap_q = capsys.readouterr()
+    q_payload = json.loads(cap_q.out)
+    assert q_payload["collection"] == "cli_log"
+    assert len(q_payload["results"]) >= 1
+    q_err = [json.loads(line) for line in cap_q.err.strip().splitlines()]
+    assert [r["fields"]["stage"] for r in q_err] == ["embed", "search"]
+    assert len({r["correlation_id"] for r in q_err}) == 1
+
+    # 4. Multi-step `ask --json` correlates retrieve + answer under one CLI correlation_id.
+    rc_a = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "--collection",
+            "cli_log",
+            "ask",
+            "How many leave days?",
+            "--json",
+            "--log-json",
+        ]
+    )
+    assert rc_a == 0
+    cap_a = capsys.readouterr()
+    a_payload = json.loads(cap_a.out)
+    assert "answer" in a_payload
+    a_err = [json.loads(line) for line in cap_a.err.strip().splitlines()]
+    assert [r["fields"]["stage"] for r in a_err] == ["embed", "search", "answer"]
+    assert len({r["correlation_id"] for r in a_err}) == 1
+
+    # 5. Standalone --log-level (without --log-json) emits human-readable stderr text only.
+    rc_txt = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "--collection",
+            "cli_log",
+            "--log-level",
+            "INFO",
+            "status",
+            "--json",
+        ]
+    )
+    assert rc_txt == 0
+    cap_txt = capsys.readouterr()
+    assert json.loads(cap_txt.out)["collection"] == "cli_log"
+    assert "INFO [" in cap_txt.err
+    assert "stage.end" in cap_txt.err
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(cap_txt.err.strip().splitlines()[0])
+
+    # 6. docpipe.toml log keys (log_json / log_level) are ignored when CLI flags are omitted.
+    cfg_file = tmp_path / "log_ignore.toml"
+    cfg_file.write_text(
+        f'collection = "cli_log"\n'
+        f'persist_dir = "{tmp_persist_dir.as_posix()}"\n'
+        'log_json = true\nlog_level = "DEBUG"\n',
+        encoding="utf-8",
+    )
+    rc_cfg = main(["--config", str(cfg_file), "status", "--json"])
+    assert rc_cfg == 0
+    cap_cfg = capsys.readouterr()
+    assert json.loads(cap_cfg.out)["collection"] == "cli_log"
+    assert cap_cfg.err == ""
+
+    # 7. Repeated calls (and failed exit-1 calls) never leak handlers or mutate root logger.
+    rc_fail = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "--log-json",
+            "query",
+            "x",
+            "--where",
+            "type=parent",
+        ]
+    )
+    assert rc_fail == 1
+    assert "Error:" in capsys.readouterr().err
+    assert [type(h) for h in pkg_logger.handlers] == [logging.NullHandler]
+    assert pkg_logger.level == logging.NOTSET
+    assert list(root_logger.handlers) == root_handlers_before

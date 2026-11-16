@@ -947,3 +947,94 @@ def test_documentation_honest_disclosures_and_zero_overclaims() -> None:
         assert "false negative" in content or "false-negative" in content, (
             f"Expected false-negative disclosure in {rel_path}"
         )
+
+
+def test_pii_and_egress_debug_telemetry_zero_raw_leaks(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Release Gate #2 + Stage 8: DEBUG telemetry logs emit safe stats and zero raw PII."""
+    import io
+
+    from docpipe_maestro.log import JsonFormatter, get_logger
+
+    pkg_logger = get_logger()
+    prev_level = pkg_logger.level
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.setLevel(logging.DEBUG)
+    handler.setFormatter(JsonFormatter())
+    pkg_logger.setLevel(logging.DEBUG)
+    pkg_logger.addHandler(handler)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-gate2-telemetry-secret-42")
+
+    try:
+        corpus = tmp_path / "pii_tel_docs"
+        corpus.mkdir()
+        (corpus / "clean_ok.md").write_text(
+            f"# Contacts\n\nSend receipts to {_SYNTH_EMAIL}.\n",
+            encoding="utf-8",
+        )
+        tokenize_policy: PiiPolicy = {
+            "types": {"EMAIL_ADDRESS": "tokenize", "US_SSN": "block"},
+            "token_salt": "tel-salt-99",
+            "egress": "redact",
+        }
+        ingest(
+            corpus,
+            collection="pii_tel",
+            persist_dir=tmp_persist_dir,
+            embed_model="mock/embed",
+            pii_policy=tokenize_policy,
+        )
+
+        # Blocked SSN triggers ERROR stage.end for enrich without raw SSN leakage.
+        blocked_doc = tmp_path / "blocked_ssn.txt"
+        blocked_doc.write_text(f"Confidential SSN: {_SYNTH_SSN_VALID}\n", encoding="utf-8")
+        with pytest.raises(PiiBlockedError):
+            ingest(
+                blocked_doc,
+                collection="pii_tel",
+                persist_dir=tmp_persist_dir,
+                embed_model="mock/embed",
+                pii_policy=tokenize_policy,
+            )
+
+        # Remote answer egress redact and block flows.
+        hits = retrieve(
+            "contacts receipts",
+            collection="pii_tel",
+            persist_dir=tmp_persist_dir,
+            embed_model="mock/embed",
+        )
+        scrub_msgs = build_chat_messages(f"Reply to {_SYNTH_EMAIL}", hits)
+        answer_detailed(scrub_msgs, model="openai/gpt-4o-mini", pii_policy=tokenize_policy)
+
+        block_msgs = build_chat_messages(f"SSN {_SYNTH_SSN_VALID}", hits)
+        with pytest.raises(PiiBlockedError):
+            answer_detailed(block_msgs, model="openai/gpt-4o-mini", pii_policy=tokenize_policy)
+    finally:
+        pkg_logger.removeHandler(handler)
+        handler.close()
+        pkg_logger.setLevel(prev_level)
+
+    raw_logs = buf.getvalue()
+    parsed = [json.loads(line) for line in raw_logs.strip().splitlines()]
+    stages_seen = {rec["fields"].get("stage") for rec in parsed}
+    assert {"enrich", "egress", "answer"}.issubset(stages_seen)
+    assert any(
+        rec["level"] == "ERROR"
+        and rec["fields"].get("stage") == "enrich"
+        and rec["fields"].get("error_type") == "PiiBlockedError"
+        for rec in parsed
+    )
+    assert any(
+        rec["level"] == "ERROR"
+        and rec["fields"].get("stage") == "egress"
+        and rec["fields"].get("error_type") == "PiiBlockedError"
+        for rec in parsed
+    )
+    for secret in (_SYNTH_EMAIL, _SYNTH_SSN_VALID, "tel-salt-99", "sk-gate2-telemetry-secret-42"):
+        assert secret not in raw_logs

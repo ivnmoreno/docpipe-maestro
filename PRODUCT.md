@@ -279,6 +279,7 @@ The system shall provide a CLI aligned with the two-phase model, offering ingest
 - `query`, `ask`, and `eval` shall accept repeatable `--where KEY=VALUE` metadata filter flags (supporting stored chunk fields as well as manifest-derived `profile` / `ingested_after` / `ingested_before`).
 - `query` shall accept `--expand-parent` / `--no-expand-parent` and `--json` flags.
 - `ask` shall accept a `--model` flag taking a `provider/model` string.
+- All CLI commands shall accept global CLI-only `--log-json` and `--log-level {DEBUG,INFO,WARNING,ERROR}` flags before or after the subcommand name to stream correlated telemetry solely to `stderr` (never read from `docpipe.toml`, keeping `stdout` clean for `--json` output and leaving library defaults silent).
 - The CLI shall be the **only** component permitted to read a user configuration file, if the user supplies one. All library modules shall take configuration via arguments.
 
 ### 7.5 Public Library API
@@ -686,6 +687,7 @@ These are explicitly **out of scope for v0.1** but noted for continuity.
 | `_crossrefs.py` | 1 and 2 | Phase-neutral cross-reference matching, target indexing, and bounded excerpt truncation |
 | `_filters.py` | 1 and 2 | Phase-neutral metadata filter validation, manifest allowlist resolution, Chroma conjunction & SQLite FTS5 SQL compilation |
 | `_pii.py` | 1 and 2 | Phase-neutral PII policy validation, built-in/custom recognizers, HMAC tokenization, and optional `[pii]` multi-lang Presidio adapter |
+| `log.py` | 1 and 2 | Phase-neutral stdlib telemetry (`JsonFormatter`, `TextFormatter`, `get_logger` with passive `NullHandler`, `ContextVar` `correlation_id()`, and `stage_event`) |
 | `query/egress.py` | 2 | Pre-network `local_only` enforcement and outbound PII egress guard for remote LLMs |
 | `query/retriever.py` | 2 | Question → parent sections or matched child chunks |
 | `query/prompts.py` | 2 | Sections + question → prompt / chat messages |

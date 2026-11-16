@@ -498,3 +498,27 @@ from docpipe_maestro.eval import (
   4. Executes `retrieve(..., top_k=max(k_values), rerank=rerank, reranker=reranker, rerank_top_n=rerank_top_n, where=where)` once per query read-only and returns `EvalReport` (`config`, `aggregate`, `per_query`). `EvalConfig` includes `"rerank": True`, `"reranker"`, and `"rerank_top_n"` **only** when `rerank=True` (`total=False` optional fields).
 
 Canonical `TypedDict` schemas (`EvalQuery`, `EvalFixture`, `EvalConfig`, `PerQueryResult`, `EvalMetricsSummary`, `EvalReport`) are defined once in [`src/docpipe_maestro/types.py`](../src/docpipe_maestro/types.py) and re-exported by `docpipe_maestro.eval`.
+
+---
+
+## 7. Structured Logging & Correlation Tracing (`docpipe_maestro.log`)
+
+Stdlib-only telemetry formatting and correlation primitives live in the dedicated [`docpipe_maestro.log`](../src/docpipe_maestro/log.py) submodule (keeping the 36-symbol top-level `docpipe_maestro.__all__` contract unchanged). Library calls emit nothing to `stdout`/`stderr` and never alter the root logger unless the host application explicitly attaches a handler and configures severity on `get_logger()`:
+
+```python
+from docpipe_maestro.log import (
+    LOGGER_NAME,
+    RESERVED_ENVELOPE_KEYS,
+    JsonFormatter,
+    TextFormatter,
+    correlation_id,
+    get_correlation_id,
+    get_logger,
+    stage_event,
+)
+```
+
+- `get_logger(name="docpipe_maestro") -> logging.Logger`: Returns a logger under `"docpipe_maestro"` while guaranteeing a passive `logging.NullHandler` on the package logger without changing log levels or root handlers.
+- `correlation_id(value=None) -> Iterator[str]` & `get_correlation_id() -> str | None`: `ContextVar`-backed trace scope supporting explicit values (rejecting empty/whitespace strings with `ValueError`) or inheriting active outer UUIDs across `asyncio` tasks and threads, resetting deterministically in `finally`.
+- `stage_event(logger, stage, *, log_level=logging.INFO, **fields) -> Iterator[dict[str, Any]]`: Measures elapsed `duration_ms` via `time.perf_counter()`, yields a mutable fields dict for safe counts, short-circuits `LogRecord` emission via `logger.isEnabledFor(...)`, and emits `"stage.end"` at `log_level` (`status="ok"`) or `logging.ERROR` (`status="error"`, `error_type` class name only) before re-raising.
+- `JsonFormatter` / `TextFormatter`: Single-line formatters emitting `{ts, level, logger, msg, correlation_id, fields}` (JSON) or concise text lines (`TextFormatter`), sandboxing stage attributes inside `fields` away from `RESERVED_ENVELOPE_KEYS`, coercing `os.PathLike`/`set`/`tuple` safely, and stripping `exc_info`/`exc_text` tracebacks to prevent secret/PII leakage.

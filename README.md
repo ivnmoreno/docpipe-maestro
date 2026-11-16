@@ -332,12 +332,15 @@ In Python, you can also pass a custom [`ChunkingProfile`](docs/api-reference.md)
 
 ## Quickstart: CLI Usage Guide
 
-Run `docpipe-maestro --help` to see all available subcommands (global flags `--config`, `--collection`, and `--persist-dir` work either **before or after** any subcommand):
+Run `docpipe-maestro --help` to see all available subcommands (global flags such as `--config`, `--no-config`, `--collection`, `--persist-dir`, `--local-only`, `--log-json`, and `--log-level` work either **before or after** any subcommand):
 
 ```text
-usage: docpipe-maestro [-h] [--version] [--config CONFIG]
+usage: docpipe-maestro [-h] [--version] [--config CONFIG] [--no-config]
                        [--collection COLLECTION] [--persist-dir PERSIST_DIR]
-                       {ingest,sync,status,remove,reindex,query,ask} ...
+                       [--local-only | --no-local-only]
+                       [--pii-policy PII_POLICY] [--log-json]
+                       [--log-level {DEBUG,INFO,WARNING,ERROR}]
+                       {ingest,sync,status,remove,reindex,query,ask,eval} ...
 ```
 
 See the full [CLI Reference](docs/cli-reference.md) for all flags, TOML keys, exit codes, and output schemas.
@@ -639,6 +642,7 @@ Exported from `docpipe_maestro` (`docpipe_maestro.types`):
 - **Trusted local corpus assumption**: Like most local ingestion tools, `docpipe-maestro ingest` processes files inside the target directory you specify. Only ingest trusted documents and avoid pointing `ingest`/`sync` at directories containing symlinks to sensitive files or untrusted HTML/PDF inputs.
 - **Credentials & transport security**: API keys are never accepted in `docpipe.toml`; remote custom endpoints require `https://` (`http://` is permitted only for loopback hosts), and error handlers scrub regex key patterns as well as loaded environment secrets (`from None`) so credentials never leak in exceptions.
 - **`--local-only` & outbound PII egress guard**: Pass `--local-only` (`local_only=True`) to reject non-local models and remote `--api-base` URLs prior to network requests. When calling remote LLMs with `pii_policy`, `guard_egress()` scrubs or blocks outbound prompt strings and role-separated ChatML messages before dispatch, and Phase 1 writes zero-raw-PII counts/metadata to `<persist_dir>/manifests/<collection>.audit.jsonl` under `0o700`/`0o600` permissions.
+- **Opt-in structured telemetry (`docpipe_maestro.log` / `--log-json`)**: Library calls stay silent by default (`NullHandler` only on `"docpipe_maestro"`, root logger and `stdout` untouched). CLI flags `--log-json` and `--log-level {DEBUG,INFO,WARNING,ERROR}` (CLI-only; ignored in `docpipe.toml`) stream correlated `stage.end` events exclusively to `stderr` with traceback suppression and zero raw documents, questions, prompts, answers, PII, or credentials at `INFO` or `DEBUG`.
 - **Honest scope & accuracy limitations**: Built-in pattern/checksum recognizers (`EMAIL_ADDRESS`, `IBAN_CODE`, `CREDIT_CARD`, `US_SSN`, `IP_ADDRESS`, `PHONE_NUMBER`, `ES_DNI`) and optional `[pii]` Presidio NER heuristics can experience both false positives and false negatives depending on language, formatting, custom identifiers, and OCR/PDF text noise. These safeguards reduce risk but are technical controls—not a guarantee of exhaustive redaction or regulatory certification. See [SECURITY.md](SECURITY.md) for full threat-model notes.
 - **Reduce hallucinations with `--threshold`**: Set a similarity `--threshold` (e.g. `0.35`–`0.6` depending on embedding model) on `retrieve()` / `docpipe-maestro ask` so off-topic questions return zero matches and short-circuit deterministically (`"Not found in the provided context."`).
 - **Protect your `.docpipe/` store on shared hosts**: Embedded ChromaDB files store plaintext document sections unless scrubbed beforehand; keep `persist_dir` on owner-restricted paths (`chmod 700`) and excluded from version control.
@@ -690,6 +694,7 @@ docpipe-maestro/
 │   ├── _crossrefs.py        # Shared phase-neutral cross-reference matching & excerpt helpers
 │   ├── _filters.py          # Shared phase-neutral metadata filter validation, manifest resolution & SQL compiler
 │   ├── _pii.py              # Shared phase-neutral PII recognizers, HMAC tokenizer & lazy NER
+│   ├── log.py               # Opt-in structured JSON/text telemetry, NullHandler logger & ContextVar correlation IDs
 │   ├── embedder/            # Batched LiteLLM embedding adapter, locality checks & registry
 │   ├── manifest.py          # Atomic sha256/mtime manifest, model lock & .audit.jsonl logger
 │   ├── store/               # ChromaDB vector store (`chroma.py`) & SQLite FTS5 (`lexical.py`)

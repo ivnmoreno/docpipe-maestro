@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,7 @@ from docpipe_maestro.ingest.chunker import CHUNKERS
 from docpipe_maestro.ingest.clean import CLEANERS
 from docpipe_maestro.ingest.enricher import ENRICHERS
 from docpipe_maestro.ingest.stages import Chunker, Cleaner, Enricher
+from docpipe_maestro.log import _emit_stage_end, correlation_id, get_logger, stage_event
 from docpipe_maestro.manifest import (
     append_audit_record,
     check_model_lock,
@@ -47,7 +50,93 @@ from docpipe_maestro.types import (
     UnsupportedFormatError,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+
+@dataclass
+class _BatchStageMetrics:
+    """Cumulative batch timing (ms) and safe counts for Phase 1 stage summaries."""
+
+    intake_ms: float = 0.0
+    clean_ms: float = 0.0
+    enrich_ms: float = 0.0
+    chunk_ms: float = 0.0
+    embed_ms: float = 0.0
+    docs_processed: int = 0
+    sections_parsed: int = 0
+    children_chunked: int = 0
+    parents_chunked: int = 0
+    chunks_embedded: int = 0
+    entities_detected: int = 0
+
+
+def _emit_phase1_prep_summaries(
+    *,
+    collection: str,
+    profile_name: str,
+    embed_model: str,
+    skipped_count: int,
+    metrics: _BatchStageMetrics,
+    pii_active: bool,
+) -> None:
+    """Emit aggregated INFO ``stage.end`` events for Phase 1 batch preparation."""
+    shared = {"collection": collection, "docs": metrics.docs_processed, "skipped": skipped_count}
+    _emit_stage_end(
+        logger,
+        "intake",
+        level=logging.INFO,
+        duration_ms=metrics.intake_ms,
+        status="ok",
+        fields={**shared, "sections": metrics.sections_parsed},
+    )
+    _emit_stage_end(
+        logger,
+        "clean",
+        level=logging.INFO,
+        duration_ms=metrics.clean_ms,
+        status="ok",
+        fields=shared,
+    )
+    enrich_fields: dict[str, Any] = {
+        **shared,
+        "profile": profile_name,
+        "pii_active": pii_active,
+    }
+    if pii_active:
+        enrich_fields["entities_detected"] = metrics.entities_detected
+    _emit_stage_end(
+        logger,
+        "enrich",
+        level=logging.INFO,
+        duration_ms=metrics.enrich_ms,
+        status="ok",
+        fields=enrich_fields,
+    )
+    _emit_stage_end(
+        logger,
+        "chunk",
+        level=logging.INFO,
+        duration_ms=metrics.chunk_ms,
+        status="ok",
+        fields={
+            **shared,
+            "profile": profile_name,
+            "children": metrics.children_chunked,
+            "parents": metrics.parents_chunked,
+        },
+    )
+    _emit_stage_end(
+        logger,
+        "embed",
+        level=logging.INFO,
+        duration_ms=metrics.embed_ms,
+        status="ok",
+        fields={
+            **shared,
+            "embed_model": embed_model,
+            "chunks": metrics.chunks_embedded,
+        },
+    )
 
 
 def _is_within(path: Path, parent: Path) -> bool:
@@ -180,13 +269,41 @@ def _extract_document_chunks(
     audit_threshold: float | None = None,
     persist_path: Path | None = None,
     audit_mode: str | None = None,
+    metrics: _BatchStageMetrics | None = None,
 ) -> tuple[str, str, list[Chunk], PiiAuditRecord | None]:
     """Parse, clean, enrich, and chunk a changed source document."""
     if content_hash is None:
         raise DocpipeError(f"Missing content hash for non-unchanged file: {source_key}")
     doc_version = content_hash.split(":", 1)[1][:12]
-    parsed: ParsedDocument = resolve_parser(file_path).parse(file_path, source_key=source_key)
-    cleaned = cleaner.clean(parsed)
+
+    t_in = time.perf_counter()
+    with stage_event(
+        logger,
+        "intake",
+        log_level=logging.DEBUG,
+        collection=collection,
+        source=source_key,
+    ) as intake_ev:
+        parsed: ParsedDocument = resolve_parser(file_path).parse(file_path, source_key=source_key)
+        intake_ev["sections"] = len(parsed.sections)
+    if metrics is not None:
+        metrics.intake_ms += (time.perf_counter() - t_in) * 1000.0
+        metrics.docs_processed += 1
+        metrics.sections_parsed += len(parsed.sections)
+
+    t_cl = time.perf_counter()
+    with stage_event(
+        logger,
+        "clean",
+        log_level=logging.DEBUG,
+        collection=collection,
+        source=source_key,
+    ) as clean_ev:
+        cleaned = cleaner.clean(parsed)
+        clean_ev["sections"] = len(cleaned.sections)
+    if metrics is not None:
+        metrics.clean_ms += (time.perf_counter() - t_cl) * 1000.0
+
     extra: dict[str, Any] = {}
     ctx: IngestContext = {
         "collection": collection,
@@ -201,30 +318,66 @@ def _extract_document_chunks(
         ctx["pii_policy"] = pii_policy
 
     fallback_thresh = audit_threshold if audit_threshold is not None else 0.5
-    try:
-        enriched = _apply_enrichers(cleaned, enrichers, ctx)
-    except PiiBlockedError as exc:
-        if pii_policy is not None and persist_path is not None and audit_mode is not None:
-            resolved_thresh, _, _ = _extract_audit_fields(extra, fallback_thresh)
-            blocked_record = _build_pii_audit_record(
-                collection=collection,
-                source_key=source_key,
-                doc_version=doc_version,
-                threshold=resolved_thresh,
-                entity_counts=exc.entity_counts,
-                actions=exc.actions,
-                blocked=True,
-                mode=audit_mode,
-            )
-            append_audit_record(persist_path, collection, blocked_record)
-        raise
+    t_en = time.perf_counter()
+    with stage_event(
+        logger,
+        "enrich",
+        log_level=logging.DEBUG,
+        collection=collection,
+        source=source_key,
+        profile=profile.name,
+        pii_active=pii_policy is not None,
+    ) as enrich_ev:
+        try:
+            enriched = _apply_enrichers(cleaned, enrichers, ctx)
+        except PiiBlockedError as exc:
+            if pii_policy is not None and persist_path is not None and audit_mode is not None:
+                resolved_thresh, _, _ = _extract_audit_fields(extra, fallback_thresh)
+                blocked_record = _build_pii_audit_record(
+                    collection=collection,
+                    source_key=source_key,
+                    doc_version=doc_version,
+                    threshold=resolved_thresh,
+                    entity_counts=exc.entity_counts,
+                    actions=exc.actions,
+                    blocked=True,
+                    mode=audit_mode,
+                )
+                append_audit_record(persist_path, collection, blocked_record)
+            raise
+        if pii_policy is not None:
+            _, pre_counts, _ = _extract_audit_fields(extra, fallback_thresh)
+            detected = sum(pre_counts.values())
+            enrich_ev["entities_detected"] = detected
+            if metrics is not None:
+                metrics.entities_detected += detected
+    if metrics is not None:
+        metrics.enrich_ms += (time.perf_counter() - t_en) * 1000.0
 
-    chunks = chunker.chunk(
-        enriched,
-        profile=profile,
-        doc_version=doc_version,
-        embed_model=embed_model,
-    )
+    t_ch = time.perf_counter()
+    with stage_event(
+        logger,
+        "chunk",
+        log_level=logging.DEBUG,
+        collection=collection,
+        source=source_key,
+        profile=profile.name,
+    ) as chunk_ev:
+        chunks = chunker.chunk(
+            enriched,
+            profile=profile,
+            doc_version=doc_version,
+            embed_model=embed_model,
+        )
+        child_cnt = sum(1 for c in chunks if c.metadata["type"] == "child")
+        parent_cnt = sum(1 for c in chunks if c.metadata["type"] == "parent")
+        chunk_ev["children"] = child_cnt
+        chunk_ev["parents"] = parent_cnt
+    if metrics is not None:
+        metrics.chunk_ms += (time.perf_counter() - t_ch) * 1000.0
+        metrics.children_chunked += child_cnt
+        metrics.parents_chunked += parent_cnt
+
     audit_record: PiiAuditRecord | None = None
     if pii_policy is not None and audit_mode is not None:
         resolved_thresh, counts, actions = _extract_audit_fields(extra, fallback_thresh)
@@ -246,15 +399,31 @@ def _embed_document_chunks(
     *,
     embedder_inst: Embedder,
     embed_model: str,
+    collection: str = "",
+    metrics: _BatchStageMetrics | None = None,
 ) -> tuple[list[EmbeddedChunk], int]:
     """Embed all child chunks in memory and attach zero vectors to parent sections."""
     child_chunks = [c for c in chunks if c.metadata["type"] == "child"]
     parent_chunks = [c for c in chunks if c.metadata["type"] == "parent"]
 
-    child_vectors = embedder_inst.embed_texts([c.text for c in child_chunks], model=embed_model)
-    if not child_vectors:
-        return [], 0
-    dim = len(child_vectors[0])
+    t_em = time.perf_counter()
+    with stage_event(
+        logger,
+        "embed",
+        log_level=logging.DEBUG,
+        collection=collection,
+        embed_model=embed_model,
+        chunks=len(child_chunks),
+    ) as embed_ev:
+        child_vectors = embedder_inst.embed_texts([c.text for c in child_chunks], model=embed_model)
+        if not child_vectors:
+            embed_ev["dim"] = 0
+            return [], 0
+        dim = len(child_vectors[0])
+        embed_ev["dim"] = dim
+    if metrics is not None:
+        metrics.embed_ms += (time.perf_counter() - t_em) * 1000.0
+        metrics.chunks_embedded += len(child_chunks)
     zero_vec = [0.0] * dim
 
     embedded: list[EmbeddedChunk] = []
@@ -332,6 +501,39 @@ def ingest(
         RegistryError: If any requested stage key is unregistered.
         DocpipeError: If embedding, ``local_only``, or store initialization fails.
     """
+    with correlation_id():
+        return _ingest_impl(
+            path,
+            profile=profile,
+            collection=collection,
+            persist_dir=persist_dir,
+            embed_model=embed_model,
+            force=force,
+            cleaner=cleaner,
+            chunker=chunker,
+            embedder=embedder,
+            store=store,
+            pii_policy=pii_policy,
+            local_only=local_only,
+        )
+
+
+def _ingest_impl(
+    path: str | Path,
+    *,
+    profile: str | ChunkingProfile,
+    collection: str,
+    persist_dir: str | Path,
+    embed_model: str,
+    force: bool,
+    cleaner: str,
+    chunker: str,
+    embedder: str,
+    store: str,
+    pii_policy: PiiPolicy | None,
+    local_only: bool,
+) -> IngestResult:
+    """Execute atomic batch ingestion inside an active correlation scope."""
     if local_only:
         from docpipe_maestro.embedder import enforce_local_only
 
@@ -360,6 +562,7 @@ def ingest(
     store_cls: type[Store] = STORES.resolve(store)
 
     # Atomic batch validation & in-memory parsing/chunking/embedding before touching the DB
+    metrics = _BatchStageMetrics()
     staged_docs: list[tuple[str, str, str, int, float, list[EmbeddedChunk], int]] = []
     staged_audits: dict[str, PiiAuditRecord] = {}
     skipped: list[str] = []
@@ -392,63 +595,86 @@ def ingest(
             audit_threshold=audit_threshold,
             persist_path=persist_path,
             audit_mode="ingest",
+            metrics=metrics,
         )
         embedded, dim = _embed_document_chunks(
             chunks,
             embedder_inst=embedder_inst,
             embed_model=embed_model,
+            collection=collection,
+            metrics=metrics,
         )
         staged_docs.append((source_key, content_hash, doc_version, size, mtime, embedded, dim))
         if audit_record is not None:
             staged_audits[source_key] = audit_record
 
-    if manifest_dirty and not staged_docs:
-        save_manifest(persist_path, manifest)
-
-    store_obj: Store = store_cls(persist_path, collection)
-    lexical = LexicalIndex(persist_path, collection)
-    active_versions = {k: v.doc_version for k, v in manifest.sources.items()}
-    store_obj.sweep_uncommitted(active_versions)
-    lexical.sweep_uncommitted(active_versions)
+    _emit_phase1_prep_summaries(
+        collection=collection,
+        profile_name=prof.name,
+        embed_model=embed_model,
+        skipped_count=len(skipped),
+        metrics=metrics,
+        pii_active=pii_policy is not None,
+    )
 
     ingested: list[str] = []
     chunks_written = 0
     parents_written = 0
 
-    for source_key, content_hash, doc_version, size, mtime, embedded, dim in staged_docs:
-        store_obj.add_chunks(embedded)
-        lexical.add_chunks(embedded)
+    with stage_event(
+        logger,
+        "store",
+        operation="ingest",
+        collection=collection,
+        skipped=len(skipped),
+    ) as store_ev:
+        if manifest_dirty and not staged_docs:
+            save_manifest(persist_path, manifest)
 
-        child_ids = [c.id for c in embedded if c.metadata["type"] == "child"]
-        parent_ids = [c.id for c in embedded if c.metadata["type"] == "parent"]
+        store_obj: Store = store_cls(persist_path, collection)
+        lexical = LexicalIndex(persist_path, collection)
+        active_versions = {k: v.doc_version for k, v in manifest.sources.items()}
+        store_obj.sweep_uncommitted(active_versions)
+        lexical.sweep_uncommitted(active_versions)
 
-        if manifest.embed_model is None:
-            manifest.embed_model = embed_model
-        if manifest.embed_dim is None and dim > 0:
-            manifest.embed_dim = dim
+        for source_key, content_hash, doc_version, size, mtime, embedded, dim in staged_docs:
+            store_obj.add_chunks(embedded)
+            lexical.add_chunks(embedded)
 
-        manifest.sources[source_key] = SourceRecord(
-            source=source_key,
-            content_hash=content_hash,
-            doc_version=doc_version,
-            size=size,
-            mtime=mtime,
-            ingested_at=datetime.now(timezone.utc).isoformat(),
-            embed_model=embed_model,
-            profile=prof.name,
-            chunk_ids=child_ids,
-            parent_ids=parent_ids,
-        )
-        save_manifest(persist_path, manifest)
-        staged_audit = staged_audits.get(source_key)
-        if staged_audit is not None:
-            append_audit_record(persist_path, collection, staged_audit)
-        store_obj.delete_stale_versions(source_key, doc_version)
-        lexical.delete_stale_versions(source_key, doc_version)
+            child_ids = [c.id for c in embedded if c.metadata["type"] == "child"]
+            parent_ids = [c.id for c in embedded if c.metadata["type"] == "parent"]
 
-        ingested.append(source_key)
-        chunks_written += len(child_ids)
-        parents_written += len(parent_ids)
+            if manifest.embed_model is None:
+                manifest.embed_model = embed_model
+            if manifest.embed_dim is None and dim > 0:
+                manifest.embed_dim = dim
+
+            manifest.sources[source_key] = SourceRecord(
+                source=source_key,
+                content_hash=content_hash,
+                doc_version=doc_version,
+                size=size,
+                mtime=mtime,
+                ingested_at=datetime.now(timezone.utc).isoformat(),
+                embed_model=embed_model,
+                profile=prof.name,
+                chunk_ids=child_ids,
+                parent_ids=parent_ids,
+            )
+            save_manifest(persist_path, manifest)
+            staged_audit = staged_audits.get(source_key)
+            if staged_audit is not None:
+                append_audit_record(persist_path, collection, staged_audit)
+            store_obj.delete_stale_versions(source_key, doc_version)
+            lexical.delete_stale_versions(source_key, doc_version)
+
+            ingested.append(source_key)
+            chunks_written += len(child_ids)
+            parents_written += len(parent_ids)
+
+        store_ev["ingested"] = len(ingested)
+        store_ev["children"] = chunks_written
+        store_ev["parents"] = parents_written
 
     return IngestResult(
         collection=collection,
@@ -508,6 +734,37 @@ def sync(
         RegistryError: If any requested stage key is unregistered.
         DocpipeError: If embedding, ``local_only``, or store operations fail.
     """
+    with correlation_id():
+        return _sync_impl(
+            directory,
+            profile=profile,
+            collection=collection,
+            persist_dir=persist_dir,
+            embed_model=embed_model,
+            cleaner=cleaner,
+            chunker=chunker,
+            embedder=embedder,
+            store=store,
+            pii_policy=pii_policy,
+            local_only=local_only,
+        )
+
+
+def _sync_impl(
+    directory: str | Path,
+    *,
+    profile: str | ChunkingProfile,
+    collection: str,
+    persist_dir: str | Path,
+    embed_model: str,
+    cleaner: str,
+    chunker: str,
+    embedder: str,
+    store: str,
+    pii_policy: PiiPolicy | None,
+    local_only: bool,
+) -> SyncResult:
+    """Execute three-way directory reconciliation inside an active correlation scope."""
     if local_only:
         from docpipe_maestro.embedder import enforce_local_only
 
@@ -539,6 +796,7 @@ def sync(
     embedder_inst: Embedder = EMBEDDERS.resolve(embedder)()
     store_cls: type[Store] = STORES.resolve(store)
 
+    metrics = _BatchStageMetrics()
     staged_docs: list[tuple[str, str, str, str, int, float, list[EmbeddedChunk], int]] = []
     staged_audits: dict[str, PiiAuditRecord] = {}
     skipped: list[str] = []
@@ -569,11 +827,14 @@ def sync(
             audit_threshold=audit_threshold,
             persist_path=persist_path,
             audit_mode="sync",
+            metrics=metrics,
         )
         embedded, dim = _embed_document_chunks(
             chunks,
             embedder_inst=embedder_inst,
             embed_model=embed_model,
+            collection=collection,
+            metrics=metrics,
         )
         staged_docs.append(
             (status_flag, source_key, content_hash, doc_version, size, mtime, embedded, dim)
@@ -581,68 +842,88 @@ def sync(
         if audit_record is not None:
             staged_audits[source_key] = audit_record
 
-    store_obj: Store = store_cls(persist_path, collection)
-    lexical = LexicalIndex(persist_path, collection)
-    active_versions = {k: v.doc_version for k, v in manifest.sources.items()}
-    store_obj.sweep_uncommitted(active_versions)
-    lexical.sweep_uncommitted(active_versions)
+    _emit_phase1_prep_summaries(
+        collection=collection,
+        profile_name=prof.name,
+        embed_model=embed_model,
+        skipped_count=len(skipped),
+        metrics=metrics,
+        pii_active=pii_policy is not None,
+    )
 
     added: list[str] = []
     updated: list[str] = []
 
-    for (
-        doc_status,
-        source_key,
-        content_hash,
-        doc_version,
-        size,
-        mtime,
-        embedded,
-        dim,
-    ) in staged_docs:
-        store_obj.add_chunks(embedded)
-        lexical.add_chunks(embedded)
-        child_ids = [c.id for c in embedded if c.metadata["type"] == "child"]
-        parent_ids = [c.id for c in embedded if c.metadata["type"] == "parent"]
+    with stage_event(
+        logger,
+        "store",
+        operation="sync",
+        collection=collection,
+        skipped=len(skipped),
+    ) as store_ev:
+        store_obj: Store = store_cls(persist_path, collection)
+        lexical = LexicalIndex(persist_path, collection)
+        active_versions = {k: v.doc_version for k, v in manifest.sources.items()}
+        store_obj.sweep_uncommitted(active_versions)
+        lexical.sweep_uncommitted(active_versions)
 
-        if manifest.embed_model is None:
-            manifest.embed_model = embed_model
-        if manifest.embed_dim is None and dim > 0:
-            manifest.embed_dim = dim
+        for (
+            doc_status,
+            source_key,
+            content_hash,
+            doc_version,
+            size,
+            mtime,
+            embedded,
+            dim,
+        ) in staged_docs:
+            store_obj.add_chunks(embedded)
+            lexical.add_chunks(embedded)
+            child_ids = [c.id for c in embedded if c.metadata["type"] == "child"]
+            parent_ids = [c.id for c in embedded if c.metadata["type"] == "parent"]
 
-        manifest.sources[source_key] = SourceRecord(
-            source=source_key,
-            content_hash=content_hash,
-            doc_version=doc_version,
-            size=size,
-            mtime=mtime,
-            ingested_at=datetime.now(timezone.utc).isoformat(),
-            embed_model=embed_model,
-            profile=prof.name,
-            chunk_ids=child_ids,
-            parent_ids=parent_ids,
-        )
-        save_manifest(persist_path, manifest)
-        staged_audit = staged_audits.get(source_key)
-        if staged_audit is not None:
-            append_audit_record(persist_path, collection, staged_audit)
-        store_obj.delete_stale_versions(source_key, doc_version)
-        lexical.delete_stale_versions(source_key, doc_version)
+            if manifest.embed_model is None:
+                manifest.embed_model = embed_model
+            if manifest.embed_dim is None and dim > 0:
+                manifest.embed_dim = dim
 
-        if doc_status == "new":
-            added.append(source_key)
-        else:
-            updated.append(source_key)
+            manifest.sources[source_key] = SourceRecord(
+                source=source_key,
+                content_hash=content_hash,
+                doc_version=doc_version,
+                size=size,
+                mtime=mtime,
+                ingested_at=datetime.now(timezone.utc).isoformat(),
+                embed_model=embed_model,
+                profile=prof.name,
+                chunk_ids=child_ids,
+                parent_ids=parent_ids,
+            )
+            save_manifest(persist_path, manifest)
+            staged_audit = staged_audits.get(source_key)
+            if staged_audit is not None:
+                append_audit_record(persist_path, collection, staged_audit)
+            store_obj.delete_stale_versions(source_key, doc_version)
+            lexical.delete_stale_versions(source_key, doc_version)
 
-    for source_key in removed_keys:
-        store_obj.delete_by_source(source_key)
-        if lexical.exists():
-            lexical.delete_by_source(source_key)
-        manifest.sources.pop(source_key, None)
-        manifest_dirty = True
+            if doc_status == "new":
+                added.append(source_key)
+            else:
+                updated.append(source_key)
 
-    if manifest_dirty:
-        save_manifest(persist_path, manifest)
+        for source_key in removed_keys:
+            store_obj.delete_by_source(source_key)
+            if lexical.exists():
+                lexical.delete_by_source(source_key)
+            manifest.sources.pop(source_key, None)
+            manifest_dirty = True
+
+        if manifest_dirty:
+            save_manifest(persist_path, manifest)
+
+        store_ev["added"] = len(added)
+        store_ev["updated"] = len(updated)
+        store_ev["removed"] = len(removed_keys)
 
     return SyncResult(
         collection=collection,
@@ -672,22 +953,32 @@ def remove(
     Returns:
         ``True`` if the source existed and was purged, ``False`` otherwise.
     """
-    if store != "default":
-        STORES.resolve(store)
-    source_key = Path(source).as_posix()
-    persist_path = Path(persist_dir)
-    manifest = load_manifest(persist_path, collection)
-    if source_key not in manifest.sources:
-        return False
+    with correlation_id():
+        if store != "default":
+            STORES.resolve(store)
+        source_key = Path(source).as_posix()
+        persist_path = Path(persist_dir)
+        with stage_event(
+            logger,
+            "store",
+            operation="remove",
+            collection=collection,
+            source=source_key,
+        ) as store_ev:
+            manifest = load_manifest(persist_path, collection)
+            if source_key not in manifest.sources:
+                store_ev["removed"] = False
+                return False
 
-    store_obj: Store = STORES.resolve(store)(persist_path, collection)
-    store_obj.delete_by_source(source_key)
-    lexical = LexicalIndex(persist_path, collection)
-    if lexical.exists():
-        lexical.delete_by_source(source_key)
-    manifest.sources.pop(source_key)
-    save_manifest(persist_path, manifest)
-    return True
+            store_obj: Store = STORES.resolve(store)(persist_path, collection)
+            store_obj.delete_by_source(source_key)
+            lexical = LexicalIndex(persist_path, collection)
+            if lexical.exists():
+                lexical.delete_by_source(source_key)
+            manifest.sources.pop(source_key)
+            save_manifest(persist_path, manifest)
+            store_ev["removed"] = True
+            return True
 
 
 def status(
@@ -709,21 +1000,26 @@ def status(
         ``CollectionStatus`` containing locked model metadata, aggregate child
         and parent counts, and sorted per-source ``SourceRecord`` entries.
     """
-    if store != "default":
-        STORES.resolve(store)
-    manifest = load_manifest(Path(persist_dir), collection)
-    sources = sorted(manifest.sources.values(), key=lambda s: s.source)
-    total_children = sum(len(s.chunk_ids) for s in sources)
-    total_parents = sum(len(s.parent_ids) for s in sources)
-    return CollectionStatus(
-        collection=manifest.collection,
-        embed_model=manifest.embed_model,
-        embed_dim=manifest.embed_dim,
-        total_sources=len(sources),
-        total_children=total_children,
-        total_parents=total_parents,
-        sources=sources,
-    )
+    with correlation_id():
+        if store != "default":
+            STORES.resolve(store)
+        with stage_event(logger, "store", operation="status", collection=collection) as store_ev:
+            manifest = load_manifest(Path(persist_dir), collection)
+            sources = sorted(manifest.sources.values(), key=lambda s: s.source)
+            total_children = sum(len(s.chunk_ids) for s in sources)
+            total_parents = sum(len(s.parent_ids) for s in sources)
+            store_ev["sources"] = len(sources)
+            store_ev["children"] = total_children
+            store_ev["parents"] = total_parents
+            return CollectionStatus(
+                collection=manifest.collection,
+                embed_model=manifest.embed_model,
+                embed_dim=manifest.embed_dim,
+                total_sources=len(sources),
+                total_children=total_children,
+                total_parents=total_parents,
+                sources=sources,
+            )
 
 
 def reindex(
@@ -757,6 +1053,27 @@ def reindex(
         RegistryError: If ``embedder`` or ``store`` is unregistered.
         DocpipeError: If embedding, ``local_only``, or collection recreation fails.
     """
+    with correlation_id():
+        return _reindex_impl(
+            embed_model=embed_model,
+            collection=collection,
+            persist_dir=persist_dir,
+            embedder=embedder,
+            store=store,
+            local_only=local_only,
+        )
+
+
+def _reindex_impl(
+    *,
+    embed_model: str,
+    collection: str,
+    persist_dir: str | Path,
+    embedder: str,
+    store: str,
+    local_only: bool,
+) -> int:
+    """Execute full collection re-embedding inside an active correlation scope."""
     if local_only:
         from docpipe_maestro.embedder import enforce_local_only
 
@@ -780,14 +1097,31 @@ def reindex(
     ]
 
     if not children:
-        manifest.embed_model = embed_model
-        manifest.embed_dim = None
-        save_manifest(persist_path, manifest)
+        with stage_event(
+            logger,
+            "store",
+            operation="reindex",
+            collection=collection,
+            chunks=0,
+            parents=len(parents),
+        ):
+            manifest.embed_model = embed_model
+            manifest.embed_dim = None
+            save_manifest(persist_path, manifest)
         return 0
 
     # Embed all children in memory before mutating store or manifest
-    new_vectors = embedder_inst.embed_texts([c.text for c in children], model=embed_model)
-    new_dim = len(new_vectors[0])
+    with stage_event(
+        logger,
+        "embed",
+        operation="reindex",
+        collection=collection,
+        embed_model=embed_model,
+        chunks=len(children),
+    ) as embed_ev:
+        new_vectors = embedder_inst.embed_texts([c.text for c in children], model=embed_model)
+        new_dim = len(new_vectors[0])
+        embed_ev["dim"] = new_dim
     zero_vec = [0.0] * new_dim
 
     rebuilt: list[EmbeddedChunk] = []
@@ -820,17 +1154,25 @@ def reindex(
             )
         )
 
-    store_obj.reset_collection()
-    store_obj.add_chunks(rebuilt)
-    lexical = LexicalIndex(persist_path, collection)
-    lexical.reset()
-    lexical.add_chunks(rebuilt)
+    with stage_event(
+        logger,
+        "store",
+        operation="reindex",
+        collection=collection,
+        chunks=len(children),
+        parents=len(parents),
+    ):
+        store_obj.reset_collection()
+        store_obj.add_chunks(rebuilt)
+        lexical = LexicalIndex(persist_path, collection)
+        lexical.reset()
+        lexical.add_chunks(rebuilt)
 
-    manifest.embed_model = embed_model
-    manifest.embed_dim = new_dim
-    now_iso = datetime.now(timezone.utc).isoformat()
-    for rec in manifest.sources.values():
-        rec.embed_model = embed_model
-        rec.ingested_at = now_iso
-    save_manifest(persist_path, manifest)
+        manifest.embed_model = embed_model
+        manifest.embed_dim = new_dim
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for rec in manifest.sources.values():
+            rec.embed_model = embed_model
+            rec.ingested_at = now_iso
+        save_manifest(persist_path, manifest)
     return len(children)

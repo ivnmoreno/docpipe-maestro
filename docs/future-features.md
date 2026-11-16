@@ -150,11 +150,11 @@ This document aggregates all architectural suggestions, deferred backlog items, 
   - Add `--dry-run` flag to `docpipe-maestro sync` and `docpipe-maestro reindex`.
   - Output summary report: number of new files, modified files, deleted files, estimated tokens, and estimated cost without making database or API changes.
 
-### 8.2 Progress Hooks & OpenTelemetry Tracing
-- **Problem**: Long ingestion runs provide limited progress visibility in programmatic environments.
-- **Proposed Upgrade**:
+### 8.2 Progress Hooks & OpenTelemetry Tracing — *Built-In JSON Stage Logging Implemented (`011-structured-logging`); OTel Export Post-v0.1*
+- **Implemented (`011-structured-logging`)**: Stdlib-only `docpipe_maestro.log` (`JsonFormatter`, `correlation_id()`, `stage_event()`, passive `NullHandler` default) plus CLI `--log-json` / `--log-level` on `stderr`.
+- **Remaining Proposed Upgrade (Post-v0.1)**:
   - Add optional progress callbacks to `ingest()` and `sync()`.
-  - Add optional OpenTelemetry spans for tracing chunking, embedding latency, and retrieval times in production monitoring systems.
+  - Add optional OpenTelemetry exporter spans bridging built-in `stage_event()` timings in production monitoring systems.
 
 ---
 
