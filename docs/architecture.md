@@ -12,7 +12,7 @@ This document explains how **`docpipe-maestro`** processes documents from raw fi
 flowchart LR
     subgraph P1["Phase 1: Offline Ingestion & Sync (ingest/)"]
         direction LR
-        F["Files (.md, .txt, .pdf, .docx, .html)"] --> I["intake/\n(Format + Headings)"]
+        F["Files (.md, .txt, .csv/.tsv, .pdf, .docx, .html, .xlsx, .pptx, .epub, .rst)"] --> I["intake/\n(Format + Structure)"]
         I --> C["clean/\n(HTML/Whitespace/Boilerplate)"]
         C --> X["enricher/\n(pii -> crossrefs)"]
         X --> K["chunker/\n(Parents + Linked Children)"]
@@ -50,7 +50,7 @@ Every file's execution role is visible from the package layout under `src/docpip
 | [`store/chroma.py`](../src/docpipe_maestro/store/chroma.py) | Shared | Embedded `chromadb.PersistentClient` wrapper (`cosine` space, `None` metadata bridge, staging cleanup) |
 | [`store/_readonly.py`](../src/docpipe_maestro/store/_readonly.py) | Shared | Lazy stdlib SQLite URI (`?mode=ro` / `?mode=ro&immutable=1`) reader enabling `0`-byte immutable `reindex(..., dry_run=True)` previews without loading `chromadb` |
 | [`store/lexical.py`](../src/docpipe_maestro/store/lexical.py) | Shared | Collocated SQLite FTS5 `LexicalIndex` (`unicode61` BM25, technical token sanitizer, strict `mode=ro` reads) |
-| [`ingest/intake/`](../src/docpipe_maestro/ingest/intake/__init__.py) | Phase 1 | Format dispatch, magic-byte fallback, fenced-block-safe Markdown, PDF/DOCX/HTML structural parsing |
+| [`ingest/intake/`](../src/docpipe_maestro/ingest/intake/__init__.py) | Phase 1 | Format dispatch, magic-byte/ZIP-container hardening, core Markdown/Text/CSV/TSV, and lazy optional PDF/DOCX/HTML/XLSX/PPTX/EPUB/RST structural parsing |
 | [`ingest/clean/`](../src/docpipe_maestro/ingest/clean/__init__.py) | Phase 1 | Allow-listed HTML stripping, whitespace normalization, and 3+ page header/footer boilerplate removal |
 | [`ingest/enricher/`](../src/docpipe_maestro/ingest/enricher/__init__.py) | Phase 1 | Lazy `ENRICHERS` registry, pre-chunking `PiiEnricher` (`"pii"`), and `CrossrefsEnricher` (`"crossrefs"`); [`ingest/crossrefs.py`](../src/docpipe_maestro/ingest/crossrefs.py) stays as a compatibility re-export |
 | [`ingest/chunker/`](../src/docpipe_maestro/ingest/chunker/__init__.py) | Phase 1 | Structure-aware parent sections & linked child chunks, offline token estimation, section-scoped overlap |
@@ -68,13 +68,14 @@ Every file's execution role is visible from the package layout under `src/docpip
 
 ## 2. Phase 1: Document Processing Stages
 
-### Stage 1: Intake & Structure Extraction (`ingest/intake.py`)
+### Stage 1: Intake & Structure Extraction (`ingest/intake/`)
 
-Supported extensions are `.md`, `.markdown`, `.txt`, `.html`, `.htm`, `.pdf`, and `.docx`. Files without an extension fall back to inspecting the first 4 KiB (`head`):
+Supported extensions are core `.md`, `.markdown`, `.txt`, `.csv`, `.tsv` and optional `.html`, `.htm`, `.pdf`, `.docx`, `.xlsx`, `.pptx`, `.epub`, `.rst`. Legacy OLE2 binaries (`.doc`, `.xls`, `.ppt`) are rejected cleanly with `UnsupportedFormatError`. Files without an extension fall back to inspecting the leading 4 KiB (`head`):
 
 1. **Binary magic bytes**:
    - `%PDF-` -> PDF (`pdf`)
-   - `PK\x03\x04` containing `word/document.xml` -> DOCX (`docx`); other ZIP archives raise `UnsupportedFormatError`
+   - `\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1` (OLE2 legacy binary) -> raises `UnsupportedFormatError`
+   - `PK\x03\x04` -> validated in a single pass against the `256 MiB` uncompressed limit before inspecting inner markers: `word/document.xml` -> `docx`, `xl/workbook.xml` -> `xlsx`, `ppt/presentation.xml` -> `pptx`, `META-INF/container.xml` -> `epub`; other ZIP archives raise `UnsupportedFormatError`
    - Any `\x00` byte -> `UnsupportedFormatError`
 2. **UTF-8 text sniffing**:
    - Decoding failures -> `UnsupportedFormatError`
@@ -86,8 +87,11 @@ Supported extensions are `.md`, `.markdown`, `.txt`, `.html`, `.htm`, `.pdf`, an
 
 - **Markdown**: Tracks `` ``` `` and `~~~` fenced code blocks so `# comment` lines inside shell/Python snippets never split sections.
 - **Plain Text & PDF**: Matches heuristic headings such as `Section 4: ...`, `Article II ...`, `Chapter 1`, `Part 3`, or `1. Capitalized Title`. Multi-page PDFs extract 1-based page numbers (`page`) and propagate the active heading state (`active_label`, `active_level`) into subsequent pages until a new heading appears.
+- **CSV / TSV (`delimited.py`) & XLSX (`xlsx.py`)**: Enforce strict `utf-8-sig` decoding on `.csv`/`.tsv`, skip `hidden`/`veryHidden` Excel sheets and trailing empty columns, format scalar/cached formula cells against first-non-empty headers (`Header: Value` pairs, `Column N` fallback for ragged cells), and partition data rows into bounded 25-row sections (`<Source or Sheet> (Rows <start>-<end>)`). Blank-only or header-only files return `sections=[]` cleanly.
 - **DOCX**: Walks `doc.element.body` children in document order so paragraphs and tables remain interleaved correctly; paragraphs styled `Heading 1`–`Heading 6` start sections, and table rows serialize as `cell1 | cell2 | ...`.
-- **HTML**: Decomposes `<script>`, `<style>`, `<nav>`, `<footer>`, and `<noscript>` first, ignores HTML comments, starts sections at `<h1>`–`<h6>`, flattens `<tr>` rows with ` | `, and traverses nested containers (`div`, `section`, `article`, `main`, `aside`, `header`, lists) without duplicating child blocks.
+- **PPTX**: Iterates slides in order (`page = 1..N`), extracts slide titles (`Slide N` fallback), body paragraphs, grouped shapes recursively, table rows (` | `), and optional speaker notes while skipping empty slides.
+- **HTML & EPUB**: HTML decomposes `<script>`, `<style>`, `<nav>`, `<footer>`, `<noscript>`, `<template>`, `<svg>`, and hidden DOM elements (`hidden`, `aria-hidden="true"`, `display:none`/`visibility:hidden`). EPUB validates the archive container, iterates ordered `ITEM_DOCUMENT` spine chapters (skipping `EpubNav`), and extracts sections cleanly using an offline hidden-DOM-stripping `HTMLParser` without requiring `beautifulsoup4`.
+- **RST (`rst.py`)**: Enforces strict `utf-8-sig` decoding and offline doctree parsing (`file_insertion_enabled=False`, `raw_enabled=False`, warning suppression), mapping document/section titles into hierarchical sections (`heading_level`) with `"Introduction"` fallback for headingless prose while ignoring system-warning/comment/raw nodes.
 
 Empty container headings (e.g., `## 7. Requirements` followed immediately by `### 7.1 Scope` with no intervening prose) are omitted so zero-content parent sections are not indexed; if a file yields no sections at all, non-empty text falls back to a single section.
 

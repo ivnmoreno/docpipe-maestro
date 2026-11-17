@@ -116,6 +116,7 @@ jobs:
           uv run --no-sync pytest -q \
             --ignore=tests/test_extended_complex.py \
             --ignore=tests/test_intake_clean.py \
+            --ignore=tests/test_intake_formats_optional.py \
             --ignore=tests/test_security_hardening.py \
             --ignore=tests/test_pii_safety.py
 
@@ -123,9 +124,11 @@ jobs:
         env:
           LITELLM_LOCAL_MODEL_COST_MAP: "true"
         run: |
-          uv run --no-sync docpipe-maestro --version
-          uv run --no-sync docpipe-maestro --help > /dev/null
-          uv run --no-sync python - <<'PY'
+          # Install core-only without dev deps (e.g. twine -> readme-renderer pulls docutils).
+          UV_PROJECT_ENVIRONMENT=/tmp/core-smoke uv sync --locked --python 3.10 --no-dev
+          /tmp/core-smoke/bin/docpipe-maestro --version
+          /tmp/core-smoke/bin/docpipe-maestro --help > /dev/null
+          /tmp/core-smoke/bin/python - <<'PY'
           import tempfile
           from pathlib import Path
           from unittest.mock import patch
@@ -141,9 +144,16 @@ jobs:
               persist = root / ".docpipe"
               corpus.mkdir()
 
-              for ext in (".pdf", ".docx", ".html"):
+              for ext in (".pdf", ".docx", ".html", ".xlsx", ".pptx", ".epub", ".rst"):
                   sample = root / f"sample{ext}"
-                  sample.write_bytes(b"%PDF-1.4\n" if ext == ".pdf" else b"PK\x03\x04" if ext == ".docx" else b"<p>hi</p>")
+                  if ext == ".pdf":
+                      sample.write_bytes(b"%PDF-1.4\n")
+                  elif ext in {".docx", ".xlsx", ".pptx", ".epub"}:
+                      sample.write_bytes(b"PK\x03\x04")
+                  elif ext == ".html":
+                      sample.write_bytes(b"<p>hi</p>")
+                  else:
+                      sample.write_text("Title\n=====\n\nBody.\n", encoding="utf-8")
                   try:
                       parse_file(sample, source_key=sample.name)
                   except dp.MissingExtraError:
@@ -152,6 +162,8 @@ jobs:
                       raise AssertionError(f"Expected MissingExtraError for {ext} without extras")
 
               (corpus / "policy.md").write_text("## Section 1\n\nCore markdown works.\n", encoding="utf-8")
+              (corpus / "leave.csv").write_text("Role,Days\nFull-Time,20\n", encoding="utf-8-sig")
+              (corpus / "travel.tsv").write_text("Item\tLimit\nHotel\t$250\n", encoding="utf-8")
               with patch(
                   "litellm.embedding",
                   side_effect=lambda input, **kwargs: {
@@ -162,9 +174,13 @@ jobs:
                   },
               ):
                   res = dp.ingest(corpus, collection="core_smoke", persist_dir=persist)
-                  assert res.ingested == ["policy.md"]
+                  assert sorted(res.ingested) == ["leave.csv", "policy.md", "travel.tsv"]
                   hits = dp.retrieve("Core markdown", collection="core_smoke", persist_dir=persist)
-                  assert hits and "Core markdown works." in hits[0].text
+                  assert hits and any("Core markdown works." in h.text for h in hits)
+                  csv_hits = dp.retrieve("Full-Time", collection="core_smoke", persist_dir=persist)
+                  assert csv_hits and any("Days: 20" in h.text for h in csv_hits)
+                  tsv_hits = dp.retrieve("Hotel", collection="core_smoke", persist_dir=persist)
+                  assert tsv_hits and any("Limit: $250" in h.text for h in tsv_hits)
                   try:
                       dp.retrieve(
                           "Core markdown",

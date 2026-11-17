@@ -219,9 +219,15 @@ def test_legacy_module_compatibility_reexports_intact() -> None:
     from docpipe_maestro.ingest.intake import (
         PARSERS,
         SUPPORTED_EXTENSIONS,
+        CsvParser,
+        EpubParser,
         ParsedClause,
         ParsedDocument,
         ParsedSection,
+        PptxParser,
+        RstParser,
+        TsvParser,
+        XlsxParser,
         detect_format,
         parse_file,
     )
@@ -300,11 +306,33 @@ def test_legacy_module_compatibility_reexports_intact() -> None:
     assert isinstance(stream_it, Iterator)
     assert list(stream_it) == [EMPTY_CONTEXT_REFUSAL]
 
+    assert {
+        ".md",
+        ".markdown",
+        ".txt",
+        ".html",
+        ".htm",
+        ".pdf",
+        ".docx",
+        ".csv",
+        ".tsv",
+        ".xlsx",
+        ".pptx",
+        ".epub",
+        ".rst",
+    } == set(SUPPORTED_EXTENSIONS)
+
     assert all(
         obj is not None
         for obj in [
             PARSERS,
             SUPPORTED_EXTENSIONS,
+            CsvParser,
+            TsvParser,
+            XlsxParser,
+            PptxParser,
+            EpubParser,
+            RstParser,
             detect_format,
             parse_file,
             CLEANERS,

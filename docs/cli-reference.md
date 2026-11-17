@@ -259,7 +259,7 @@ docpipe-maestro query [--config CONFIG] [--no-config] [--collection COLLECTION]
   3.2 Employees with less than 90 days of tenure are ineligible except with written waiver.
   ------------------------------------------------------------
   ```
-  (The ` | Page: <n>` suffix appears only for paginated formats such as PDF; when no results pass `--threshold`, prints `No matching sections found.` and exits `0`.)
+  (The ` | Page: <n>` suffix appears only for paginated formats such as PDF and PPTX slides; when no results pass `--threshold`, prints `No matching sections found.` and exits `0`.)
 - **Example `--json` output**:
   ```json
   {
@@ -369,7 +369,7 @@ Common runtime fixes:
 - **`ModelMismatchError`**: Your `--embed-model` differs from the locked model shown by `docpipe-maestro status`. Query with the locked model or migrate via `docpipe-maestro reindex --model <new_model>`.
 - **`Collection ... does not have a lexical index yet`**: Pre-hybrid collections need a one-time index rebuild via `docpipe-maestro reindex --model <locked_model> --collection <name>` (or `ingest --force`) before running `--searcher fts5_hybrid`.
 - **`RegistryError`**: Unregistered `--searcher` or `--reranker` strategy name; use built-in `"default"` / `"fts5_hybrid"` (or `"cross_encoder"`) or a registered custom key.
-- **`MissingExtraError`**: Install the missing optional extra: `pip install "docpipe-maestro[rerank]"` for `--rerank` / `cross_encoder`, `pip install "docpipe-maestro[pii]"` for optional Presidio NER entity recognition, or `pip install "docpipe-maestro[pdf]"` (`docx`, `html`, `all`) for format parsers.
+- **`MissingExtraError`**: Install the missing optional extra: `pip install "docpipe-maestro[rerank]"` for `--rerank` / `cross_encoder`, `pip install "docpipe-maestro[pii]"` for optional Presidio NER entity recognition, or `pip install "docpipe-maestro[pdf]"` (`docx`, `html`, `xlsx`, `pptx`, `epub`, `rst`, `all`) for format parsers.
 - **`PiiBlockedError` / `--pii-policy` exit `1`**: A configured `block` entity (or `egress = "block"`) matched content during `ingest`, `sync`, or `ask`, or `--pii-policy` was passed to an unsupported command or pointed to an invalid file. Error messages report only source names and entity type labels without raw PII values.
 - **`local_only` exit `1`**: `--local-only` rejected a cloud model or non-loopback `--api-base` (or `OLLAMA_API_BASE` / `OLLAMA_HOST`). Use local `ollama/...` / loopback endpoints or override with `--no-local-only`.
 - **`Invalid or unusable collection`**: ChromaDB collection names must be at least 3 characters long and contain only `[a-zA-Z0-9._-]`.

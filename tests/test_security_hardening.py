@@ -331,3 +331,86 @@ def test_ollama_direct_embed_fast_path_and_security(
     mock_conn.request.assert_called_once()
     assert vecs == [[0.1, 0.2, 0.3]]
     assert "litellm" not in sys.modules
+
+
+@pytest.mark.parametrize(
+    ("ext", "marker"),
+    [
+        ("xlsx", "xl/workbook.xml"),
+        ("pptx", "ppt/presentation.xml"),
+        ("epub", "META-INF/container.xml"),
+    ],
+)
+def test_rich_zip_containers_enforce_256mib_bomb_limit_typed_and_extensionless(
+    tmp_path: Path,
+    ext: str,
+    marker: str,
+) -> None:
+    from docpipe_maestro.ingest.intake import detect_format
+
+    fake_zip = tmp_path / f"bomb.{ext}"
+    with zipfile.ZipFile(fake_zip, "w") as zf:
+        zf.writestr(marker, "<root/>")
+
+    fake_info = zipfile.ZipInfo(marker)
+    fake_info.file_size = 300 * 1024 * 1024
+    with (
+        patch.object(zipfile.ZipFile, "infolist", return_value=[fake_info]),
+        pytest.raises(UnsupportedFormatError, match="exceeds uncompressed size limit"),
+    ):
+        parse_file(fake_zip, source_key=fake_zip.name)
+
+    extless = tmp_path / f"bomb_extless_{ext}"
+    extless.write_bytes(fake_zip.read_bytes())
+    with (
+        patch.object(zipfile.ZipFile, "infolist", return_value=[fake_info]),
+        pytest.raises(UnsupportedFormatError, match="exceeds uncompressed size limit"),
+    ):
+        detect_format(extless)
+
+
+def test_generic_zip_legacy_ole2_and_malformed_rst_rejected(tmp_path: Path) -> None:
+    from docpipe_maestro.ingest.intake import detect_format
+
+    generic_zip = tmp_path / "bundle_without_ext"
+    with zipfile.ZipFile(generic_zip, "w") as zf:
+        zf.writestr("random/data.txt", "hello")
+    with pytest.raises(UnsupportedFormatError, match="Unsupported ZIP-based file"):
+        detect_format(generic_zip)
+
+    for legacy_name in ("legacy.xls", "legacy.ppt"):
+        p = tmp_path / legacy_name
+        p.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 64)
+        with pytest.raises(UnsupportedFormatError, match="legacy binary"):
+            parse_file(p, source_key=legacy_name)
+
+    extless_ole2 = tmp_path / "legacy_extless"
+    extless_ole2.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 64)
+    with pytest.raises(UnsupportedFormatError, match="legacy binary"):
+        detect_format(extless_ole2)
+
+    bad_utf8_rst = tmp_path / "broken.rst"
+    bad_utf8_rst.write_bytes(b"Title\n=====\n\n\xff\xfeinvalid")
+    with pytest.raises(UnsupportedFormatError, match="UTF-8"):
+        parse_file(bad_utf8_rst, source_key="broken.rst")
+
+
+def test_rst_blocks_local_file_insertion_and_raw_passthrough(tmp_path: Path) -> None:
+    secret_file = tmp_path / "secret_passwd.txt"
+    secret_file.write_text("SECRET_PASSWD_VALUE_DO_NOT_LEAK", encoding="utf-8")
+
+    rst_attack = tmp_path / "include_attack.rst"
+    rst_attack.write_text(
+        "Policy\n"
+        "======\n\n"
+        "Safe visible clause.\n\n"
+        f".. include:: {secret_file}\n\n"
+        ".. raw:: html\n\n"
+        "   <div>RAW_PASSTHROUGH_BLOCKED</div>\n",
+        encoding="utf-8",
+    )
+    doc = parse_file(rst_attack, source_key="include_attack.rst")
+    combined = "\n".join(s.raw_text for s in doc.sections)
+    assert "Safe visible clause." in combined
+    assert "SECRET_PASSWD_VALUE_DO_NOT_LEAK" not in combined
+    assert "RAW_PASSTHROUGH_BLOCKED" not in combined

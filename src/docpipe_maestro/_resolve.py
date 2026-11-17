@@ -5,11 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from docpipe_maestro.ingest.intake import PARSERS
-from docpipe_maestro.ingest.intake._common import detect_format
+from docpipe_maestro.ingest.intake._common import _LEGACY_BINARY_EXTENSIONS, detect_format
 from docpipe_maestro.ingest.stages import Parser
 from docpipe_maestro.types import UnsupportedFormatError
 
-_BUILTIN_PARSER_KEYS = frozenset({"docx", "html", "md", "pdf", "txt"})
+_BUILTIN_PARSER_KEYS = frozenset(
+    {"csv", "docx", "epub", "html", "md", "pdf", "pptx", "rst", "tsv", "txt", "xlsx"}
+)
 
 
 def resolve_parser(path: Path, preferred: str | None = None) -> Parser:
@@ -38,6 +40,11 @@ def resolve_parser(path: Path, preferred: str | None = None) -> Parser:
             parser_cls = PARSERS.resolve(key)
             if ext in {e.lower() for e in parser_cls.extensions}:
                 return parser_cls()
+        if ext in _LEGACY_BINARY_EXTENSIONS:
+            raise UnsupportedFormatError(
+                f"Unsupported legacy binary format {ext!r} for {path.name}; "
+                "convert to '.xlsx', '.pptx', '.docx', or '.csv'"
+            )
         raise UnsupportedFormatError(f"Unsupported file extension {ext!r} for {path.name}")
 
     fmt = detect_format(path)

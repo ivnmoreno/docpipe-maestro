@@ -57,6 +57,7 @@ Configured in `pyproject.toml`:
 - `reverse` (`tests/test_reverse_safety.py`): Release Gate #1 property tests verifying that queries targeting any policy clause with exception markers (`except`, `unless`, `not entitled`, `subject to`, `provided that`) retrieve parent context preserving both rule and exception.
 - `pii` (`tests/test_pii_safety.py`): Release Gate #2 synthetic tests verifying pre-chunking blocking/redaction/tokenization in headings and bodies, transactional `PiiBlockedError` rollback, owner-only zero-raw-PII `.audit.jsonl` logs, `--local-only` refusal, and outbound `guard_egress` enforcement offline.
 - `integration` (`tests/test_extended_complex.py`): Large-corpus (`> 64` chunks testing multi-batch embedding), multi-page PDF boilerplate detection, complex DOCX/HTML table extraction, nested directory sync/rename/truncation, and atomic abort guarantees.
+- **Format Suites**: `tests/test_intake_delimited.py` covers zero-dependency `.csv`/`.tsv` core intake (run in `minimal-core` CI), while `tests/test_intake_formats_optional.py` covers `MissingExtraError` guards and extraction/lifecycle behavior for `[xlsx]`, `[pptx]`, `[epub]`, and `[rst]`.
 - `slow`: Reserved for long-running benchmarks or large stress runs.
 - Baseline replay (`tests/test_eval.py`): Replays `tests/fixtures/eval_policy_corpus.json` strictly offline under `mock_litellm_offline` and verifies exact equivalence with `docs/eval-baseline.json` (`default` and `fts5_hybrid`).
 
@@ -93,11 +94,10 @@ Before adding features, verify compliance with [`.specify/memory/constitution.md
 2. **Two-Phase Separation**: Keep Phase 1 write logic inside `src/docpipe_maestro/ingest/` and read-only Phase 2 logic inside `src/docpipe_maestro/query/` (and `src/docpipe_maestro/eval/`).
 3. **Library Purity**: Never read config or PII policy files inside library modules (TOML `--config` and JSON/TOML `--pii-policy` parsing belong solely in `cli.py`). Never add a hardcoded provider registry; delegate `provider/model` resolution directly to `litellm`.
 4. **Schema Single Source**: Add or modify shared dataclasses/types only in `src/docpipe_maestro/types.py`.
-5. **Additive Format Extensions**: To add a new parser (e.g., `.rst` or `.xlsx`):
-   - Add an optional dependency under `[project.optional-dependencies]` in `pyproject.toml`.
-   - Implement a `_parse_<fmt>(path, source_key) -> ParsedDocument` helper in `ingest/intake.py` raising `MissingExtraError` on import failure and `UnsupportedFormatError` on corrupted files.
-   - Register its extension and/or magic-byte branch in `detect_format()` and `parse_file()`.
-   - Add format tests in `tests/` including failure handling when corrupted.
+5. **Additive Format Extensions**: To add a new parser (such as a new domain format):
+   - Add an optional dependency under `[project.optional-dependencies]` in `pyproject.toml` (and extend `all` + mypy overrides if applicable).
+   - Implement a strategy class decorated with `@PARSERS.register("<fmt>")` in `src/docpipe_maestro/ingest/intake/<fmt>.py` (raising `MissingExtraError` lazily on missing optional imports and `UnsupportedFormatError` on invalid encoding/corrupted files), and register it cleanly via `PARSERS.register_lazy(...)`, `_LAZY_PARSER_EXPORTS`, `_BUILTIN_PARSER_KEYS`, `SUPPORTED_EXTENSIONS`, and `detect_format()`.
+   - Add format & security tests in `tests/` including missing-extra, archive/input safety, and corruption handling.
 
 ---
 
@@ -123,7 +123,7 @@ uv run twine check --strict dist/*
 - **Continuous Integration ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)):** Runs on pushes and pull requests to `main`:
   - `quality`: Ubuntu matrix across Python `3.10`–`3.13` (`uv lock --check`, Ruff format/lint/security `S`, strict `mypy`, `@pytest.mark.reverse`, `@pytest.mark.pii`, and full `pytest --cov` branch coverage >= 80%).
   - `commits`: Pull-request Commitizen check across PR commits.
-  - `minimal-core`: Python `3.10` core-only install without optional extras (`--group dev`), verifying core tests, CLI entrypoint, and fail-loud `MissingExtraError` guards.
+  - `minimal-core`: Python `3.10` core-only install without optional extras (`--group dev` for core tests, plus an isolated `--no-dev` sync for CLI entrypoint, core intake, and fail-loud `MissingExtraError` guards).
   - `packaging`: `uv build`, `twine check --strict`, and isolated clean-venv wheel + sdist installation smoke tests.
   - `dependency-audit`: `pip-audit` against exported locked dependencies.
   - `os-smoke`: Cross-OS offline test matrix on `macos-latest` and `windows-latest`.
