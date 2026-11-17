@@ -1,4 +1,4 @@
-## Unreleased
+## v0.2.0 (2026-11-17)
 
 ### Feat
 
@@ -9,6 +9,29 @@
 - **rerank**: add opt-in child-first local cross-encoder reranking (`--rerank`, `retrieve(..., rerank=True)`, `evaluate(..., rerank=True)`), optional `[rerank]` extra (`sentence-transformers`), lazy `CrossEncoderReranker` (`BAAI/bge-reranker-base`) with process-local model caching, CLI/TOML configuration, and live `Q1` benchmark validation
 - **eval**: add read-only retrieval evaluation harness (`docpipe_maestro.eval`, `docpipe-maestro eval`), curated policy benchmark corpus, and offline `default` vs `fts5_hybrid` baselines
 - **searcher**: add hybrid SQLite FTS5 BM25 + dense vector RRF search (`--searcher fts5_hybrid`) and collocated `LexicalIndex` lifecycle sync
+- **query**: add online LLM customization (`temperature`, `max_tokens`, `timeout`, `model_kwargs`), `build_chat_messages()` role separation, `answer_detailed()` + `GenerationResult`, CLI/TOML `ask` options (`--system-prompt`, `--system-prompt-file`, `--fail-on-truncation`, `--show-context`, `--json`), loopback-vs-HTTPS `api_base` transport validation, scoped CLI `.env` + `./docpipe.toml` auto-discovery (`--no-config`), direct Ollama `/api/embed` fast path, digit-normalized header/footer stripping, and cross-document `follow_crossrefs` retrieval
+- **cli**: add `docpipe-maestro query --json` structured retrieval output envelope
+
+### Refactor
+
+- **pipeline**: introduce Strategy + Registry extension architecture (`register_*` entry points)
+
+### Fix
+
+- **query**: improve multi-section prompt synthesis and report explicit `finish_reason="length"` / `reasoning_tokens` diagnostics on empty model responses
+- **eval**: use `math.fsum` in aggregate metrics for Python 3.12+ determinism
+- **store**: skip unnecessary HNSW vector reads in `get_all()` and release test Chroma database handles cleanly on Windows
+- **cross-os**: normalize LF line endings across fixtures via `.gitattributes`, handle `float32` / `os.PathLike` checks across macOS and Windows, and advance `mtime` explicitly in same-size manifest fast-path tests
+
+### CI & Docs
+
+- **workflow**: harden GitHub Actions CI matrix (`3.10`–`3.13`, `--no-extras` core smoke, `uv build` + `twine check --strict`, `pip-audit`, macOS/Windows smoke) and add OIDC Trusted Publishing release workflow (`.github/workflows/release.yml`)
+- **docs**: enrich `README.md`, `docs/` guides, `CONTRIBUTING.md`, `SECURITY.md`, and `PRODUCT.md`, plus add Contributor Covenant Code of Conduct and `.env.example`
+
+## v0.1.0 (2026-11-13)
+
+### Feat
+
 - **pipeline**: implement v0.1 core RAG pipeline, CLI, and quality gates
 
 ### Fix
@@ -17,5 +40,4 @@
 
 ### Refactor
 
-- **pipeline**: introduce Strategy + Registry extension architecture (`register_*` entry points)
 - **cli**: rename CLI command to docpipe-maestro
