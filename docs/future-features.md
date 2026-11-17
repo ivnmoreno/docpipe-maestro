@@ -14,14 +14,11 @@ This document tracks all architectural suggestions, completed `v0.2.0` upgrades,
 - **Proposed Upgrade**: Implement table-aware parsing that detects table boundaries and ensures header rows are replicated across split row groups so numeric and eligibility matrices remain interpretable by LLMs.
 - **Formats Affected**: PDF, DOCX, HTML, Markdown.
 
-### 1.2 Additional Document Formats (Intake Extras)
+### 1.2 Additional Document Formats (Intake Extras) — *Implemented (`014-additional-intake-formats`)*
 - **Problem**: Enterprise and research corpora frequently include spreadsheets, slide decks, and specialized documentation formats.
-- **Proposed Upgrade**: Add additive optional dependencies and parsers under `[project.optional-dependencies]`:
-  - `xlsx = ["openpyxl>=3.1.0"]` for Microsoft Excel spreadsheets (`.xlsx`).
-  - `pptx = ["python-pptx>=1.0.0"]` for PowerPoint presentations (`.pptx`).
-  - `epub = ["ebooklib>=0.18"]` for digital books (`.epub`).
-  - `rst = ["docutils>=0.20"]` for reStructuredText (`.rst`).
-  - `csv` / `tsv` built-in delimiter parsing.
+- **Implemented Upgrade**:
+  - Core zero-dependency `CsvParser` / `TsvParser` (`delimited.py`) with strict UTF-8 / UTF-8-SIG decoding and 25-row bounded `Header: Value` sections.
+  - Optional extras under `[project.optional-dependencies]` (`xlsx = ["openpyxl>=3.1.0"]`, `pptx = ["python-pptx>=1.0.0"]`, `epub = ["ebooklib>=0.18"]`, `rst = ["docutils>=0.20"]`, and expanded `all` format bundle keeping `rerank`/`pii` separate) with lazy parser loading, single-pass ZIP-bomb (`<= 256 MiB`) & container verification, hidden-sheet/hidden-HTML stripping, and `.rst` file-inclusion / raw-directive blocking.
 
 ### 1.3 Optical Character Recognition (OCR) for Scanned Documents
 - **Problem**: Scanned PDFs and image-heavy documents currently yield empty or incomplete text.
@@ -176,7 +173,7 @@ This document tracks all architectural suggestions, completed `v0.2.0` upgrades,
 | **Table Preservation** | Ingestion | Post-v0.2 | High (Accuracy) | Medium |
 | **`LEGAL` Profile** | Chunking | Post-v0.2 | High (Domain Safety) | Medium |
 | **Chunk-Level Differential Re-Embedding** | Ingestion | Post-v0.2 | High (Cost / Speed) | Medium |
-| **Streaming Output (`docpipe-maestro ask`)** | Generation | Post-v0.2 | High (UX) | *Implemented* (`013-streaming-generation`) |
+| **Streaming Output (`docpipe-maestro ask`)** | Generation | *Implemented* (`013-streaming-generation`) | High (UX) | Low |
 | **`--dry-run` for `sync`/`reindex`** | CLI / Ops | *Implemented* (`012-dry-run`) | Medium (Safety) | Low |
-| **Additional Parsers (XLSX, PPTX)** | Intake | Post-v0.2 | Medium (Coverage) | Low |
+| **Additional Parsers (`CSV`/`TSV` Core; `XLSX`, `PPTX`, `EPUB`, `RST`)** | Intake | *Implemented* (`014-additional-intake-formats`) | Medium (Coverage) | Low |
 | **Two-Collection Split** | Storage | Post-v0.2 | Medium (Scale) | High |

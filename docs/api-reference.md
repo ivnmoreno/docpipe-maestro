@@ -469,8 +469,8 @@ ingest("./manual.md", profile=custom, collection="manuals")
 
 ```text
 DocpipeError (Exception)
-├── UnsupportedFormatError   # Unknown extension, missing file/dir, corrupted/binary content
-├── MissingExtraError        # Optional dependency missing (pypdf, python-docx, bs4, sentence-transformers, presidio-analyzer)
+├── UnsupportedFormatError   # Unknown/legacy binary extension (e.g. .xls/.ppt), missing file/dir, corrupted/ZIP-bomb/non-UTF-8 content
+├── MissingExtraError        # Optional dependency missing (pypdf, python-docx, bs4, openpyxl, python-pptx, ebooklib, docutils, sentence-transformers, presidio-analyzer)
 ├── ModelMismatchError       # Requested embed_model conflicts with manifest.embed_model
 ├── MissingCredentialError   # Provider rejected missing or invalid API key env var
 ├── PiiBlockedError          # Configured PII "block" rule or egress="block" matched content

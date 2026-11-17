@@ -221,10 +221,8 @@ def test_end_to_end_custom_stages_via_ingest_and_retrieve(
 ) -> None:
     corpus_dir = tmp_path / "custom_corpus"
     corpus_dir.mkdir()
-    rst_doc = corpus_dir / "guide.rst"
-    rst_doc.write_text(
-        "RST Custom Title\n================\n\ncustom body sentence\n", encoding="utf-8"
-    )
+    adoc_doc = corpus_dir / "guide.adoc"
+    adoc_doc.write_text("= AsciiDoc Custom Title\n\ncustom body sentence\n", encoding="utf-8")
 
     in_memory_records: dict[str, dict[str, EmbeddedChunk]] = {}
 
@@ -236,20 +234,20 @@ def test_end_to_end_custom_stages_via_ingest_and_retrieve(
         _restore_registry(STORES),
     ):
 
-        @register_parser("rst")
-        class RstParser:
-            name: str = "rst"
-            extensions: tuple[str, ...] = (".rst",)
+        @register_parser("asciidoc")
+        class AsciidocParser:
+            name: str = "asciidoc"
+            extensions: tuple[str, ...] = (".adoc",)
 
             def parse(self, path: Path, *, source_key: str) -> ParsedDocument:
                 raw = path.read_text(encoding="utf-8").strip()
                 return ParsedDocument(
                     source=source_key,
-                    format_name="rst",
+                    format_name="asciidoc",
                     sections=[
                         ParsedSection(
                             source=source_key,
-                            section_label="RST Guide",
+                            section_label="AsciiDoc Guide",
                             heading_level=1,
                             raw_text=raw,
                         )
@@ -460,7 +458,7 @@ def test_end_to_end_custom_stages_via_ingest_and_retrieve(
                 self._bucket.clear()
 
         ingest_res = ingest(
-            rst_doc,
+            adoc_doc,
             collection="mem_col",
             persist_dir=tmp_persist_dir,
             embed_model="custom/tiny",
@@ -469,7 +467,7 @@ def test_end_to_end_custom_stages_via_ingest_and_retrieve(
             embedder="unit_mem",
             store="unit_mem",
         )
-        assert ingest_res.ingested == ["guide.rst"]
+        assert ingest_res.ingested == ["guide.adoc"]
         assert ingest_res.chunks_written == 1
         assert ingest_res.parents_written == 1
 
@@ -500,7 +498,7 @@ def test_end_to_end_custom_stages_via_ingest_and_retrieve(
 
         # Remove via custom store then re-add via sync using custom stage selectors
         assert remove(
-            "guide.rst",
+            "guide.adoc",
             collection="mem_col",
             persist_dir=tmp_persist_dir,
             store="unit_mem",
@@ -515,7 +513,7 @@ def test_end_to_end_custom_stages_via_ingest_and_retrieve(
             embedder="unit_mem",
             store="unit_mem",
         )
-        assert sync_res.added == ["guide.rst"]
+        assert sync_res.added == ["guide.adoc"]
 
 
 def test_top_level_eight_registries_empty_defaults_and_protocol_conformance(

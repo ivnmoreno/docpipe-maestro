@@ -534,7 +534,7 @@ The project shall use a modern build backend with versioning derived from versio
 
 **Optional extras:**
 
-- Per-format extras for document parsing (`pdf`, `docx`, `html`, or `all`), so that users install only the parsers they need
+- Zero-dependency core intake for Markdown, Plain Text, CSV, and TSV plus per-format optional extras for document parsing (`pdf`, `docx`, `html`, `xlsx`, `pptx`, `epub`, `rst`, or `all`), so that users install only the parsers they need
 - Local neural cross-encoder reranking extra (`rerank` via `sentence-transformers`) and optional multi-language NER PII detection extra (`pii` via `presidio-analyzer` and `presidio-anonymizer`)
 
 **Development dependencies:**
@@ -659,7 +659,7 @@ These are explicitly **out of scope for v0.1** but noted for continuity.
 | Hybrid (keyword + vector) search | Future optional module |
 | Query rewriting | Future optional module |
 | Evaluation harness for answer quality | Separate tooling |
-| Additional file formats (XLSX, PPTX) | Additive, no architectural change |
+| Additional file formats (`CSV`/`TSV` core; `XLSX`, `PPTX`, `EPUB`, `RST` extras) | Implemented (`014-additional-intake-formats`); additive, zero architectural change |
 | Additional vector database backends | Additive, via the storage adapter interface |
 
 ---
@@ -678,7 +678,7 @@ These are explicitly **out of scope for v0.1** but noted for continuity.
 | `embedder.py` | 1 and 2 | Chunks and queries → vectors and shared `is_local_target` / `enforce_local_only` checks |
 | `store.py` | 1 and 2 | Persist and fetch chunks, vectors, metadata, and transactional version cleanup |
 | `cli.py` | both | Command-line interface; the only module permitted to read user TOML config or `--pii-policy` files |
-| `ingest/intake.py` | 1 | File → raw text + structure metadata |
+| `ingest/intake/` | 1 | Format dispatch, magic-byte/ZIP-container hardening, and lazy format parsers (`md`, `txt`, `delimited` CSV/TSV; optional `pdf`, `docx`, `html`, `xlsx`, `pptx`, `epub`, `rst`) |
 | `ingest/clean.py` | 1 | Raw text → clean text |
 | `ingest/crossrefs.py` | 1 | Detect and resolve internal references |
 | `ingest/chunker.py` | 1 | Clean text → child chunks + parent sections |

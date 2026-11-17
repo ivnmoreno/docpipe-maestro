@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from docpipe_maestro.ingest.intake import PARSERS
-from docpipe_maestro.ingest.intake._common import _validate_docx_zip
+from docpipe_maestro.ingest.intake._common import _validate_zip_container
 from docpipe_maestro.types import (
     MissingExtraError,
     ParsedDocument,
@@ -31,7 +31,11 @@ def _parse_docx(path: Path, source_key: str) -> ParsedDocument:
         ) from exc
 
     try:
-        if not _validate_docx_zip(path, source_key=source_key):
+        if not _validate_zip_container(
+            path,
+            source_key=source_key,
+            required_entry="word/document.xml",
+        ):
             raise UnsupportedFormatError(f"Invalid DOCX archive structure: {source_key}")
         doc = Document(str(path))
         sections: list[ParsedSection] = []

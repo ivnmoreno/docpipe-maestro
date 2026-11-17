@@ -65,7 +65,7 @@
 | **Silent embedding vector-space corruption** | **Manifest model lock** pins each collection to one `embed_model` and raises `ModelMismatchError` unless migrated explicitly via `reindex`. |
 | **Hallucinations when nothing relevant matches** | **Deterministic empty-context refusal** returns `"Not found in the provided context."` without calling the LLM (`ask` checks retrieved hits automatically; `answer()`/`answer_detailed()` short-circuit when `has_context=False`). |
 | **Sensitive PII stored or sent to remote LLMs** | **Opt-in pre-chunking `PiiEnricher` + outbound `guard_egress()`** redact, HMAC-tokenize, or block entities cleanly (`PiiBlockedError`), log zero-raw-PII `.audit.jsonl` records (`0o700`/`0o600`), and enforce `--local-only` pre-network across embeddings and generation. |
-| **Hidden HTML prompt injections & unsafe archives** | **Hardened intake** strips hidden DOM elements (`display:none`, `hidden`, `aria-hidden`, `<template>`), enforces DOCX uncompressed size caps, and skips directory symlinks. |
+| **Hidden HTML/XLSX/EPUB injections & unsafe archives** | **Hardened intake** strips hidden DOM/EPUB elements (`display:none`, `hidden`, `aria-hidden`, `<template>`), skips `hidden`/`veryHidden` Excel sheets, disables RST file-inclusion/raw directives, enforces single-pass ZIP uncompressed size caps (`256 MiB`) across `.docx`/`.xlsx`/`.pptx`/`.epub`, rejects legacy `.doc`/`.xls`/`.ppt` binaries, and skips directory symlinks. |
 | **Blind retrieval regressions, vendor lock-in & library bloat** | **Offline `eval` harness, Strategy registries & Library Purity** deliver reproducible `MRR` / `Precision@k` / `Recall@k` checks, 9 `@register_*` extension points, `NullHandler`-only `docpipe_maestro.log` (`--log-json` `stderr` telemetry), zero config-file reads in library code, and LiteLLM routing with zero hardcoded provider registry. |
 
 ---
@@ -138,14 +138,19 @@ flowchart LR
 |---|---|---|---|
 | **Markdown** | `.md`, `.markdown` | ATX headings (`#`–`######`), code fence awareness (` ``` ` / `~~~` ignores `# comments`) | Core install |
 | **Plain Text** | `.txt` | Heuristic `Section` / `Article` / `Chapter` / `Part` and numbered headings | Core install |
-| **HTML** | `.html`, `.htm` | `<h1–h6>` headings, paragraphs, lists, tables (` \| `), strips `<script>`/`<style>`/`<nav>`/`<footer>`/`<noscript>` | `[html]` (`beautifulsoup4`) |
+| **CSV / TSV** | `.csv`, `.tsv` | Strict UTF-8 / BOM normalization, trimmed empty trailing columns, ragged-row tolerance, 25-row bounded `Header: Value` sections | Core install |
+| **HTML** | `.html`, `.htm` | `<h1–h6>` headings, paragraphs, lists, tables (` \| `), strips `<script>`/`<style>`/`<nav>`/`<footer>`/`<noscript>` & hidden subtrees | `[html]` (`beautifulsoup4`) |
 | **Word** | `.docx` | Word `Heading 1`–`Heading 6` styles, paragraphs, tables (` \| `) | `[docx]` (`python-docx`) |
 | **PDF** | `.pdf` | Per-page text, 1-based page numbers, multi-page active heading carryover, boilerplate header/footer stripping | `[pdf]` (`pypdf`) |
+| **Excel** | `.xlsx` | Visible sheets only (skips `hidden`/`veryHidden`), evaluated cached values, 25-row bounded `Header: Value` sections | `[xlsx]` (`openpyxl`) |
+| **PowerPoint** | `.pptx` | Per-slide titles & 1-based page numbers, body text, grouped shapes, tables (` \| `), speaker notes | `[pptx]` (`python-pptx`) |
+| **EPUB** | `.epub` | Ordered spine chapters with `<h1–h6>` section headings, offline hidden-DOM/boilerplate stripping | `[epub]` (`ebooklib`) |
+| **reStructuredText** | `.rst` | Section/heading hierarchy (`heading_level`), paragraphs, lists, tables (` \| `), admonitions; local file/raw directives disabled | `[rst]` (`docutils`) |
 
-- **Extensionless files**: `detect_format()` inspects the first 4 KiB for `%PDF-`, ZIP `word/document.xml`, HTML root tags (`<!doctype html` / `<html`), Markdown headings, or valid UTF-8 text.
+- **Extensionless files**: `detect_format()` inspects the first 4 KiB for `%PDF-`, legacy OLE2 binaries (rejected cleanly), single-pass `PK\x03\x04` ZIP containers (`word/document.xml` → `docx`, `xl/workbook.xml` → `xlsx`, `ppt/presentation.xml` → `pptx`, `META-INF/container.xml` → `epub`), HTML root tags (`<!doctype html` / `<html`), Markdown headings, or valid UTF-8 text.
 - **Current scope & limitations**:
   - Image-only / scanned PDFs without an embedded text layer yield empty text (OCR is out of scope).
-  - Legacy binary `.doc` files are not supported (`.docx` only).
+  - Legacy binary `.doc`, `.xls`, and `.ppt` files are not supported (modern `.docx`, `.xlsx`, `.pptx`, or `.csv`/`.tsv` only).
   - `docpipe-maestro` is a library and CLI engine — it deliberately excludes web servers, auth layers, streaming UIs, and multi-tenant isolation.
 
 ---
@@ -156,7 +161,7 @@ flowchart LR
 
 ### Core Install
 
-The core installation includes Markdown (`.md`, `.markdown`) and plain text (`.txt`) parsing, embedding generation, ChromaDB vector storage, and semantic retrieval:
+The core installation includes Markdown (`.md`, `.markdown`), plain text (`.txt`), CSV (`.csv`), and TSV (`.tsv`) parsing, embedding generation, ChromaDB vector storage, and semantic retrieval:
 
 ```bash
 # Install from PyPI
@@ -175,19 +180,23 @@ Generation (`answer()`, `ask`) is available in the base install — no extra nee
 | `pdf` | Extract text, page numbers, and heuristic section headings (`Section X.Y`) from PDF files | `pypdf>=6.21.3` (BSD-3-Clause) |
 | `docx` | Extract text, style-based headings (`Heading 1`–`Heading 6`), and tables from Word documents | `python-docx>=1.1.0` |
 | `html` | Strip boilerplate and parse `<h1–h6>` headings from web pages / HTML exports | `beautifulsoup4>=4.12.0` |
-| `all` | Installs **all** optional document format parsers (`pdf`, `docx`, `html`) | `pypdf`, `python-docx`, `beautifulsoup4` |
+| `xlsx` | Extract visible Excel worksheets into header-paired 25-row sections | `openpyxl>=3.1.0` |
+| `pptx` | Extract numbered slides, body/tables, grouped shapes, and speaker notes from PowerPoint decks | `python-pptx>=1.0.0` |
+| `epub` | Extract ordered spine chapters and headings from EPUB books safely offline | `ebooklib>=0.18` |
+| `rst` | Extract structured sections and tables from reStructuredText offline (`.. include::` disabled) | `docutils>=0.20` |
+| `all` | Installs **all** optional document format parsers (`pdf`, `docx`, `html`, `xlsx`, `pptx`, `epub`, `rst`) | `pypdf`, `python-docx`, `beautifulsoup4`, `openpyxl`, `python-pptx`, `ebooklib`, `docutils` |
 | `rerank` | Second-stage local neural cross-encoder reranking (`BAAI/bge-reranker-base` default) | `sentence-transformers>=3.0.0` |
 | `pii` | Optional multi-language NER PII recognition alongside deterministic recognizers | `presidio-analyzer>=2.2.0`, `presidio-anonymizer>=2.2.0` |
 
-> **Note on Structure Extraction**: Markdown, plain text, HTML, DOCX, and PDF extract headings, clauses, and pagination metadata cleanly without external SaaS parsers. Note that `[all]` installs document parsers only; include `[rerank]` and/or `[pii]` alongside it (`[all,rerank,pii]`) when enabling reranking or Presidio NER. For offline `[pii]` usage, pre-install the required local spaCy models (e.g. `en_core_web_sm`, `es_core_news_sm`).
+> **Note on Structure Extraction**: Markdown, plain text, CSV/TSV, HTML, DOCX, PDF, XLSX, PPTX, EPUB, and RST extract headings, clauses, tables/rows, and slide/page metadata cleanly without external SaaS parsers. Note that `[all]` installs document parsers only; include `[rerank]` and/or `[pii]` alongside it (`[all,rerank,pii]`) when enabling reranking or Presidio NER. For offline `[pii]` usage, pre-install the required local spaCy models (e.g. `en_core_web_sm`, `es_core_news_sm`).
 
 Install specific extras:
 ```bash
 # PDF support only
 pip install "docpipe-maestro[pdf]"
 
-# PDF and DOCX support
-pip install "docpipe-maestro[pdf,docx]"
+# PDF, DOCX, and XLSX support
+pip install "docpipe-maestro[pdf,docx,xlsx]"
 
 # Full installation with all document format parsers
 pip install "docpipe-maestro[all]"
