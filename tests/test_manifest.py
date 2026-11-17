@@ -89,8 +89,9 @@ def test_classify_file_mtime_fast_path_and_hash_verification(tmp_path: Path) -> 
     assert status == "unchanged"
     assert verified_hash == chash
 
-    # Edit content -> changed
+    # Edit content (same size; bump mtime explicitly to avoid same-tick FS clocks) -> changed
     target.write_text("Leave policy v2", encoding="utf-8")
+    os.utime(target, (stat.st_atime + 20, stat.st_mtime + 20))
     status, changed_hash, _, _ = classify_file(target, "policy.txt", manifest)
     assert status == "changed"
     assert changed_hash != chash
