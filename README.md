@@ -1,5 +1,6 @@
 # docpipe-maestro
 
+[![PyPI](https://img.shields.io/pypi/v/docpipe-maestro.svg)](https://pypi.org/project/docpipe-maestro/)
 [![CI](https://github.com/ivnmoreno/docpipe-maestro/actions/workflows/ci.yml/badge.svg)](https://github.com/ivnmoreno/docpipe-maestro/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -74,9 +75,8 @@
 Run an entirely local pipeline using [Ollama](https://ollama.com/) (`nomic-embed-text` + `llama3.2`):
 
 ```bash
-# 1. Install with all format parsers (from GitHub until published to PyPI)
-pip install "docpipe-maestro[all] @ git+https://github.com/ivnmoreno/docpipe-maestro.git"
-# Once published on PyPI: pip install "docpipe-maestro[all]"
+# 1. Install from PyPI with all format parsers
+pip install "docpipe-maestro[all]"
 
 # 2. Pull local Ollama models (one-time)
 ollama pull nomic-embed-text
@@ -159,11 +159,11 @@ flowchart LR
 The core installation includes Markdown (`.md`, `.markdown`) and plain text (`.txt`) parsing, embedding generation, ChromaDB vector storage, and semantic retrieval:
 
 ```bash
-# Install directly from GitHub (pre-PyPI)
-pip install "git+https://github.com/ivnmoreno/docpipe-maestro.git"
+# Install from PyPI
+pip install docpipe-maestro
 
-# Once published on PyPI:
-# pip install docpipe-maestro
+# Or install the latest development head from GitHub:
+# pip install "git+https://github.com/ivnmoreno/docpipe-maestro.git"
 ```
 
 ### Optional Extras
@@ -181,19 +181,19 @@ Generation (`answer()`, `ask`) is available in the base install — no extra nee
 
 > **Note on Structure Extraction**: Markdown, plain text, HTML, DOCX, and PDF extract headings, clauses, and pagination metadata cleanly without external SaaS parsers. Note that `[all]` installs document parsers only; include `[rerank]` and/or `[pii]` alongside it (`[all,rerank,pii]`) when enabling reranking or Presidio NER. For offline `[pii]` usage, pre-install the required local spaCy models (e.g. `en_core_web_sm`, `es_core_news_sm`).
 
-Install specific extras (substitute `@ git+https://github.com/ivnmoreno/docpipe-maestro.git` before PyPI publication):
+Install specific extras:
 ```bash
 # PDF support only
-pip install "docpipe-maestro[pdf] @ git+https://github.com/ivnmoreno/docpipe-maestro.git"
+pip install "docpipe-maestro[pdf]"
 
 # PDF and DOCX support
-pip install "docpipe-maestro[pdf,docx] @ git+https://github.com/ivnmoreno/docpipe-maestro.git"
+pip install "docpipe-maestro[pdf,docx]"
 
 # Full installation with all document format parsers
-pip install "docpipe-maestro[all] @ git+https://github.com/ivnmoreno/docpipe-maestro.git"
+pip install "docpipe-maestro[all]"
 
 # Parsers + local cross-encoder reranking + optional NER PII detection
-pip install "docpipe-maestro[all,rerank,pii] @ git+https://github.com/ivnmoreno/docpipe-maestro.git"
+pip install "docpipe-maestro[all,rerank,pii]"
 ```
 
 ### Development Setup
