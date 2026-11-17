@@ -6,7 +6,7 @@ Security fixes are currently applied to the `main` branch.
 
 | Version | Supported |
 |---|---|
-| `main` (`0.2.x`) | Yes |
+| `main` (`0.3.x`) | Yes |
 
 ---
 
@@ -38,4 +38,4 @@ You can expect an initial acknowledgment within 72 hours and updates as the issu
 - **Salt & Audit Log Handling:** For deterministic cross-run `tokenize` hashes, supply an explicit `token_salt` or `token_salt_env` secret outside the document repository; without one, `docpipe-maestro` uses an ephemeral process-random 32-byte key and emits a warning. When a `PiiPolicy` is active during `ingest`/`sync`, `<persist_dir>/manifests/<collection>.audit.jsonl` records counts, actions, thresholds, `doc_version`, and block status under `0o700`/`0o600` POSIX permissions with **zero raw PII values** (retained append-only across `remove()` calls).
 - **Structured Telemetry & Error Hygiene:** Library calls remain silent by default (`NullHandler` only via `docpipe_maestro.log`, never modifying host root loggers or `stdout`). CLI flags `--log-json` and `--log-level {DEBUG,INFO,WARNING,ERROR}` emit `stderr`-only telemetry (`docpipe.toml` ignores log keys); both `JsonFormatter` and `TextFormatter` strip raw `exc_info`/`exc_text` tracebacks, stage failures emit only the `error_type` exception class name (`status="error"`), and `INFO`/`DEBUG` logs exclude raw document text, questions, prompts, completions, PII, and API keys.
 - **Scope Limitations & Non-Claims:** Heuristic recognizers and optional NER produce both false positives and false negatives (especially for regional phone formats, domain-specific IDs, unstructured free text, or noisy PDF extractions). `docpipe-maestro` provides configurable technical safeguards rather than legal certification—we make no claim of automatic legal compliance, regulatory certification, or exhaustive detection accuracy. Operators remain responsible for evaluating their own policies, salt lifecycle, and corpora.
-- **Trusted Corpus Assumption:** `ingest` and `sync` parse files inside user-specified directories. Only ingest trusted files, avoid directories containing untrusted symlinks or crafted HTML/PDF inputs, and protect `.docpipe/` on shared hosts (`chmod 700`, excluded from version control).
+- **Trusted Corpus Assumption:** `ingest` and `sync` parse files inside user-specified directories. Only ingest trusted files, avoid directories containing untrusted symlinks or crafted HTML/PDF/archive inputs, and protect `.docpipe/` on shared hosts (`chmod 700`, excluded from version control).
