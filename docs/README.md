@@ -20,7 +20,7 @@ Welcome to the documentation for **`docpipe-maestro`** — a minimal, provider-a
 
 ## Project & Design Context
 
-- **[CHANGELOG](../CHANGELOG.md)**: Release notes and unreleased changes following Keep a Changelog and Conventional Commits.
+- **[CHANGELOG](../CHANGELOG.md)**: Release history following Keep a Changelog and Conventional Commits.
 - **[Product Description](../PRODUCT.md)**: Original product scope, personas, non-goals, and architectural rationale.
 - **[Project Constitution](../.specify/memory/constitution.md)**: Non-negotiable design principles (Scope Discipline, Two-Phase Architecture, Library Purity, Search Small Return Big, Exception Preservation & PII Safety, Provider Agnosticism, Structured Correctness).
-- **[v0.1 Feature Specification](../specs/001-core-rag-pipeline/spec.md)**: Requirements, implementation plan, and contracts generated during v0.1 design.
+- **[Feature Specifications (`specs/`)](../specs/001-core-rag-pipeline/spec.md)**: Requirements, implementation plans, and contracts across `001-core-rag-pipeline` through `011-structured-logging`.

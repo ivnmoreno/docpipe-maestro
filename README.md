@@ -787,7 +787,7 @@ For security vulnerabilities, see [SECURITY.md](SECURITY.md).
 - **[CLI Reference](docs/cli-reference.md)** — `docpipe-maestro` commands, TOML config, outputs, and troubleshooting
 - **[Retrieval Evaluation Baselines](docs/eval-baseline.md)** — Offline dense vs `fts5_hybrid` comparison metrics ([JSON](docs/eval-baseline.json))
 - **[Development & Testing Guide](docs/development.md)** — Setup, quality gates, offline test doubles, and Ollama live runs
-- **[Future Features Backlog](docs/future-features.md)** — Implementation status and post-v0.1 roadmap
+- **[Future Features Backlog](docs/future-features.md)** — Implementation status and post-v0.2 roadmap
 - **[Changelog](CHANGELOG.md)** — Release history
 
 ---
