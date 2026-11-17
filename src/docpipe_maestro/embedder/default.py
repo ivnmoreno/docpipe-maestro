@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import ipaddress
 import json
+import math
 import os
 import re
 import sys
@@ -169,6 +170,46 @@ def prepare_litellm() -> Any:
     import litellm
 
     return litellm
+
+
+def _extract_input_cost_per_token(entry: Any) -> float | None:
+    """Extract a finite non-negative ``input_cost_per_token`` rate from a pricing entry."""
+    if not isinstance(entry, Mapping):
+        return None
+    rate = entry.get("input_cost_per_token")
+    if not isinstance(rate, (int, float)) or isinstance(rate, bool):
+        return None
+    cost_per_token = float(rate)
+    if not math.isfinite(cost_per_token) or cost_per_token < 0.0:
+        return None
+    return cost_per_token
+
+
+def estimate_embedding_cost(embed_model: str, estimated_tokens: int) -> float | None:
+    """Estimate offline USD embedding cost from bundled LiteLLM pricing metadata."""
+    if estimated_tokens <= 0:
+        return 0.0
+    normalized = embed_model.strip()
+    if not normalized:
+        return None
+    if is_local_target(normalized):
+        return 0.0
+
+    litellm = prepare_litellm()
+    model_cost = getattr(litellm, "model_cost", None)
+    if not isinstance(model_cost, Mapping):
+        return None
+
+    lowered = normalized.lower()
+    suffix = normalized.split("/", 1)[-1]
+    lowered_suffix = lowered.split("/", 1)[-1]
+    for key in dict.fromkeys((normalized, lowered, suffix, lowered_suffix)):
+        if not key:
+            continue
+        rate = _extract_input_cost_per_token(model_cost.get(key))
+        if rate is not None:
+            return round(estimated_tokens * rate, 10)
+    return None
 
 
 def raise_litellm_error(exc: Exception, *, operation: str, model: str) -> NoReturn:

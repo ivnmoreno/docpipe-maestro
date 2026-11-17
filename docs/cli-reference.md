@@ -118,20 +118,28 @@ docpipe-maestro ingest [--config CONFIG] [--collection COLLECTION]
 
 ### `docpipe-maestro sync <directory>`
 
-Three-way reconcile `<directory>` against the stored manifest (adds new files, skips unchanged files, updates changed files under a new `doc_version` before pruning stale versions, deletes missing files).
+Three-way reconcile `<directory>` against the stored manifest (adds new files, skips unchanged files, updates changed files under a new `doc_version` before pruning stale versions, deletes missing files), or preview deltas and offline embedding cost non-destructively with `--dry-run`.
 
 ```text
 docpipe-maestro sync [--config CONFIG] [--collection COLLECTION]
                      [--persist-dir PERSIST_DIR] [--local-only | --no-local-only]
                      [--pii-policy PII_POLICY] [--profile PROFILE]
-                     [--embed-model EMBED_MODEL] directory
+                     [--embed-model EMBED_MODEL] [--dry-run] [--json] directory
 ```
 
-- Supports `--local-only` / `--no-local-only` and `--pii-policy` with atomic rollback on `PiiBlockedError`.
+- Supports `--local-only` / `--no-local-only` and `--pii-policy` with atomic rollback on `PiiBlockedError` (and `--dry-run` enforces full validation/PII block checks without writing `.audit.jsonl`, creating missing `.docpipe/` dirs, updating manifest timestamps, or calling an embedder).
+- Pass `--dry-run` for a read-only preview including chunk volumes, `estimated_tokens`, and offline `estimated_cost_usd`; add `--json` (supported for both live `sync` and `--dry-run`) to emit the `SyncResult` JSON payload on `stdout`.
 
-- **Example output**:
+- **Example live output**:
   ```text
   Synced 'hr_policy': added=1, updated=1, skipped=5, removed=1.
+  ```
+- **Example `--dry-run` output**:
+  ```text
+  [Dry Run] Sync preview for 'hr_policy' (model=ollama/nomic-embed-text): added=1, updated=1, skipped=5, removed=1, children=12, parents=4, estimated_tokens=1850, estimated_cost_usd=$0.000000.
+    added: new_policy.md
+    updated: leave.md
+    removed: retired.md
   ```
 
 ---
@@ -195,18 +203,24 @@ docpipe-maestro remove [--config CONFIG] [--collection COLLECTION]
 
 ### `docpipe-maestro reindex --model <provider/model>`
 
-Re-embed all existing child chunks stored in ChromaDB under a new embedding model, update parent zero-vector dimensions, rebuild both the ChromaDB vector index and the collocated SQLite FTS5 lexical index (`lexical/<collection>.db`), and re-lock the manifest.
+Re-embed all existing child chunks stored in ChromaDB under a new embedding model, update parent zero-vector dimensions, rebuild both the ChromaDB vector index and the collocated SQLite FTS5 lexical index (`lexical/<collection>.db`), and re-lock the manifest, or preview chunk volumes and offline cost safely with `--dry-run`.
 
 ```text
 docpipe-maestro reindex [--config CONFIG] [--collection COLLECTION]
                         [--persist-dir PERSIST_DIR] [--local-only | --no-local-only]
-                        --model MODEL
+                        --model MODEL [--dry-run] [--json]
 ```
 
 - **Note**: `reindex` uses `--model` (required) rather than `--embed-model`. Collections ingested prior to hybrid search support must run `reindex` (or `ingest --force`) once before querying with `--searcher fts5_hybrid`.
-- **Example output**:
+- Passing `--dry-run` inspects active committed chunks read-only (via SQLite `?mode=ro` for default local storage, modifying **0 bytes** on disk with zero embedder calls) and reports active source/child/parent counts, `estimated_tokens`, and offline `estimated_cost_usd` (`unavailable` if model pricing is unlisted, `$0.000000` for local/empty runs).
+- Pass `--json` to emit `ReindexPreview.to_dict()` in `--dry-run` mode, or `{"collection": ..., "embed_model": ..., "reindexed_children": count, "dry_run": false}` on live runs.
+- **Example live output**:
   ```text
   Reindexed 42 child chunk(s) in collection 'hr_policy' with model 'openai/text-embedding-3-small'.
+  ```
+- **Example `--dry-run` output**:
+  ```text
+  [Dry Run] Reindex preview for 'hr_policy' (target_model=openai/text-embedding-3-small, previous_model=ollama/nomic-embed-text): sources=2, children=42, parents=10, estimated_tokens=6400, estimated_cost_usd=$0.000128.
   ```
 
 ---

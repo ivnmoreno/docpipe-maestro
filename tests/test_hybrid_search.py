@@ -787,6 +787,67 @@ def test_lazy_imports_defer_sqlite3_chromadb_and_litellm() -> None:
     assert proc.returncode == 0, proc.stderr
 
 
+def test_reindex_dry_run_lazy_imports_defer_heavy_backends(
+    tmp_path: Path,
+    mock_litellm_offline: dict[str, Any],
+) -> None:
+    """Missing-manifest and local reindex dry-run paths avoid eager chromadb/litellm imports."""
+    _ = mock_litellm_offline
+    missing_dir = tmp_path / "missing_lazy"
+    code_missing = (
+        "import sys; "
+        "from docpipe_maestro import reindex; "
+        "from docpipe_maestro.embedder import estimate_embedding_cost; "
+        "from docpipe_maestro.ingest import ReindexPreview; "
+        "assert estimate_embedding_cost('ollama/nomic-embed-text', 500) == 0.0; "
+        "prev = reindex("
+        "embed_model='ollama/nomic-embed-text', "
+        "collection='c', "
+        f"persist_dir={str(missing_dir)!r}, "
+        "dry_run=True); "
+        "assert isinstance(prev, ReindexPreview) and prev.total_sources == 0; "
+        "assert 'sqlite3' not in sys.modules; "
+        "assert 'chromadb' not in sys.modules; "
+        "assert 'litellm' not in sys.modules"
+    )
+    proc_missing = subprocess.run(
+        [sys.executable, "-c", code_missing],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert proc_missing.returncode == 0, proc_missing.stderr
+    assert not missing_dir.exists()
+
+    corpus = tmp_path / "seeded_lazy_corpus"
+    corpus.mkdir()
+    (corpus / "doc.md").write_text("# Policy\n\nStandard leave is 20 days.\n", encoding="utf-8")
+    seeded_persist = tmp_path / "seeded_lazy_persist"
+    from docpipe_maestro import ingest as root_ingest
+
+    root_ingest(corpus, collection="lazy_col", persist_dir=seeded_persist)
+
+    code_seeded = (
+        "import sys; "
+        "from docpipe_maestro import reindex; "
+        "prev = reindex("
+        "embed_model='ollama/nomic-embed-text', "
+        "collection='lazy_col', "
+        f"persist_dir={str(seeded_persist)!r}, "
+        "dry_run=True); "
+        "assert prev.total_sources == 1 and prev.estimated_cost_usd == 0.0; "
+        "assert 'chromadb' not in sys.modules; "
+        "assert 'litellm' not in sys.modules"
+    )
+    proc_seeded = subprocess.run(
+        [sys.executable, "-c", code_seeded],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert proc_seeded.returncode == 0, proc_seeded.stderr
+
+
 def test_lexical_search_latency_under_20ms_for_5000_chunks(tmp_persist_dir: Path) -> None:
     """LexicalIndex.search finishes in well under 20 ms across 5,000 indexed chunks."""
     idx = LexicalIndex(tmp_persist_dir, "perf_5k")

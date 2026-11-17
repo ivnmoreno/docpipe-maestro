@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 from docpipe_maestro._resolve import resolve_parser
 from docpipe_maestro._stages import Embedder, Store
@@ -29,9 +29,10 @@ from docpipe_maestro.manifest import (
     check_model_lock,
     classify_file,
     load_manifest,
+    manifest_path,
     save_manifest,
 )
-from docpipe_maestro.store import STORES, LexicalIndex
+from docpipe_maestro.store import STORES
 from docpipe_maestro.types import (
     Chunk,
     ChunkingProfile,
@@ -45,10 +46,14 @@ from docpipe_maestro.types import (
     PiiAuditRecord,
     PiiBlockedError,
     PiiPolicy,
+    ReindexPreview,
     SourceRecord,
     SyncResult,
     UnsupportedFormatError,
 )
+
+if TYPE_CHECKING:
+    from docpipe_maestro.store.lexical import LexicalIndex
 
 logger = get_logger(__name__)
 
@@ -78,6 +83,7 @@ def _emit_phase1_prep_summaries(
     skipped_count: int,
     metrics: _BatchStageMetrics,
     pii_active: bool,
+    include_embed: bool = True,
 ) -> None:
     """Emit aggregated INFO ``stage.end`` events for Phase 1 batch preparation."""
     shared = {"collection": collection, "docs": metrics.docs_processed, "skipped": skipped_count}
@@ -125,18 +131,33 @@ def _emit_phase1_prep_summaries(
             "parents": metrics.parents_chunked,
         },
     )
-    _emit_stage_end(
-        logger,
-        "embed",
-        level=logging.INFO,
-        duration_ms=metrics.embed_ms,
-        status="ok",
-        fields={
-            **shared,
-            "embed_model": embed_model,
-            "chunks": metrics.chunks_embedded,
-        },
-    )
+    if include_embed:
+        _emit_stage_end(
+            logger,
+            "embed",
+            level=logging.INFO,
+            duration_ms=metrics.embed_ms,
+            status="ok",
+            fields={
+                **shared,
+                "embed_model": embed_model,
+                "chunks": metrics.chunks_embedded,
+            },
+        )
+
+
+def _estimate_texts_cost(
+    texts: Sequence[str],
+    *,
+    embed_model: str,
+) -> tuple[int, float | None]:
+    """Compute offline token count and USD cost estimate across child chunk texts."""
+    from docpipe_maestro.embedder import estimate_embedding_cost
+    from docpipe_maestro.ingest.chunker import estimate_tokens
+
+    estimated_tokens = sum(estimate_tokens(text) for text in texts)
+    estimated_cost_usd = estimate_embedding_cost(embed_model, estimated_tokens)
+    return estimated_tokens, estimated_cost_usd
 
 
 def _is_within(path: Path, parent: Path) -> bool:
@@ -632,7 +653,9 @@ def _ingest_impl(
             save_manifest(persist_path, manifest)
 
         store_obj: Store = store_cls(persist_path, collection)
-        lexical = LexicalIndex(persist_path, collection)
+        from docpipe_maestro.store import LexicalIndex
+
+        lexical: LexicalIndex = LexicalIndex(persist_path, collection)
         active_versions = {k: v.doc_version for k, v in manifest.sources.items()}
         store_obj.sweep_uncommitted(active_versions)
         lexical.sweep_uncommitted(active_versions)
@@ -699,13 +722,16 @@ def sync(
     store: str = "default",
     pii_policy: PiiPolicy | None = None,
     local_only: bool = False,
+    dry_run: bool = False,
 ) -> SyncResult:
     """Three-way reconcile ``directory`` against the collection manifest.
 
     Adds new files, skips unchanged files (refreshing ``mtime``/``size`` when
     only filesystem timestamps changed), replaces modified files via staged
     delete-then-reinsert, and removes records/manifest entries for files
-    deleted from ``directory``.
+    deleted from ``directory``. When ``dry_run=True``, previews deltas, chunk
+    volumes, tokens, and offline embedding costs without store/manifest writes
+    or embedding calls.
 
     Args:
         directory: Directory path to synchronize with the manifest.
@@ -719,10 +745,12 @@ def sync(
         store: Registered ``STORES`` key (defaults to ``"default"``).
         pii_policy: Optional programmatic ``PiiPolicy`` enforced pre-chunking.
         local_only: When ``True``, refuse non-local ``embed_model`` targets.
+        dry_run: When ``True``, compute deltas and cost estimates read-only
+            with zero persistence writes and zero embedding requests.
 
     Returns:
         ``SyncResult`` listing ``added``, ``updated``, ``skipped``, and
-        ``removed`` canonical source keys.
+        ``removed`` canonical source keys plus chunk/token/cost estimates.
 
     Raises:
         UnsupportedFormatError: If ``directory`` is not a directory or contains
@@ -747,6 +775,7 @@ def sync(
             store=store,
             pii_policy=pii_policy,
             local_only=local_only,
+            dry_run=dry_run,
         )
 
 
@@ -763,6 +792,7 @@ def _sync_impl(
     store: str,
     pii_policy: PiiPolicy | None,
     local_only: bool,
+    dry_run: bool = False,
 ) -> SyncResult:
     """Execute three-way directory reconciliation inside an active correlation scope."""
     if local_only:
@@ -793,24 +823,30 @@ def _sync_impl(
     enricher_names = _effective_enricher_names(prof.enrichers, pii_policy=pii_policy)
     enricher_insts: list[Enricher] = _resolve_enrichers(enricher_names)
     chunker_inst: Chunker = CHUNKERS.resolve(chunker)()
-    embedder_inst: Embedder = EMBEDDERS.resolve(embedder)()
-    store_cls: type[Store] = STORES.resolve(store)
+    embedder_cls: type[Embedder] = EMBEDDERS.resolve(embedder)
+    if store != "default" or not dry_run:
+        STORES.resolve(store)
+    embedder_inst: Embedder | None = None if dry_run else embedder_cls()
 
     metrics = _BatchStageMetrics()
     staged_docs: list[tuple[str, str, str, str, int, float, list[EmbeddedChunk], int]] = []
     staged_audits: dict[str, PiiAuditRecord] = {}
     skipped: list[str] = []
+    added: list[str] = []
+    updated: list[str] = []
+    child_texts: list[str] = []
     manifest_dirty = False
 
     for file_path, source_key in discovered:
         status_flag, content_hash, size, mtime = classify_file(file_path, source_key, manifest)
         if status_flag == "unchanged":
             skipped.append(source_key)
-            existing = manifest.sources[source_key]
-            if existing.size != size or existing.mtime != mtime:
-                existing.size = size
-                existing.mtime = mtime
-                manifest_dirty = True
+            if not dry_run:
+                existing = manifest.sources[source_key]
+                if existing.size != size or existing.mtime != mtime:
+                    existing.size = size
+                    existing.mtime = mtime
+                    manifest_dirty = True
             continue
 
         content_hash, doc_version, chunks, audit_record = _extract_document_chunks(
@@ -825,10 +861,20 @@ def _sync_impl(
             chunker=chunker_inst,
             pii_policy=pii_policy,
             audit_threshold=audit_threshold,
-            persist_path=persist_path,
-            audit_mode="sync",
+            persist_path=None if dry_run else persist_path,
+            audit_mode=None if dry_run else "sync",
             metrics=metrics,
         )
+        child_texts.extend(c.text for c in chunks if c.metadata["type"] == "child")
+        if dry_run:
+            if status_flag == "new":
+                added.append(source_key)
+            else:
+                updated.append(source_key)
+            continue
+
+        if embedder_inst is None:
+            embedder_inst = embedder_cls()
         embedded, dim = _embed_document_chunks(
             chunks,
             embedder_inst=embedder_inst,
@@ -842,6 +888,12 @@ def _sync_impl(
         if audit_record is not None:
             staged_audits[source_key] = audit_record
 
+    estimated_children = metrics.children_chunked
+    estimated_parents = metrics.parents_chunked
+    estimated_tokens, estimated_cost_usd = _estimate_texts_cost(
+        child_texts, embed_model=embed_model
+    )
+
     _emit_phase1_prep_summaries(
         collection=collection,
         profile_name=prof.name,
@@ -849,10 +901,38 @@ def _sync_impl(
         skipped_count=len(skipped),
         metrics=metrics,
         pii_active=pii_policy is not None,
+        include_embed=not dry_run,
     )
 
-    added: list[str] = []
-    updated: list[str] = []
+    if dry_run:
+        with stage_event(
+            logger,
+            "store",
+            operation="sync",
+            dry_run=True,
+            collection=collection,
+            skipped=len(skipped),
+        ) as store_ev:
+            store_ev["added"] = len(added)
+            store_ev["updated"] = len(updated)
+            store_ev["removed"] = len(removed_keys)
+            store_ev["estimated_children"] = estimated_children
+            store_ev["estimated_parents"] = estimated_parents
+            store_ev["estimated_tokens"] = estimated_tokens
+
+        return SyncResult(
+            collection=collection,
+            embed_model=embed_model,
+            added=added,
+            updated=updated,
+            skipped=skipped,
+            removed=removed_keys,
+            dry_run=True,
+            estimated_children=estimated_children,
+            estimated_parents=estimated_parents,
+            estimated_tokens=estimated_tokens,
+            estimated_cost_usd=estimated_cost_usd,
+        )
 
     with stage_event(
         logger,
@@ -861,8 +941,10 @@ def _sync_impl(
         collection=collection,
         skipped=len(skipped),
     ) as store_ev:
-        store_obj: Store = store_cls(persist_path, collection)
-        lexical = LexicalIndex(persist_path, collection)
+        store_obj: Store = STORES.resolve(store)(persist_path, collection)
+        from docpipe_maestro.store import LexicalIndex
+
+        lexical: LexicalIndex = LexicalIndex(persist_path, collection)
         active_versions = {k: v.doc_version for k, v in manifest.sources.items()}
         store_obj.sweep_uncommitted(active_versions)
         lexical.sweep_uncommitted(active_versions)
@@ -932,6 +1014,11 @@ def _sync_impl(
         updated=updated,
         skipped=skipped,
         removed=removed_keys,
+        dry_run=False,
+        estimated_children=estimated_children,
+        estimated_parents=estimated_parents,
+        estimated_tokens=estimated_tokens,
+        estimated_cost_usd=estimated_cost_usd,
     )
 
 
@@ -972,7 +1059,9 @@ def remove(
 
             store_obj: Store = STORES.resolve(store)(persist_path, collection)
             store_obj.delete_by_source(source_key)
-            lexical = LexicalIndex(persist_path, collection)
+            from docpipe_maestro.store import LexicalIndex
+
+            lexical: LexicalIndex = LexicalIndex(persist_path, collection)
             if lexical.exists():
                 lexical.delete_by_source(source_key)
             manifest.sources.pop(source_key)
@@ -1022,6 +1111,7 @@ def status(
             )
 
 
+@overload
 def reindex(
     *,
     embed_model: str,
@@ -1030,12 +1120,54 @@ def reindex(
     embedder: str = "default",
     store: str = "default",
     local_only: bool = False,
-) -> int:
+    dry_run: Literal[False] = False,
+) -> int: ...
+
+
+@overload
+def reindex(
+    *,
+    embed_model: str,
+    collection: str = DEFAULT_COLLECTION,
+    persist_dir: str | Path = DEFAULT_PERSIST_DIR,
+    embedder: str = "default",
+    store: str = "default",
+    local_only: bool = False,
+    dry_run: Literal[True],
+) -> ReindexPreview: ...
+
+
+@overload
+def reindex(
+    *,
+    embed_model: str,
+    collection: str = DEFAULT_COLLECTION,
+    persist_dir: str | Path = DEFAULT_PERSIST_DIR,
+    embedder: str = "default",
+    store: str = "default",
+    local_only: bool = False,
+    dry_run: bool = False,
+) -> int | ReindexPreview: ...
+
+
+def reindex(
+    *,
+    embed_model: str,
+    collection: str = DEFAULT_COLLECTION,
+    persist_dir: str | Path = DEFAULT_PERSIST_DIR,
+    embedder: str = "default",
+    store: str = "default",
+    local_only: bool = False,
+    dry_run: bool = False,
+) -> int | ReindexPreview:
     """Re-embed all existing stored child chunks under a new embedding model.
 
     Computes all new child vectors in memory first, updates parent zero-vector
     dimensions to match, rebuilds the vector collection cleanly, and updates
-    the manifest's model lock and vector dimensionality.
+    the manifest's model lock and vector dimensionality. When ``dry_run=True``,
+    inspects active committed records read-only without mutating the store or
+    manifest and returns a ``ReindexPreview`` with token and offline cost
+    estimates.
 
     Args:
         embed_model: New LiteLLM ``provider/model`` identifier for the collection.
@@ -1044,9 +1176,12 @@ def reindex(
         embedder: Registered ``EMBEDDERS`` key (defaults to ``"default"``).
         store: Registered ``STORES`` key (defaults to ``"default"``).
         local_only: When ``True``, refuse non-local ``embed_model`` targets.
+        dry_run: When ``True``, preview re-embedding counts and cost read-only
+            with zero database writes and zero embedding requests.
 
     Returns:
-        Count of committed child chunks re-embedded.
+        Count of committed child chunks re-embedded, or a ``ReindexPreview``
+        when ``dry_run=True``.
 
     Raises:
         MissingCredentialError: If provider credentials for ``embed_model`` fail.
@@ -1061,6 +1196,7 @@ def reindex(
             embedder=embedder,
             store=store,
             local_only=local_only,
+            dry_run=dry_run,
         )
 
 
@@ -1072,8 +1208,9 @@ def _reindex_impl(
     embedder: str,
     store: str,
     local_only: bool,
-) -> int:
-    """Execute full collection re-embedding inside an active correlation scope."""
+    dry_run: bool = False,
+) -> int | ReindexPreview:
+    """Execute full collection re-embedding or dry-run preview inside an active scope."""
     if local_only:
         from docpipe_maestro.embedder import enforce_local_only
 
@@ -1081,7 +1218,91 @@ def _reindex_impl(
 
     persist_path = Path(persist_dir)
     manifest = load_manifest(persist_path, collection)
-    embedder_inst: Embedder = EMBEDDERS.resolve(embedder)()
+    embedder_cls: type[Embedder] = EMBEDDERS.resolve(embedder)
+    if store != "default" or not dry_run:
+        STORES.resolve(store)
+
+    if dry_run:
+        m_path = manifest_path(persist_path, collection)
+        if not m_path.exists() or not manifest.sources:
+            with stage_event(
+                logger,
+                "store",
+                operation="reindex",
+                dry_run=True,
+                collection=collection,
+                sources=0,
+                chunks=0,
+                parents=0,
+                estimated_tokens=0,
+            ):
+                pass
+            return ReindexPreview(
+                collection=collection,
+                embed_model=embed_model,
+                previous_embed_model=manifest.embed_model,
+                total_sources=0,
+                total_children=0,
+                total_parents=0,
+                estimated_tokens=0,
+                estimated_cost_usd=0.0,
+                dry_run=True,
+            )
+
+        active_versions = {k: v.doc_version for k, v in manifest.sources.items()}
+        if store == "default":
+            from docpipe_maestro.store._readonly import read_chroma_active_preview_rows
+
+            child_texts, parent_count = read_chroma_active_preview_rows(
+                persist_path,
+                collection,
+                active_versions,
+            )
+        else:
+            custom_store: Store = STORES.resolve(store)(persist_path, collection)
+            child_texts = [
+                c.text
+                for c in custom_store.get_all_children()
+                if active_versions.get(c.metadata["source"]) == c.metadata["doc_version"]
+            ]
+            parent_count = sum(
+                1
+                for p in custom_store.get_all_parents()
+                if active_versions.get(p.metadata["source"]) == p.metadata["doc_version"]
+            )
+
+        estimated_tokens, estimated_cost_usd = _estimate_texts_cost(
+            child_texts,
+            embed_model=embed_model,
+        )
+        total_sources = len(manifest.sources)
+        total_children = len(child_texts)
+        with stage_event(
+            logger,
+            "store",
+            operation="reindex",
+            dry_run=True,
+            collection=collection,
+            sources=total_sources,
+            chunks=total_children,
+            parents=parent_count,
+            estimated_tokens=estimated_tokens,
+        ):
+            pass
+
+        return ReindexPreview(
+            collection=collection,
+            embed_model=embed_model,
+            previous_embed_model=manifest.embed_model,
+            total_sources=total_sources,
+            total_children=total_children,
+            total_parents=parent_count,
+            estimated_tokens=estimated_tokens,
+            estimated_cost_usd=estimated_cost_usd,
+            dry_run=True,
+        )
+
+    embedder_inst: Embedder = embedder_cls()
     store_obj: Store = STORES.resolve(store)(persist_path, collection)
 
     active_versions = {k: v.doc_version for k, v in manifest.sources.items()}
@@ -1164,7 +1385,9 @@ def _reindex_impl(
     ):
         store_obj.reset_collection()
         store_obj.add_chunks(rebuilt)
-        lexical = LexicalIndex(persist_path, collection)
+        from docpipe_maestro.store import LexicalIndex
+
+        lexical: LexicalIndex = LexicalIndex(persist_path, collection)
         lexical.reset()
         lexical.add_chunks(rebuilt)
 

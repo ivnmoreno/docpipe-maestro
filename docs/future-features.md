@@ -146,11 +146,9 @@ This document tracks all architectural suggestions, completed `v0.2.0` upgrades,
 
 ## 8. CLI & Developer Experience
 
-### 8.1 Dry-Run Mode for `sync` and `reindex`
-- **Problem**: Users running `sync` or `reindex` on large corpora want to know what changes will occur before mutating the database or incurring embedding API costs.
-- **Proposed Upgrade**:
-  - Add `--dry-run` flag to `docpipe-maestro sync` and `docpipe-maestro reindex`.
-  - Output summary report: number of new files, modified files, deleted files, estimated tokens, and estimated cost without making database or API changes.
+### 8.1 Dry-Run Mode for `sync` and `reindex` — *Implemented (`012-dry-run`)*
+- **Status**: Implemented in `012-dry-run`.
+- **Details**: Adds non-mutating `--dry-run` and machine-readable `--json` support across `sync()` / `docpipe-maestro sync` and `reindex()` / `docpipe-maestro reindex`, exposing offline chunk counts (`estimated_children`, `estimated_parents`), offline token totals (`estimate_tokens`), and offline LiteLLM cost estimates (`estimate_embedding_cost()`), with zero embedder calls, zero `.audit.jsonl` appends on `PiiBlockedError`, and lazy read-only `?mode=ro` SQLite inspection for `0`-byte immutable `chroma.sqlite3` previews.
 
 ### 8.2 Progress Hooks & OpenTelemetry Tracing — *Built-In JSON Stage Logging Implemented (`011-structured-logging`); OTel Export Post-v0.2*
 - **Implemented (`011-structured-logging`)**: Stdlib-only `docpipe_maestro.log` (`JsonFormatter`, `correlation_id()`, `stage_event()`, passive `NullHandler` default) plus CLI `--log-json` / `--log-level` on `stderr`.
@@ -179,6 +177,6 @@ This document tracks all architectural suggestions, completed `v0.2.0` upgrades,
 | **`LEGAL` Profile** | Chunking | Post-v0.2 | High (Domain Safety) | Medium |
 | **Chunk-Level Differential Re-Embedding** | Ingestion | Post-v0.2 | High (Cost / Speed) | Medium |
 | **Streaming Output (`docpipe-maestro ask`)** | Generation | Post-v0.2 | High (UX) | Low |
-| **`--dry-run` for `sync`/`reindex`** | CLI / Ops | Post-v0.2 | Medium (Safety) | Low |
+| **`--dry-run` for `sync`/`reindex`** | CLI / Ops | *Implemented* (`012-dry-run`) | Medium (Safety) | Low |
 | **Additional Parsers (XLSX, PPTX)** | Intake | Post-v0.2 | Medium (Coverage) | Low |
 | **Two-Collection Split** | Storage | Post-v0.2 | Medium (Scale) | High |

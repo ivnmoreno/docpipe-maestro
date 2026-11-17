@@ -419,6 +419,11 @@ class SyncResult:
         updated: Modified source keys replaced via staged delete-then-reinsert.
         skipped: Unchanged source keys skipped during reconciliation.
         removed: Missing source keys purged from both the vector store and manifest.
+        dry_run: ``True`` when executed without persistent writes or embedding calls.
+        estimated_children: Total child chunks staged across ``added`` and ``updated``.
+        estimated_parents: Total parent sections staged across ``added`` and ``updated``.
+        estimated_tokens: Estimated token count across staged child chunks.
+        estimated_cost_usd: Offline embedding cost estimate in USD, or ``None`` if unlisted.
     """
 
     collection: str
@@ -427,6 +432,68 @@ class SyncResult:
     updated: list[str]
     skipped: list[str]
     removed: list[str]
+    dry_run: bool = False
+    estimated_children: int = 0
+    estimated_parents: int = 0
+    estimated_tokens: int = 0
+    estimated_cost_usd: float | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable summary dictionary."""
+        return {
+            "collection": self.collection,
+            "embed_model": self.embed_model,
+            "added": list(self.added),
+            "updated": list(self.updated),
+            "skipped": list(self.skipped),
+            "removed": list(self.removed),
+            "dry_run": self.dry_run,
+            "estimated_children": self.estimated_children,
+            "estimated_parents": self.estimated_parents,
+            "estimated_tokens": self.estimated_tokens,
+            "estimated_cost_usd": self.estimated_cost_usd,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ReindexPreview:
+    """Read-only preview summary returned by ``reindex(..., dry_run=True)``.
+
+    Attributes:
+        collection: Target collection name.
+        embed_model: Target replacement ``provider/model`` identifier.
+        previous_embed_model: Prior locked collection model from the manifest, if any.
+        total_sources: Count of active committed documents in the manifest.
+        total_children: Active committed child chunks to re-embed.
+        total_parents: Active committed parent sections preserved across reindex.
+        estimated_tokens: Estimated token count across active child chunks.
+        estimated_cost_usd: Offline embedding cost estimate in USD, or ``None`` if unlisted.
+        dry_run: Always ``True`` for dry-run reindex previews.
+    """
+
+    collection: str
+    embed_model: str
+    previous_embed_model: str | None
+    total_sources: int
+    total_children: int
+    total_parents: int
+    estimated_tokens: int
+    estimated_cost_usd: float | None
+    dry_run: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable preview dictionary."""
+        return {
+            "collection": self.collection,
+            "embed_model": self.embed_model,
+            "previous_embed_model": self.previous_embed_model,
+            "total_sources": self.total_sources,
+            "total_children": self.total_children,
+            "total_parents": self.total_parents,
+            "estimated_tokens": self.estimated_tokens,
+            "estimated_cost_usd": self.estimated_cost_usd,
+            "dry_run": self.dry_run,
+        }
 
 
 @dataclass(frozen=True, slots=True)

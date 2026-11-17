@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -2095,3 +2096,228 @@ def test_cli_structured_logging_flags_isolation_and_handler_cleanup(
     assert [type(h) for h in pkg_logger.handlers] == [logging.NullHandler]
     assert pkg_logger.level == logging.NOTSET
     assert list(root_logger.handlers) == root_handlers_before
+
+
+def _cli_tree_sha256(root_dir: Path) -> dict[str, str]:
+    """Snapshot relative paths and SHA-256 digests for CLI immutability checks."""
+    return {
+        path.relative_to(root_dir).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root_dir.rglob("*"))
+        if path.is_file()
+    }
+
+
+def test_cli_sync_and_reindex_dry_run_and_json_reports(
+    tmp_path: Path,
+    mock_litellm_offline: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    corpus = tmp_path / "cli_dry_corpus"
+    corpus.mkdir()
+    doc_a = corpus / "a.md"
+    doc_b = corpus / "b.md"
+    doc_a.write_text("# Leave\n\n20 days annual leave.\n", encoding="utf-8")
+    doc_b.write_text("# Travel\n\nRail travel reimbursed.\n", encoding="utf-8")
+    persist = tmp_path / "cli_dry_persist"
+
+    # 1. Human `sync --dry-run` on uninitialized dir must not create persist_dir or embed
+    calls_before = len(mock_litellm_offline["embedding"])
+    rc = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(persist),
+            "--collection",
+            "cli_dry",
+            "sync",
+            str(corpus),
+            "--dry-run",
+        ]
+    )
+    assert rc == 0
+    out_dry_human = capsys.readouterr().out
+    assert "[Dry Run]" in out_dry_human
+    assert "added=2" in out_dry_human
+    assert "$0.000000" in out_dry_human
+    assert "a.md" in out_dry_human
+    assert not persist.exists()
+    assert len(mock_litellm_offline["embedding"]) == calls_before
+
+    # 2. Machine-readable `sync --dry-run --json` before live `sync --json`
+    rc_json_dry = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(persist),
+            "--collection",
+            "cli_dry",
+            "sync",
+            str(corpus),
+            "--dry-run",
+            "--json",
+        ]
+    )
+    assert rc_json_dry == 0
+    dry_payload = json.loads(capsys.readouterr().out)
+    assert dry_payload["dry_run"] is True
+    assert dry_payload["added"] == ["a.md", "b.md"]
+    assert dry_payload["estimated_children"] > 0
+    assert dry_payload["estimated_tokens"] > 0
+    assert dry_payload["estimated_cost_usd"] == 0.0
+    assert not persist.exists()
+
+    rc_json_live = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(persist),
+            "--collection",
+            "cli_dry",
+            "sync",
+            str(corpus),
+            "--json",
+        ]
+    )
+    assert rc_json_live == 0
+    live_payload = json.loads(capsys.readouterr().out)
+    assert live_payload["dry_run"] is False
+    assert live_payload["added"] == dry_payload["added"]
+    assert live_payload["estimated_children"] == dry_payload["estimated_children"]
+    assert live_payload["estimated_tokens"] == dry_payload["estimated_tokens"]
+
+    # 3. `sync --dry-run --json --log-json` keeps stdout pure JSON & stderr structured without embed
+    doc_b.write_text("# Travel\n\nRail and bus travel reimbursed.\n", encoding="utf-8")
+    (corpus / "c.md").write_text("# Meals\n\nDaily meal stipend.\n", encoding="utf-8")
+    doc_a.unlink()
+    snap_before_diff = _cli_tree_sha256(persist)
+
+    rc_diff = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(persist),
+            "--collection",
+            "cli_dry",
+            "--log-json",
+            "sync",
+            str(corpus),
+            "--dry-run",
+            "--json",
+        ]
+    )
+    assert rc_diff == 0
+    cap_diff = capsys.readouterr()
+    diff_json = json.loads(cap_diff.out)
+    assert diff_json["dry_run"] is True
+    assert diff_json["added"] == ["c.md"]
+    assert diff_json["updated"] == ["b.md"]
+    assert diff_json["removed"] == ["a.md"]
+    err_lines = [json.loads(line) for line in cap_diff.err.strip().splitlines()]
+    assert [r["fields"]["stage"] for r in err_lines] == [
+        "intake",
+        "clean",
+        "enrich",
+        "chunk",
+        "store",
+    ]
+    assert err_lines[-1]["fields"]["dry_run"] is True
+    assert _cli_tree_sha256(persist) == snap_before_diff
+
+    # 4. `reindex --dry-run` human (unknown cost -> unavailable) and cloud `--json --log-json`
+    rc_rx_unk = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(persist),
+            "--collection",
+            "cli_dry",
+            "reindex",
+            "--model",
+            "unknown-provider/nonexistent-embed-v99",
+            "--dry-run",
+        ]
+    )
+    assert rc_rx_unk == 0
+    rx_unk_out = capsys.readouterr().out
+    assert "[Dry Run]" in rx_unk_out
+    assert "unavailable" in rx_unk_out
+
+    rc_rx_json = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(persist),
+            "--collection",
+            "cli_dry",
+            "--log-json",
+            "reindex",
+            "--model",
+            "openai/text-embedding-3-small",
+            "--dry-run",
+            "--json",
+        ]
+    )
+    assert rc_rx_json == 0
+    cap_rx = capsys.readouterr()
+    rx_payload = json.loads(cap_rx.out)
+    assert rx_payload["dry_run"] is True
+    assert rx_payload["collection"] == "cli_dry"
+    assert rx_payload["previous_embed_model"] == "ollama/nomic-embed-text"
+    assert rx_payload["embed_model"] == "openai/text-embedding-3-small"
+    assert rx_payload["total_sources"] == 2
+    assert rx_payload["total_children"] >= 2
+    assert rx_payload["estimated_tokens"] > 0
+    assert isinstance(rx_payload["estimated_cost_usd"], float)
+    assert rx_payload["estimated_cost_usd"] > 0.0
+    rx_err = [json.loads(line) for line in cap_rx.err.strip().splitlines()]
+    assert [r["fields"]["stage"] for r in rx_err] == ["store"]
+    assert rx_err[0]["fields"]["dry_run"] is True
+    assert _cli_tree_sha256(persist) == snap_before_diff
+
+    # 5. Cold subprocess CLI `reindex --dry-run --json` preserves exact 0-byte immutability
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "docpipe_maestro",
+            "--no-config",
+            "--persist-dir",
+            str(persist),
+            "--collection",
+            "cli_dry",
+            "reindex",
+            "--model",
+            "openai/text-embedding-3-small",
+            "--dry-run",
+            "--json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == rx_payload
+    assert _cli_tree_sha256(persist) == snap_before_diff
+
+    # 6. Live `reindex --json` returns count payload with dry_run: false
+    rc_rx_live = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(persist),
+            "--collection",
+            "cli_dry",
+            "reindex",
+            "--model",
+            "openai/text-embedding-3-small",
+            "--json",
+        ]
+    )
+    assert rc_rx_live == 0
+    rx_live_payload = json.loads(capsys.readouterr().out)
+    assert rx_live_payload == {
+        "collection": "cli_dry",
+        "embed_model": "openai/text-embedding-3-small",
+        "reindexed_children": rx_payload["total_children"],
+        "dry_run": False,
+    }

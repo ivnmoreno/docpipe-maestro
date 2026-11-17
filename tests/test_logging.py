@@ -466,3 +466,54 @@ def test_stage_failure_hygiene_disabled_short_circuit_and_secret_exclusion(
     assert dumped.strip()
     for forbidden in (doc_secret, query_secret, api_secret, ans.text):
         assert forbidden not in dumped
+
+
+def test_sync_dry_run_telemetry_and_no_pii_leaks(
+    tmp_path: Path,
+    mock_litellm_offline: dict[str, Any],
+) -> None:
+    """Dry-run sync emits prep summaries and a store preview without an embed stage or PII leaks."""
+    corpus = tmp_path / "dry_telemetry_docs"
+    corpus.mkdir()
+    raw_email = "alex.rivera@example.test"
+    raw_secret = "CONFIDENTIAL_DRY_RUN_BODY_7788"
+    (corpus / "handbook.md").write_text(
+        f"# Onboarding\n\nContact {raw_email} for {raw_secret} onboarding.\n",
+        encoding="utf-8",
+    )
+    dry_persist = tmp_path / "uncreated_persist"
+
+    with _capture_json_records(logging.DEBUG) as (raw_buf, recs):
+        res = sync(
+            corpus,
+            profile="POLICY",
+            collection="dry_tel_col",
+            persist_dir=dry_persist,
+            pii_policy={"types": {"EMAIL_ADDRESS": "redact"}},
+            dry_run=True,
+        )
+
+    assert res.dry_run is True
+    assert not dry_persist.exists()
+    assert not mock_litellm_offline["embedding"]
+
+    info_recs = [r for r in recs if r["level"] == "INFO"]
+    assert [r["fields"]["stage"] for r in info_recs] == [
+        "intake",
+        "clean",
+        "enrich",
+        "chunk",
+        "store",
+    ]
+    assert all(r["fields"]["stage"] != "embed" for r in recs)
+    assert len({r["correlation_id"] for r in recs}) == 1
+    store_fields = info_recs[-1]["fields"]
+    assert store_fields["operation"] == "sync"
+    assert store_fields["dry_run"] is True
+    assert store_fields["added"] == 1
+    assert store_fields["estimated_children"] == res.estimated_children
+    assert store_fields["estimated_tokens"] == res.estimated_tokens
+
+    dumped = raw_buf.getvalue()
+    assert raw_email not in dumped
+    assert raw_secret not in dumped

@@ -1,3 +1,9 @@
+## Unreleased
+
+### Feat
+
+- **dry-run**: add non-mutating `dry_run=True` preview mode to `sync()` and `reindex()` (`ReindexPreview` in `docpipe_maestro.ingest` / `types`, `SyncResult` preview metrics + `.to_dict()` across live and dry runs, offline `estimate_embedding_cost()` using bundled `litellm.model_cost`, lazy stdlib SQLite `?mode=ro` reader for `0`-byte immutable `chroma.sqlite3` reindex previews, zero `.audit.jsonl` appends on `PiiBlockedError`, and `--dry-run` / `--json` flags on CLI `sync` and `reindex`)
+
 ## v0.2.1 (2026-11-17)
 
 ### Fix
