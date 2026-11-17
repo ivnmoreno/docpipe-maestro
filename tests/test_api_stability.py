@@ -103,6 +103,7 @@ def test_public_callable_signatures_and_keyword_only_selectors() -> None:
         ("store", kw_only, "default"),
         ("pii_policy", kw_only, None),
         ("local_only", kw_only, False),
+        ("dry_run", kw_only, False),
     ]
     assert _params_info(root.remove) == [
         ("source", pos_kw, empty),
@@ -122,6 +123,7 @@ def test_public_callable_signatures_and_keyword_only_selectors() -> None:
         ("embedder", kw_only, "default"),
         ("store", kw_only, "default"),
         ("local_only", kw_only, False),
+        ("dry_run", kw_only, False),
     ]
     assert _params_info(root.retrieve) == [
         ("question", pos_kw, empty),
@@ -196,10 +198,12 @@ def test_legacy_module_compatibility_reexports_intact() -> None:
         _item_field,
         embed_query,
         embed_texts,
+        estimate_embedding_cost,
         prepare_litellm,
         raise_litellm_error,
         validate_api_base,
     )
+    from docpipe_maestro.ingest import ReindexPreview
     from docpipe_maestro.ingest.chunker import CHUNKERS, chunk_document, estimate_tokens
     from docpipe_maestro.ingest.clean import CLEANERS, clean_document, clean_text
     from docpipe_maestro.ingest.crossrefs import (
@@ -234,6 +238,7 @@ def test_legacy_module_compatibility_reexports_intact() -> None:
     from docpipe_maestro.types import (
         IngestContext,
         RegistryError,
+        SyncResult,
     )
     from docpipe_maestro.types import (
         ParsedClause as TypesClause,
@@ -244,14 +249,46 @@ def test_legacy_module_compatibility_reexports_intact() -> None:
     from docpipe_maestro.types import (
         ParsedSection as TypesSection,
     )
+    from docpipe_maestro.types import (
+        ReindexPreview as TypesReindexPreview,
+    )
 
     assert ParsedClause is TypesClause
     assert ParsedSection is TypesSection
     assert ParsedDocument is TypesDocument
+    assert ReindexPreview is TypesReindexPreview
     assert Phase1Embedder is Embedder
     assert Phase1Store is Store
     assert VectorStore is ChromaStore
     assert issubclass(RegistryError, root.DocpipeError)
+
+    default_sync_res = SyncResult(
+        collection="c",
+        embed_model="m",
+        added=[],
+        updated=[],
+        skipped=[],
+        removed=[],
+    )
+    assert default_sync_res.dry_run is False
+    assert default_sync_res.estimated_children == 0
+    assert default_sync_res.estimated_parents == 0
+    assert default_sync_res.estimated_tokens == 0
+    assert default_sync_res.estimated_cost_usd is None
+    assert default_sync_res.to_dict()["dry_run"] is False
+
+    preview_obj = ReindexPreview(
+        collection="c",
+        embed_model="m2",
+        previous_embed_model="m1",
+        total_sources=1,
+        total_children=2,
+        total_parents=1,
+        estimated_tokens=10,
+        estimated_cost_usd=0.0,
+    )
+    assert preview_obj.dry_run is True
+    assert preview_obj.to_dict()["embed_model"] == "m2"
     assert all(
         obj is not None
         for obj in [
@@ -273,6 +310,7 @@ def test_legacy_module_compatibility_reexports_intact() -> None:
             EMBEDDERS,
             embed_texts,
             embed_query,
+            estimate_embedding_cost,
             prepare_litellm,
             raise_litellm_error,
             validate_api_base,

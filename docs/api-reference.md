@@ -95,15 +95,17 @@ def sync(
     store: str = "default",
     pii_policy: PiiPolicy | None = None,
     local_only: bool = False,
+    dry_run: bool = False,
 ) -> SyncResult
 ```
 
-Performs three-way reconciliation between `directory` and `<persist_dir>/manifests/<collection>.json` (with pre-chunking `pii_policy` scrubbing/audit logging and `local_only` preflight identical to `ingest`):
+Performs three-way reconciliation between `directory` and `<persist_dir>/manifests/<collection>.json` (with pre-chunking `pii_policy` scrubbing/audit logging and `local_only` preflight identical to `ingest`). Both live and `dry_run=True` calls populate `estimated_children`, `estimated_parents`, `estimated_tokens`, and offline `estimated_cost_usd` (`SyncResult.to_dict()`):
 
-1. **Added**: New files on disk are parsed, chunked, embedded, and inserted into both vector and lexical stores.
+1. **Added**: New files on disk are parsed, chunked, embedded (skipped when `dry_run=True`), and inserted into both vector and lexical stores.
 2. **Updated**: Modified files (different `sha256`) write new chunks tagged with a new `doc_version`, commit the manifest atomically, and delete stale versions afterward, preventing orphaned clauses if the file shrank.
-3. **Skipped**: Files matching manifest hashes (even after `touch`) are skipped.
+3. **Skipped**: Files matching manifest hashes (even after `touch`) are skipped (manifest `mtime`/`size` fast-path updates are skipped when `dry_run=True`).
 4. **Removed**: Source keys tracked in the manifest that no longer exist under `directory` are purged from ChromaDB, SQLite FTS5, and the manifest. (An empty existing directory cleanly purges all tracked sources.)
+5. **`dry_run=True` guarantees**: Performs zero store/manifest/lexical writes, creates no missing `persist_dir`, appends zero `.audit.jsonl` entries on `PiiBlockedError`, and makes zero embedder calls while returning identical delta and offline token/cost estimates.
 
 **Raises**: `UnsupportedFormatError` (if `directory` is not an existing directory or contains an invalid file), `MissingExtraError`, `ModelMismatchError`, `MissingCredentialError`, `PiiBlockedError`, `RegistryError`, `DocpipeError`.
 
@@ -144,7 +146,7 @@ Read-only inspection of the manifest for `collection`. Does not initialize embed
 
 ---
 
-### `reindex(...) -> int`
+### `reindex(...) -> int | ReindexPreview`
 
 ```python
 def reindex(
@@ -155,17 +157,16 @@ def reindex(
     embedder: str = "default",
     store: str = "default",
     local_only: bool = False,
-) -> int
+    dry_run: bool = False,
+) -> int | ReindexPreview  # @overload returns int when dry_run=False, ReindexPreview when dry_run=True
 ```
 
 Migrates an existing collection to a new embedding model (and/or builds its collocated FTS5 lexical index) without re-parsing source files from disk (enforcing `local_only` pre-network when `True`):
 
-1. Reads all committed child and parent chunks directly from ChromaDB.
-2. Embeds all child chunks in memory under the new `embed_model` (if the collection is empty, updates `manifest.embed_model`, sets `embed_dim=None`, resets the lexical DB, and returns `0`).
-3. Rebuilds parent zero-vector placeholders matching the new vector dimension `len(new_vectors[0])`.
-4. Resets the ChromaDB collection and SQLite FTS5 lexical index, inserts rebuilt records, and updates the manifest lock, `embed_dim`, and timestamps.
+1. **Dry-run preview (`dry_run=True`)**: Validates `local_only` and registries (`EMBEDDERS`, `STORES`), returns a zero-work `ReindexPreview` immediately without creating directories if the manifest is missing/empty, reads active committed records via lazy stdlib SQLite `?mode=ro` (`chroma.sqlite3`) when `store == "default"` (`0` bytes written even inside read-only dirs) or via `store_cls` for custom stores, estimates offline tokens and USD cost (`estimate_embedding_cost`), and executes zero embedder calls.
+2. **Live execution (`dry_run=False`, default)**: Reads all committed child and parent chunks, embeds all child chunks in memory under the new `embed_model` (if empty, updates `manifest.embed_model`, sets `embed_dim=None`, resets the lexical DB, and returns `0`), rebuilds parent zero-vector placeholders matching `len(new_vectors[0])`, resets ChromaDB + SQLite FTS5, and commits the updated manifest.
 
-- **Returns**: Number of committed child chunks re-embedded.
+- **Returns**: Number of committed child chunks re-embedded (`int`), or `ReindexPreview` (`docpipe_maestro.ingest` / `docpipe_maestro.types`) when `dry_run=True`.
 - **Raises**: `MissingCredentialError`, `RegistryError`, `DocpipeError`.
 
 ---
@@ -398,9 +399,13 @@ ingest("./manual.md", profile=custom, collection="manuals")
 
 - `GenerationResult`: `text: str`, `model: str`, `finish_reason: str | None`, `truncated: bool`, `prompt_tokens: int | None`, `completion_tokens: int | None`, `reasoning_tokens: int | None`, `total_tokens: int | None`, `elapsed_seconds: float`
 - `IngestResult`: `collection: str`, `embed_model: str`, `ingested: list[str]`, `skipped: list[str]`, `chunks_written: int`, `parents_written: int`
-- `SyncResult`: `collection: str`, `embed_model: str`, `added: list[str]`, `updated: list[str]`, `skipped: list[str]`, `removed: list[str]`
+- `SyncResult`: `collection: str`, `embed_model: str`, `added: list[str]`, `updated: list[str]`, `skipped: list[str]`, `removed: list[str]`, `dry_run: bool = False`, `estimated_children: int = 0`, `estimated_parents: int = 0`, `estimated_tokens: int = 0`, `estimated_cost_usd: float | None = None` (supports `.to_dict()`)
+- `ReindexPreview` (`docpipe_maestro.ingest`, `docpipe_maestro.types`): `collection: str`, `embed_model: str`, `previous_embed_model: str | None`, `total_sources: int`, `total_children: int`, `total_parents: int`, `estimated_tokens: int`, `estimated_cost_usd: float | None`, `dry_run: bool = True` (supports `.to_dict()`)
 - `CollectionStatus`: `collection: str`, `embed_model: str | None`, `embed_dim: int | None`, `total_sources: int`, `total_children: int`, `total_parents: int`, `sources: list[SourceRecord]`
 - `SourceRecord`: `source`, `content_hash`, `doc_version`, `size`, `mtime`, `ingested_at`, `embed_model`, `profile`, `chunk_ids`, `parent_ids` (supports `.to_dict()` / `.from_dict()`).
+- **Offline Cost & Target Helpers** (`docpipe_maestro.embedder`):
+  - `estimate_embedding_cost(embed_model: str, estimated_tokens: int) -> float | None`: returns `0.0` for non-positive token counts or local providers (`ollama/`, `ollama_chat/`, `local/`) without importing `litellm`, else looks up bundled `litellm.model_cost` pricing via `prepare_litellm()` with zero network calls (`None` when unlisted).
+  - `is_local_target(model: str, api_base: str | None = None) -> bool` and `enforce_local_only(model: str, api_base: str | None = None, *, operation: str) -> None`: shared loopback/local enforcement helpers
 - **PII Types & Privacy Contracts** (`docpipe_maestro.types`, top-level `PiiPolicy`, `PiiBlockedError`, and `register_pii_recognizer`):
   - `PiiAction`: `Literal["redact", "tokenize", "block"]`
   - `EgressAction`: `Literal["redact", "block", "allow"]`
@@ -410,7 +415,6 @@ ingest("./manual.md", profile=custom, collection="manuals")
   - `PiiAuditRecord`: `TypedDict` (`timestamp`, `collection`, `source`, `doc_version`, `threshold`, `entity_counts`, `actions`, `blocked`, `mode`) — retained append-only across `remove()` calls
   - `PiiRecognizer`: `@runtime_checkable` `Protocol` (`name`, `entity_type`, `supported_languages`, `detect(text, *, languages)`) in `docpipe_maestro.types` for `@register_pii_recognizer` plugins
   - `audit_log_path(persist_dir: Path, collection: str) -> Path` (`docpipe_maestro.manifest`): validated `<persist_dir>/manifests/<collection>.audit.jsonl` resolver
-  - `is_local_target(model: str, api_base: str | None = None) -> bool` and `enforce_local_only(model: str, api_base: str | None = None, *, operation: str) -> None` (`docpipe_maestro.embedder`): shared loopback/local enforcement helpers
 
 ---
 

@@ -440,6 +440,12 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     p_sync.add_argument("directory", help="Directory path to synchronize")
     p_sync.add_argument("--profile", default=default_profile, help="Chunking profile")
     p_sync.add_argument("--embed-model", default=default_embed_model, help="Embedding model")
+    p_sync.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview changes, tokens, and estimated cost without writing or embedding",
+    )
+    p_sync.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON output")
 
     # Phase 1/2: status
     p_status = subparsers.add_parser(
@@ -464,6 +470,12 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         help="Re-embed collection under a new model",
     )
     p_reindex.add_argument("--model", required=True, help="New embedding provider/model string")
+    p_reindex.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview active chunks, tokens, and estimated cost without re-embedding",
+    )
+    p_reindex.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON output")
 
     # Phase 2: query
     p_query = subparsers.add_parser(
@@ -737,6 +749,11 @@ def _resolve_eval_collection(
     return DEFAULT_COLLECTION
 
 
+def _format_cost_usd(cost: float | None) -> str:
+    """Format an optional USD embedding cost estimate for human CLI output."""
+    return f"${cost:.6f}" if cost is not None else "unavailable"
+
+
 def _format_eval_text(report: EvalReport) -> str:
     """Render an aligned terminal summary of an ``EvalReport``."""
     cfg = report["config"]
@@ -850,7 +867,28 @@ def _dispatch_command(
             embed_model=args.embed_model,
             pii_policy=resolved_pii_policy,
             local_only=args.local_only,
+            dry_run=args.dry_run,
         )
+        if args.as_json:
+            print(json.dumps(sres.to_dict(), indent=2))
+            return 0
+        if sres.dry_run:
+            print(
+                f"[Dry Run] Sync preview for '{sres.collection}' (model={sres.embed_model}): "
+                f"added={len(sres.added)}, updated={len(sres.updated)}, "
+                f"skipped={len(sres.skipped)}, removed={len(sres.removed)}, "
+                f"children={sres.estimated_children}, parents={sres.estimated_parents}, "
+                f"estimated_tokens={sres.estimated_tokens}, "
+                f"estimated_cost_usd={_format_cost_usd(sres.estimated_cost_usd)}."
+            )
+            for label, keys in (
+                ("added", sres.added),
+                ("updated", sres.updated),
+                ("removed", sres.removed),
+            ):
+                if keys:
+                    print(f"  {label}: {', '.join(keys)}")
+            return 0
         print(
             f"Synced '{sres.collection}': added={len(sres.added)}, "
             f"updated={len(sres.updated)}, skipped={len(sres.skipped)}, "
@@ -907,12 +945,46 @@ def _dispatch_command(
     if args.command == "reindex":
         from docpipe_maestro.ingest.pipeline import reindex
 
+        if args.dry_run:
+            preview = reindex(
+                embed_model=args.model,
+                collection=args.collection,
+                persist_dir=args.persist_dir,
+                local_only=args.local_only,
+                dry_run=True,
+            )
+            if args.as_json:
+                print(json.dumps(preview.to_dict(), indent=2))
+                return 0
+            print(
+                f"[Dry Run] Reindex preview for '{preview.collection}' "
+                f"(target_model={preview.embed_model}, "
+                f"previous_model={preview.previous_embed_model}): "
+                f"sources={preview.total_sources}, children={preview.total_children}, "
+                f"parents={preview.total_parents}, estimated_tokens={preview.estimated_tokens}, "
+                f"estimated_cost_usd={_format_cost_usd(preview.estimated_cost_usd)}."
+            )
+            return 0
+
         count = reindex(
             embed_model=args.model,
             collection=args.collection,
             persist_dir=args.persist_dir,
             local_only=args.local_only,
         )
+        if args.as_json:
+            print(
+                json.dumps(
+                    {
+                        "collection": args.collection,
+                        "embed_model": args.model,
+                        "reindexed_children": count,
+                        "dry_run": False,
+                    },
+                    indent=2,
+                )
+            )
+            return 0
         print(
             f"Reindexed {count} child chunk(s) in collection '{args.collection}' "
             f"with model '{args.model}'."

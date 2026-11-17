@@ -265,10 +265,10 @@ The system shall provide a CLI aligned with the two-phase model, offering ingest
 | Command | Phase | Purpose |
 |---|---|---|
 | `docpipe-maestro ingest <path>` | Phase 1 | Ingest a file or directory into the vector database |
-| `docpipe-maestro sync <directory>` | Phase 1 | Reconcile a directory against the manifest (add new, update changed, remove deleted) |
+| `docpipe-maestro sync <directory>` | Phase 1 | Reconcile a directory against the manifest (add new, update changed, remove deleted; supports `--dry-run` and `--json`) |
 | `docpipe-maestro status` | Phase 1 / 2 | Inspect the manifest: indexed files, hashes, embedding model, and record counts |
 | `docpipe-maestro remove <path>` | Phase 1 | Delete all records and manifest entry for a specific source document |
-| `docpipe-maestro reindex --model <m>` | Phase 1 | Re-embed and re-ingest all tracked corpus sources under a new embedding model |
+| `docpipe-maestro reindex --model <m>` | Phase 1 | Re-embed and re-ingest all tracked corpus sources under a new embedding model (supports `--dry-run` and `--json`) |
 | `docpipe-maestro query "<question>"` | Phase 2 (retrieval only) | Return relevant sections without generating an answer (supports `--json`, `--where`) |
 | `docpipe-maestro ask "<question>"` | Phase 2 (full RAG) | Generate an answer using retrieved sections (supports `--where`, `--pii-policy`, `--local-only`) |
 | `docpipe-maestro eval --fixture <p>` | Phase 2 (evaluation) | Evaluate retrieval metrics read-only against labeled fixtures (supports `--where`, `--rerank`) |
@@ -303,7 +303,7 @@ The library shall expose a deliberately minimal public surface (`docpipe_maestro
 | `RetrievedChunk` | type | An `EmbeddedChunk` paired with a similarity score |
 | `SourceRecord` | type | Per-document manifest metadata record stored alongside the collection |
 | `IngestResult` | type | Structured summary returned by `ingest()` |
-| `SyncResult` | type | Structured reconciliation summary returned by `sync()` |
+| `SyncResult` | type | Structured reconciliation and preview summary returned by `sync()` |
 | `CollectionStatus` | type | Read-only collection and source manifest summary returned by `status()` |
 | `GenerationResult` | type | Structured answer text, finish reason, truncation flag, token usage, and latency returned by `answer_detailed()` |
 | `DocpipeError` | exception | Base exception class for all library errors |

@@ -388,9 +388,13 @@ docpipe-maestro ingest ./docs --force --collection knowledge_base
 
 ### 2. Keep Collections in Sync (`docpipe-maestro sync`)
 
-Reconcile a target directory against the manifest (adds new files, skips unchanged files via `mtime`/`sha256`, updates modified files, and purges deleted files):
+Reconcile a target directory against the manifest (adds new files, skips unchanged files via `mtime`/`sha256`, updates modified files, and purges deleted files), or preview changes and offline token/cost estimates safely first with `--dry-run` (plus `--json` for CI gating):
 
 ```bash
+# Preview deltas, chunks, tokens, and estimated cost without mutating disk or calling embedders
+docpipe-maestro sync ./company_policies --profile POLICY --collection hr_policy --dry-run
+
+# Apply reconciliation
 docpipe-maestro sync ./company_policies --profile POLICY --collection hr_policy
 ```
 **Example output**:
@@ -427,9 +431,12 @@ docpipe-maestro remove hr_leave_policy.md --collection hr_policy
 
 ### 5. Migrate Embedding Models (`docpipe-maestro reindex`)
 
-Re-embed all existing child chunks stored in the database under a new embedding model, update parent vector dimensions, and re-lock the collection:
+Re-embed all existing child chunks stored in the database under a new embedding model, update parent vector dimensions, and re-lock the collection (or pass `--dry-run [--json]` to estimate active child chunks, tokens, and offline cost before making API calls):
 
 ```bash
+# Preview active chunks and estimated embedding cost before migrating
+docpipe-maestro reindex --model openai/text-embedding-3-small --collection hr_policy --dry-run
+
 # Migrate collection to OpenAI embeddings
 export OPENAI_API_KEY="sk-..."
 docpipe-maestro reindex --model openai/text-embedding-3-small --collection hr_policy
@@ -673,7 +680,7 @@ Exported from `docpipe_maestro` (`docpipe_maestro.types`):
 - `RetrievedChunk`: `EmbeddedChunk` with normalized similarity or RRF score (`score: float` in `[0.0, 1.0]`).
 - `GenerationResult`: Detailed LLM completion result (`text`, `model`, `finish_reason`, `truncated`, `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `total_tokens`, `elapsed_seconds`).
 - `IngestResult`: Summary (`collection`, `embed_model`, `ingested`, `skipped`, `chunks_written`, `parents_written`).
-- `SyncResult`: Summary (`collection`, `embed_model`, `added`, `updated`, `skipped`, `removed`).
+- `SyncResult`: Summary (`collection`, `embed_model`, `added`, `updated`, `skipped`, `removed`, `dry_run`, `estimated_children`, `estimated_parents`, `estimated_tokens`, `estimated_cost_usd`).
 - `CollectionStatus`: Manifest overview (`collection`, `embed_model`, `embed_dim`, `total_sources`, `total_children`, `total_parents`, `sources`).
 - `SourceRecord`: Per-file manifest tracking record (`source`, `content_hash`, `doc_version`, `size`, `mtime`, `ingested_at`, `embed_model`, `profile`, `chunk_ids`, `parent_ids`).
 - Exceptions: `DocpipeError` (base) with `UnsupportedFormatError`, `MissingExtraError`, `ModelMismatchError`, `MissingCredentialError`, `PiiBlockedError`, and `RegistryError`.
