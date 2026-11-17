@@ -3,7 +3,7 @@
 > **Scope Guardrail & Alignment Principle:**  
 > In accordance with the `docpipe-maestro` Constitution (Principle I: *"The engine — not the app, not the framework"*), any feature proposed for the core library must be accessible through the public library API and CLI without turning `docpipe-maestro` into an application server or framework. Features that require long-lived servers, authentication, or GUI layers belong in companion repositories or example wrappers.
 
-This document tracks all architectural suggestions, completed `v0.2.0` upgrades, and remaining post-`v0.2` backlog proposals identified across `PRODUCT.md`, feature specifications (`specs/001-core-rag-pipeline/` through `specs/011-structured-logging/`), and implementation.
+This document tracks all architectural suggestions, completed upgrades (`v0.2.0`–`v0.3.0`), and remaining backlog proposals identified across `PRODUCT.md`, feature specifications (`specs/001-core-rag-pipeline/` through `specs/014-additional-intake-formats/`), and implementation.
 
 ---
 
@@ -110,11 +110,9 @@ This document tracks all architectural suggestions, completed `v0.2.0` upgrades,
 - **Status**: Implemented in `002-online-llm-customization`.
 - **Details**: Adds `build_chat_messages()`, `answer_detailed()` returning `GenerationResult`, generation tuning (`temperature`, `max_tokens`, `timeout`, `model_kwargs`), explicit `finish_reason="length"` / `reasoning_tokens` diagnostics, HTTPS gateway validation, scoped `.env` + `./docpipe.toml` discovery, and CLI `ask` flags (`--system-prompt`, `--system-prompt-file`, `--fail-on-truncation`, `--show-context`, `--json`).
 
-### 6.2 Streaming Generation Support — *Implemented (013-streaming-generation)*
-- **Problem**: Generation waiting for completion blocks the caller until the full answer is generated.
-- **Proposed Upgrade**:
-  - Add synchronous pull-based streaming support to `answer(..., stream=True)` yielding non-empty text chunks (`Iterator[str]`) with eager preflight validation, `local_only` / `guard_egress` enforcement, early `.close()` cleanup, and correlated telemetry.
-  - Add `--stream` flag to `docpipe-maestro ask` (mutually exclusive with `--json`) for real-time flushed `stdout` output with truncation warnings on `stderr`.
+### 6.2 Streaming Generation Support — *Implemented (`013-streaming-generation`)*
+- **Status**: Implemented in `013-streaming-generation`.
+- **Details**: Adds synchronous pull-based streaming support to `answer(..., stream=True)` yielding non-empty text chunks (`Iterator[str]`) with eager preflight validation, `local_only` / `guard_egress` enforcement, early `.close()` cleanup, and correlated telemetry, plus `--stream` on `docpipe-maestro ask` (mutually exclusive with `--json`) for real-time flushed `stdout` output with truncation warnings on `stderr`.
 
 ### 6.3 Citation Extraction & Verification
 - **Problem**: LLMs can misattribute which retrieved section supported which claim in the generated text.
