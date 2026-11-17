@@ -1,11 +1,13 @@
 <!--
 # Sync Impact Report
-- Version change: 1.3.0 -> 1.3.1
-- Rationale: Fulfill v1.3.0 follow-up TODO by syncing finalized Stage 4 (`009-pii-protection`) public root exports (`register_pii_recognizer`, `PiiPolicy`, `PiiBlockedError`) into Quality Gates.
-- Migration Note: Strictly additive root exports (`__all__` count incremented to 36); zero breaking changes for existing callers or Phase 1/2 signatures.
-- List of modified principles: None
+- Version change: 1.3.1 -> 1.4.0
+- Rationale: Explicitly permit caller-pulled synchronous text chunk iteration (Iterator[str]) for Phase 2 answer generation and real-time CLI ask --stream terminal output ahead of feature 013 (Streaming Generation), while keeping HTTP/SSE APIs, WebSockets, async frameworks, sessions, auth, and UIs strictly out of core scope.
+- Migration Note: Zero breaking changes for existing callers; non-streaming answer() / answer_detailed() behavior remains the default, and pre-network local_only + guard_egress PII controls continue to apply prior to provider calls.
+- List of modified principles:
+  - I. Scope Discipline (NON-NEGOTIABLE) -> I. Scope Discipline (NON-NEGOTIABLE) (refined blanket "streaming" exclusion to exclude HTTP/SSE/WebSockets/UI/async servers while permitting synchronous Iterator[str] generation and CLI --stream terminal output)
 - Modified sections:
-  - Additional Constraints -> Quality Gates (synced `register_pii_recognizer`, `PiiPolicy`, `PiiBlockedError` into the root public API surface list)
+  - Core Principles -> I. Scope Discipline (NON-NEGOTIABLE)
+  - Document Version Footer (v1.4.0, Last Amended 2026-11-17)
 - Added sections: None
 - Removed sections: None
 - Follow-up TODOs: None
@@ -20,10 +22,14 @@
 The product is a minimal RAG pipeline library — not an application, not a framework,
 not a platform. "Minimal" applies strictly to feature surface and scope promise,
 never to engineering rigor, correctness guarantees, or safety discipline
-(*minimal in promise, not in rigor*). Anything that assumes "a user is waiting" (UI, HTTP API,
-sessions, auth, streaming, deployment) belongs to the consuming application. Anything
-that cannot be reached through the public API surface does not belong in the core.
-Every feature proposal must pass the one-sentence positioning test:
+(*minimal in promise, not in rigor*). Pull-based **synchronous** text chunk iteration
+(`Iterator[str]`) for LLM answer generation and real-time CLI `ask --stream` terminal output
+MUST be permitted as synchronous library primitives so callers receive incremental output.
+Anything that assumes an interactive host application or persistent network server (UI,
+HTTP/SSE APIs, WebSockets, sessions, auth, async server frameworks, deployment) MUST remain
+excluded and belongs to the consuming application. Anything that cannot be reached through
+the public API surface does not belong in the core. Every feature proposal must pass the
+one-sentence positioning test:
 
 > "A minimal RAG pipeline: it is the engine — not the app, not the framework."
 
@@ -173,4 +179,4 @@ across modules is prohibited.
 > correctly, embeds it, stores it, retrieves the right sections, and optionally
 > generates a grounded answer. It is the engine — not the app, not the framework."
 
-**Version**: 1.3.1 | **Ratified**: 2026-11-12 | **Last Amended**: 2026-11-15
+**Version**: 1.4.0 | **Ratified**: 2026-11-12 | **Last Amended**: 2026-11-17

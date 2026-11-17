@@ -22,6 +22,7 @@ from unittest.mock import patch
 import pytest
 
 from docpipe_maestro import (
+    answer,
     answer_detailed,
     build_chat_messages,
     ingest,
@@ -43,7 +44,7 @@ from docpipe_maestro.log import (
     stage_event,
 )
 from docpipe_maestro.query.stages import Reranker
-from docpipe_maestro.types import RetrievedChunk
+from docpipe_maestro.types import DocpipeError, RetrievedChunk
 
 
 @contextmanager
@@ -517,3 +518,107 @@ def test_sync_dry_run_telemetry_and_no_pii_leaks(
     dumped = raw_buf.getvalue()
     assert raw_email not in dumped
     assert raw_secret not in dumped
+
+
+def test_answer_stream_telemetry_and_early_close_lifecycle(
+    mock_litellm_offline: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Streaming answer emits correlated telemetry across completion, close, and error."""
+    _ = mock_litellm_offline
+    raw_secret = "SECRET_PROMPT_TOKEN_8833"
+    raw_email = "casey.smith@example.test"
+    api_secret = "sk-stream-log-secret-7744"
+    monkeypatch.setenv("OPENAI_API_KEY", api_secret)
+
+    class _StreamWithClose:
+        def __init__(self, chunks: list[Any], *, fail_on_idx: int | None = None) -> None:
+            self._chunks = chunks
+            self._fail_on_idx = fail_on_idx
+            self.closed = False
+
+        def __iter__(self) -> Iterator[Any]:
+            for idx, item in enumerate(self._chunks):
+                if self._fail_on_idx is not None and idx >= self._fail_on_idx:
+                    raise RuntimeError(f"Bearer {api_secret} disconnected")
+                yield item
+
+        def close(self) -> None:
+            self.closed = True
+
+    import litellm
+
+    # 1. Normal completion shares 1 UUID across egress + answer(stream=True) & restores cid
+    normal_stream = _StreamWithClose(
+        [
+            {"choices": [{"delta": {"content": f"Token-{raw_secret}-part1 "}}]},
+            {
+                "choices": [{"delta": {"content": "done."}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16},
+            },
+        ]
+    )
+    monkeypatch.setattr(litellm, "completion", lambda **kwargs: normal_stream)
+    with _capture_json_records(logging.DEBUG) as (buf_ok, recs_ok):
+        collected = list(
+            answer(
+                f"Email {raw_email} about {raw_secret}",
+                model="openai/gpt-4o-mini",
+                pii_policy={"types": {"EMAIL_ADDRESS": "redact"}},
+                stream=True,
+            )
+        )
+    assert len(collected) == 2
+    assert get_correlation_id() is None
+    assert normal_stream.closed is True
+    assert [r["fields"]["stage"] for r in recs_ok] == ["egress", "answer"]
+    assert len({r["correlation_id"] for r in recs_ok}) == 1
+    assert uuid.UUID(recs_ok[0]["correlation_id"])
+    assert recs_ok[1]["fields"]["stream"] is True
+    assert recs_ok[1]["fields"]["finish_reason"] == "stop"
+    assert recs_ok[1]["fields"]["truncated"] is False
+    for forbidden in (raw_secret, raw_email, api_secret):
+        assert forbidden not in buf_ok.getvalue()
+
+    # 2. has_context=False emits zero answer stage events
+    with _capture_json_records(logging.DEBUG) as (_, recs_empty):
+        refusal = list(answer("Prompt", model="ollama/llama3.2", has_context=False, stream=True))
+    assert refusal == ["Not found in the provided context."]
+    assert all(r["fields"]["stage"] != "answer" for r in recs_empty)
+
+    # 3. Early close (break / .close()) closes raw_stream, emits closed_early=True, restores cid
+    early_stream = _StreamWithClose(
+        [
+            {"choices": [{"delta": {"content": "First "}}]},
+            {"choices": [{"delta": {"content": "Second"}}]},
+        ]
+    )
+    monkeypatch.setattr(litellm, "completion", lambda **kwargs: early_stream)
+    with _capture_json_records(logging.INFO) as (_, recs_early):
+        gen = answer("Ask?", model="ollama/llama3.2", stream=True)
+        assert next(gen) == "First "
+        close_method = getattr(gen, "close", None)
+        assert callable(close_method)
+        close_method()
+    assert get_correlation_id() is None
+    assert early_stream.closed is True
+    assert len(recs_early) == 1
+    assert recs_early[0]["fields"]["stage"] == "answer"
+    assert recs_early[0]["fields"]["status"] == "ok"
+    assert recs_early[0]["fields"]["closed_early"] is True
+
+    # 4. Mid-stream error emits ERROR stage.end without leaking credentials
+    err_stream = _StreamWithClose(
+        [{"choices": [{"delta": {"content": "Part1 "}}]}, {"choices": []}],
+        fail_on_idx=1,
+    )
+    monkeypatch.setattr(litellm, "completion", lambda **kwargs: err_stream)
+    with _capture_json_records(logging.INFO) as (buf_err, recs_err), pytest.raises(DocpipeError):
+        list(answer("Ask?", model="openai/gpt-4o-mini", stream=True))
+    assert get_correlation_id() is None
+    assert err_stream.closed is True
+    assert [r["fields"]["stage"] for r in recs_err] == ["answer"]
+    assert recs_err[0]["level"] == "ERROR"
+    assert recs_err[0]["fields"]["status"] == "error"
+    assert recs_err[0]["fields"]["error_type"] == "DocpipeError"
+    assert api_secret not in buf_err.getvalue()

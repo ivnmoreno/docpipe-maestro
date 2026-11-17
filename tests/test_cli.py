@@ -2321,3 +2321,187 @@ def test_cli_sync_and_reindex_dry_run_and_json_reports(
         "reindexed_children": rx_payload["total_children"],
         "dry_run": False,
     }
+
+
+def test_cli_ask_stream_progressive_flush_isolation_and_truncation(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_litellm_offline: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    doc = tmp_path / "policy.md"
+    doc.write_text(
+        "## Section 1: Leave\n\nAnnual leave is 20 days except probationary hires.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    assert main(["--no-config", "--persist-dir", str(tmp_persist_dir), "ingest", str(doc)]) == 0
+    capsys.readouterr()
+
+    # 1. Mutual exclusion between --stream and --json rejects before retrieval/generation
+    with (
+        patch("docpipe_maestro.query.retriever.retrieve") as spy_retrieve,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main(
+            [
+                "--no-config",
+                "--persist-dir",
+                str(tmp_persist_dir),
+                "ask",
+                "Leave?",
+                "--stream",
+                "--json",
+            ]
+        )
+    assert exc_info.value.code == 2
+    conflict_err = capsys.readouterr().err
+    assert "not allowed" in conflict_err
+    assert "--stream" in conflict_err and "--json" in conflict_err
+    spy_retrieve.assert_not_called()
+
+    # 2. docpipe.toml `stream = true` is ignored so ask --json runs without conflict
+    cfg = tmp_path / "stream_ignore.toml"
+    cfg.write_text(
+        f'persist_dir = "{tmp_persist_dir.as_posix()}"\nstream = true\n',
+        encoding="utf-8",
+    )
+    rc_toml = main(["--config", str(cfg), "ask", "Annual leave?", "--json"])
+    assert rc_toml == 0
+    assert "answer" in json.loads(capsys.readouterr().out)
+
+    # 3. Progressive flush + stderr isolation (--show-context & --log-json)
+    chunks = [
+        {"choices": [{"delta": {"content": "Annual "}}]},
+        {"choices": [{"delta": {"content": "leave is "}}]},
+        {"choices": [{"delta": {"content": "20 days."}, "finish_reason": "stop"}]},
+    ]
+    flush_calls = 0
+    orig_flush = sys.stdout.flush
+
+    def counting_flush() -> None:
+        nonlocal flush_calls
+        flush_calls += 1
+        orig_flush()
+
+    with (
+        patch("litellm.completion", return_value=iter(chunks)),
+        monkeypatch.context() as m,
+    ):
+        m.setattr(sys.stdout, "flush", counting_flush)
+        rc = main(
+            [
+                "--no-config",
+                "--persist-dir",
+                str(tmp_persist_dir),
+                "ask",
+                "How many leave days?",
+                "--stream",
+                "--show-context",
+                "--log-json",
+            ]
+        )
+    assert rc == 0
+    cap = capsys.readouterr()
+    assert cap.out == "Annual leave is 20 days.\n"
+    assert flush_calls >= 4
+    assert "[Context 1]" in cap.err and "Section 1: Leave" in cap.err
+    json_lines = [line for line in cap.err.splitlines() if line.startswith("{")]
+    recs = [json.loads(line) for line in json_lines]
+    assert [r["fields"]["stage"] for r in recs] == ["embed", "search", "answer"]
+    assert recs[-1]["fields"]["stream"] is True
+    assert len({r["correlation_id"] for r in recs}) == 1
+
+    # 4. Empty-context --stream emits EMPTY_CONTEXT_REFUSAL cleanly without LLM call
+    calls_before_empty = len(mock_litellm_offline["completion"])
+    rc_empty = main(
+        [
+            "--no-config",
+            "--persist-dir",
+            str(tmp_persist_dir),
+            "--collection",
+            "absent_stream_col",
+            "ask",
+            "Anything?",
+            "--stream",
+        ]
+    )
+    assert rc_empty == 0
+    assert capsys.readouterr().out == "Not found in the provided context.\n"
+    assert len(mock_litellm_offline["completion"]) == calls_before_empty
+
+    # 5. Truncation warning on stderr vs --fail-on-truncation exit 1
+    trunc_chunks = [
+        {"choices": [{"delta": {"content": "Partial "}}]},
+        {"choices": [{"delta": {"content": "stream"}, "finish_reason": "length"}]},
+    ]
+    with patch("litellm.completion", return_value=iter(trunc_chunks)):
+        rc_warn = main(
+            [
+                "--no-config",
+                "--persist-dir",
+                str(tmp_persist_dir),
+                "ask",
+                "Annual leave?",
+                "--stream",
+            ]
+        )
+    assert rc_warn == 0
+    cap_warn = capsys.readouterr()
+    assert cap_warn.out == "Partial stream\n"
+    assert "Warning:" in cap_warn.err and "truncated" in cap_warn.err.lower()
+
+    with patch("litellm.completion", return_value=iter(trunc_chunks)):
+        rc_strict = main(
+            [
+                "--no-config",
+                "--persist-dir",
+                str(tmp_persist_dir),
+                "ask",
+                "Annual leave?",
+                "--stream",
+                "--fail-on-truncation",
+            ]
+        )
+    assert rc_strict == 1
+    cap_strict = capsys.readouterr()
+    assert cap_strict.out == "Partial stream\n"
+    assert "Error:" in cap_strict.err and "truncated" in cap_strict.err.lower()
+
+    # 6. Pre-chunk failure leaves stdout empty (U2); mid-stream failure newline-terminates stdout
+    with patch("litellm.completion", side_effect=RuntimeError("401 Unauthorized")):
+        rc_pre = main(
+            [
+                "--no-config",
+                "--persist-dir",
+                str(tmp_persist_dir),
+                "ask",
+                "Annual leave?",
+                "--stream",
+            ]
+        )
+    assert rc_pre == 1
+    cap_pre = capsys.readouterr()
+    assert cap_pre.out == ""
+    assert "Error:" in cap_pre.err
+
+    def mid_fail_gen() -> Any:
+        yield {"choices": [{"delta": {"content": "Part1 "}}]}
+        raise RuntimeError("socket reset mid-stream")
+
+    with patch("litellm.completion", return_value=mid_fail_gen()):
+        rc_mid = main(
+            [
+                "--no-config",
+                "--persist-dir",
+                str(tmp_persist_dir),
+                "ask",
+                "Annual leave?",
+                "--stream",
+            ]
+        )
+    assert rc_mid == 1
+    cap_mid = capsys.readouterr()
+    assert cap_mid.out == "Part1 \n"
+    assert "Error:" in cap_mid.err

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
@@ -450,3 +451,190 @@ def test_answer_detailed_reports_reasoning_and_length_truncation_diagnostics(
         pytest.raises(DocpipeError, match=r"returned an empty response\.$"),
     ):
         answer_detailed(messages, model="groq/openai/gpt-oss-120b")
+
+
+class _ClosableMockStream:
+    """Deterministic closeable iterable mimicking a LiteLLM CustomStreamWrapper."""
+
+    def __init__(
+        self, chunks: list[Any], *, fail_after: int | None = None, exc: Exception | None = None
+    ) -> None:
+        self._chunks = chunks
+        self._fail_after = fail_after
+        self._exc = exc
+        self.closed = False
+
+    def __iter__(self) -> Iterator[Any]:
+        for idx, chunk in enumerate(self._chunks):
+            if self._fail_after is not None and idx >= self._fail_after and self._exc is not None:
+                raise self._exc
+            yield chunk
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_answer_stream_yields_verbatim_deltas_and_preserves_default_str(
+    mock_litellm_offline: dict[str, Any],
+) -> None:
+    messages = build_chat_messages("How many leave days?", [_sample_section()])
+    captured_kwargs: list[dict[str, Any]] = []
+    chunks = [
+        {"choices": [{"delta": {"role": "assistant", "content": ""}}]},
+        SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(content=None), finish_reason=None)]
+        ),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(delta=SimpleNamespace(content="Employees "), finish_reason=None)
+            ]
+        ),
+        {"choices": [{"delta": {"content": "receive 20 "}}]},
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(delta=SimpleNamespace(content="days leave"), finish_reason=None)
+            ]
+        ),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content=" except new hires."),
+                    finish_reason="length",
+                )
+            ]
+        ),
+        {
+            "choices": [],
+            "usage": {"prompt_tokens": 50, "completion_tokens": 12, "total_tokens": 62},
+        },
+    ]
+    raw_stream = _ClosableMockStream(chunks)
+
+    def fake_stream_completion(**kwargs: Any) -> Any:
+        captured_kwargs.append(dict(kwargs))
+        return raw_stream
+
+    with patch("litellm.completion", side_effect=fake_stream_completion):
+        it = answer(messages, model="openai/gpt-4o-mini", stream=True)
+        # Opening upstream stream is deferred lazily until first pull
+        assert captured_kwargs == []
+        collected = list(it)
+
+    assert collected == ["Employees ", "receive 20 ", "days leave", " except new hires."]
+    assert "".join(collected) == "Employees receive 20 days leave except new hires."
+    assert len(captured_kwargs) == 1
+    assert captured_kwargs[0]["stream"] is True
+    assert raw_stream.closed is True
+
+    # Default stream=False still returns a stripped single string
+    default_text = answer(messages, model="ollama/llama3.2")
+    assert isinstance(default_text, str)
+    assert len(mock_litellm_offline["completion"]) == 1
+
+
+def test_answer_stream_has_context_false_and_error_edge_cases(
+    mock_litellm_offline: dict[str, Any],
+) -> None:
+    messages = build_chat_messages("Leave?", [_sample_section()])
+
+    # 1. has_context=False yields EMPTY_CONTEXT_REFUSAL once with zero LiteLLM calls
+    empty_it = answer(messages, model="ollama/llama3.2", has_context=False, stream=True)
+    assert list(empty_it) == [EMPTY_CONTEXT_REFUSAL]
+    assert mock_litellm_offline["completion"] == []
+
+    # 2. Reserved model_kwargs["stream"] is rejected eagerly
+    for use_stream in (False, True):
+        with pytest.raises(DocpipeError, match="stream"):
+            answer(
+                messages,
+                model="openai/gpt-4o-mini",
+                model_kwargs={"stream": True},
+                stream=use_stream,
+            )
+
+    # 3. Delta refusal raises DocpipeError cleanly
+    refusal_stream = _ClosableMockStream([{"choices": [{"delta": {"refusal": "Policy blocked"}}]}])
+    with (
+        patch("litellm.completion", return_value=refusal_stream),
+        pytest.raises(DocpipeError, match="refused"),
+    ):
+        list(answer(messages, model="openai/gpt-4o-mini", stream=True))
+    assert refusal_stream.closed is True
+
+    # 4. Reasoning-only stream without usage counters preserves truncation diagnostic (U1)
+    reasoning_only_stream = _ClosableMockStream(
+        [
+            {"choices": [{"delta": {"reasoning_content": "Analyzing clause..."}}]},
+            {"choices": [{"delta": {"content": ""}, "finish_reason": "length"}]},
+        ]
+    )
+    with (
+        patch("litellm.completion", return_value=reasoning_only_stream),
+        pytest.raises(
+            DocpipeError,
+            match=(
+                r"truncated at max_tokens.*before producing an answer"
+                r".*Increase or omit max_tokens"
+            ),
+        ),
+    ):
+        list(answer(messages, model="together_ai/zai-org/GLM-5.3", max_tokens=128, stream=True))
+
+    # 5. Trailing usage-only frame preserves finish_reason="length" when fail_on_truncation=True
+    usage_after_length = _ClosableMockStream(
+        [
+            {"choices": [{"delta": {"content": "Partial "}}]},
+            {"choices": [{"delta": {"content": "text"}, "finish_reason": "length"}]},
+            {
+                "choices": [],
+                "usage": {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28},
+            },
+        ]
+    )
+    yielded_before_fail: list[str] = []
+    with (
+        patch("litellm.completion", return_value=usage_after_length),
+        pytest.raises(DocpipeError, match=r"truncated.*max_tokens"),
+    ):
+        for part in answer(
+            messages,
+            model="openai/gpt-4o-mini",
+            fail_on_truncation=True,
+            stream=True,
+        ):
+            yielded_before_fail.append(part)
+    assert yielded_before_fail == ["Partial ", "text"]
+    assert usage_after_length.closed is True
+
+
+def test_answer_stream_scrubs_midstream_secrets_and_auth_errors(
+    mock_litellm_offline: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ = mock_litellm_offline
+    messages = build_chat_messages("Leave?", [_sample_section()])
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stream-env-secret-4455")
+
+    # 1. Mid-stream transport/token leak scrubs secret and closes upstream stream
+    failing_stream = _ClosableMockStream(
+        [{"choices": [{"delta": {"content": "First "}}]}, {"choices": []}],
+        fail_after=1,
+        exc=RuntimeError("Upstream failed with sk-stream-env-secret-4455"),
+    )
+    seen: list[str] = []
+    with (
+        patch("litellm.completion", return_value=failing_stream),
+        pytest.raises(DocpipeError) as exc_info,
+    ):
+        for chunk in answer(messages, model="openai/gpt-4o-mini", stream=True):
+            seen.append(chunk)
+    assert seen == ["First "]
+    assert "sk-stream-env-secret-4455" not in str(exc_info.value)
+    assert failing_stream.closed is True
+
+    # 2. HTTP 401 auth failure raises MissingCredentialError cleanly
+    with (
+        patch("litellm.completion", side_effect=RuntimeError("401 Unauthorized api_key invalid")),
+        pytest.raises(MissingCredentialError),
+    ):
+        list(answer(messages, model="openai/gpt-4o-mini", stream=True))

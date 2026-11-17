@@ -2,6 +2,7 @@
 
 ### Feat
 
+- **streaming**: add synchronous pull-based `answer(..., stream=True) -> Iterator[str]` and CLI `ask --stream` (`013-streaming-generation` under Constitution `v1.4.0`): eager preflight parameter validation and `local_only` / `guard_egress` PII enforcement before lazy `litellm.completion(..., stream=True)` on first pull, deterministic `EMPTY_CONTEXT_REFUSAL` single-chunk short-circuit when `has_context=False`, sanitized provider error normalization, `fail_on_truncation` / reasoning-exhaustion diagnosis, early `.close()` / `GeneratorExit` cleanup (`closed_early=True`), correlated `answer` stage telemetry, real-time flushed CLI `stdout` streaming, and mutual exclusion between `--stream` and `--json`
 - **dry-run**: add non-mutating `dry_run=True` preview mode to `sync()` and `reindex()` (`ReindexPreview` in `docpipe_maestro.ingest` / `types`, `SyncResult` preview metrics + `.to_dict()` across live and dry runs, offline `estimate_embedding_cost()` using bundled `litellm.model_cost`, lazy stdlib SQLite `?mode=ro` reader for `0`-byte immutable `chroma.sqlite3` reindex previews, zero `.audit.jsonl` appends on `PiiBlockedError`, and `--dry-run` / `--json` flags on CLI `sync` and `reindex`)
 
 ## v0.2.1 (2026-11-17)

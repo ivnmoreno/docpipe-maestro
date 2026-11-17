@@ -64,7 +64,7 @@ Configured in `pyproject.toml`:
 
 Unit and integration tests stay deterministic and zero-network via two fixtures in `tests/conftest.py`:
 
-- `mock_litellm_offline`: Monkeypatches `litellm.embedding` with a deterministic L2-normalized signed bag-of-words hash embedder (`dim=64`, or `dim=32` when `"small"` appears in the model string so `reindex` dimension changes are tested) and monkeypatches `litellm.completion`.
+- `mock_litellm_offline`: Monkeypatches `litellm.embedding` with a deterministic L2-normalized signed bag-of-words hash embedder (`dim=64`, or `dim=32` when `"small"` appears in the model string so `reindex` dimension changes are tested) and monkeypatches `litellm.completion` (handling both non-streaming completions and `stream=True` delta chunks in offline tests).
 - `tmp_persist_dir`: Provides an isolated `.docpipe` temporary directory per test.
 
 ### Running Live End-to-End Tests with Local Ollama
@@ -79,7 +79,7 @@ uv run docpipe-maestro ingest ./tests/fixtures/policy_corpus --profile POLICY --
 uv run docpipe-maestro status --collection live_demo
 uv run docpipe-maestro query "annual leave probationary period" --collection live_demo
 uv run docpipe-maestro ask "How many days of annual leave do employees get, and what is the exception?" \
-  --model ollama/qwen2.5:1.5b-instruct --collection live_demo
+  --model ollama/qwen2.5:1.5b-instruct --collection live_demo --stream
 uv run docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --collection live_demo --searcher fts5_hybrid
 ```
 

@@ -573,12 +573,19 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         default=False,
         help="Print retrieved context sections and similarity scores to stderr",
     )
-    p_ask.add_argument(
+    ask_output_group = p_ask.add_mutually_exclusive_group()
+    ask_output_group.add_argument(
         "--json",
         action="store_true",
         dest="as_json",
         default=False,
         help="Emit structured JSON with answer, truncation flag, token usage, and sources",
+    )
+    ask_output_group.add_argument(
+        "--stream",
+        action="store_true",
+        default=False,
+        help="Stream answer text deltas progressively to stdout (conflicts with --json)",
     )
 
     # Phase 2: eval
@@ -627,6 +634,16 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     return parser
 
 
+def _warn_if_truncated(truncated: bool, *, model: str) -> None:
+    """Emit a consistent truncation warning to stderr when output hit max_tokens."""
+    if truncated:
+        print(
+            f"Warning: Response for model {model!r} was truncated at token limit "
+            "(finish_reason='length'). Increase or omit --max-tokens to get the full answer.",
+            file=sys.stderr,
+        )
+
+
 def _handle_ask(
     args: argparse.Namespace,
     *,
@@ -634,7 +651,11 @@ def _handle_ask(
 ) -> int:
     """Execute the ``ask`` subcommand with timing, context inspection, and truncation warnings."""
     from docpipe_maestro._filters import parse_cli_where
-    from docpipe_maestro.query.answer import answer_detailed
+    from docpipe_maestro.query.answer import (
+        _GenerationStreamState,
+        _stream_answer_with_state,
+        answer_detailed,
+    )
     from docpipe_maestro.query.retriever import retrieve
 
     if args.local_only:
@@ -678,6 +699,34 @@ def _handle_ask(
                 )
 
     messages = build_chat_messages(args.question, sections)
+    if args.stream:
+        stream_state = _GenerationStreamState(model=args.model)
+        wrote_any = False
+        try:
+            for chunk in _stream_answer_with_state(
+                messages,
+                model=args.model,
+                api_base=args.api_base,
+                has_context=bool(sections),
+                temperature=args.temperature,
+                max_tokens=args.max_tokens,
+                timeout=args.timeout,
+                fail_on_truncation=args.fail_on_truncation,
+                pii_policy=pii_policy,
+                local_only=args.local_only,
+                state=stream_state,
+            ):
+                if chunk:
+                    wrote_any = True
+                    sys.stdout.write(chunk)
+                    sys.stdout.flush()
+        finally:
+            if wrote_any:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+        _warn_if_truncated(stream_state.truncated, model=args.model)
+        return 0
+
     gen = answer_detailed(
         messages,
         model=args.model,
@@ -691,12 +740,7 @@ def _handle_ask(
         local_only=args.local_only,
     )
 
-    if gen.truncated:
-        print(
-            f"Warning: Response for model {args.model!r} was truncated at token limit "
-            "(finish_reason='length'). Increase or omit --max-tokens to get the full answer.",
-            file=sys.stderr,
-        )
+    _warn_if_truncated(gen.truncated, model=args.model)
 
     if args.as_json:
         print(

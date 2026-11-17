@@ -60,7 +60,7 @@ Every file's execution role is visible from the package layout under `src/docpip
 | [`query/retriever.py`](../src/docpipe_maestro/query/retriever.py) | Phase 2 | Read-only child retrieval, `local_only` preflight, optional child-first reranking, parent expansion & cross-doc citation pass |
 | [`query/prompts.py`](../src/docpipe_maestro/query/prompts.py) | Phase 2 | Pure zero-I/O prompt constructor preserving citation metadata (`Source`, `Section`, `Clause`, `Page`) |
 | [`query/egress.py`](../src/docpipe_maestro/query/egress.py) | Phase 2 | Pre-network `--local-only` enforcement and outbound PII policy scrubbing/blocking across prompt strings and ChatML message arrays |
-| [`query/answer.py`](../src/docpipe_maestro/query/answer.py) | Phase 2 | Optional grounded completion via `litellm.completion` guarded by `guard_egress()` with deterministic empty-context refusal |
+| [`query/answer.py`](../src/docpipe_maestro/query/answer.py) | Phase 2 | Optional grounded completion and pull-based synchronous streaming (`stream=True`) via `litellm.completion` guarded by `guard_egress()` with deterministic empty-context refusal |
 | [`eval/`](../src/docpipe_maestro/eval/__init__.py) | Phase 2 | Read-only retrieval evaluation metrics (`metrics.py`) and harness runner (`harness.py`) with `local_only` preflight |
 | [`cli.py`](../src/docpipe_maestro/cli.py) | Both | `docpipe-maestro` CLI entry point and **sole** module permitted to read TOML config (`--config`) or `--pii-policy` files |
 
@@ -198,7 +198,7 @@ In policy and compliance corpora, an isolated sentence such as *"Full-time emplo
 
 ensures matched child clauses bring their complete enclosing rules and exceptions into context — continuously verified by the mandatory Release Gate in [`tests/test_reverse_safety.py`](../tests/test_reverse_safety.py).
 
-`build_prompt(question, sections)` formats retrieved context strictly offline with source/section/clause/page citations, and `answer(..., has_context=bool(sections))` short-circuits immediately with `"Not found in the provided context."` when retrieval yields no qualifying sections.
+`build_prompt(question, sections)` formats retrieved context strictly offline with source/section/clause/page citations, and `answer(..., has_context=bool(sections))` short-circuits immediately with `"Not found in the provided context."` (returning the refusal string when `stream=False`, or yielding it once with zero LiteLLM calls when `stream=True`) when retrieval yields no qualifying sections.
 
 For longitudinal quality measurement, [`docpipe_maestro.eval`](../src/docpipe_maestro/eval/__init__.py) evaluates Phase 2 `retrieve()` outputs strictly read-only: `evaluate()` verifies manifest presence, embedding model locks, and committed sources prior to store instantiation so missing collections create zero storage artifacts and valid runs produce `0`-byte persistence drift.
 
@@ -213,7 +213,7 @@ For longitudinal quality measurement, [`docpipe_maestro.eval`](../src/docpipe_ma
 - **Single-Line JSON Envelope**: `JsonFormatter` renders `{ts, level, logger, msg, correlation_id, fields}` where `ts` is UTC ISO-8601, `correlation_id` is `null` outside active scopes, and all stage attributes live nested inside `fields` (preventing reserved envelope key overwrites) with safe `os.PathLike`/`set`/`tuple` coercion.
 - **Canonical Stage Events (`msg = "stage.end"`)**:
   - **Phase 1**: `ingest()` and `sync()` emit batch-scoped `INFO` summaries for `intake`, `clean`, `enrich`, `chunk`, `embed`, and `store` (including `docs=0` no-change runs) plus per-document `DEBUG` events for `intake`, `clean`, `enrich`, and `chunk`; `sync(..., dry_run=True)` omits `embed` and emits a read-only `store` preview (`dry_run=True`). Live `reindex()` emits `embed` + `store`, while `reindex(..., dry_run=True)`, `remove()`, and `status()` emit `store`.
-  - **Phase 2**: `retrieve()` emits `embed` (post-short-circuit), `search`, and conditional `rerank`; `guard_egress()` emits `egress` when active remote PII inspection runs; `answer_detailed()` emits `answer` when completion runs (`has_context=True`).
+  - **Phase 2**: `retrieve()` emits `embed` (post-short-circuit), `search`, and conditional `rerank`; `guard_egress()` emits `egress` when active remote PII inspection runs; `answer_detailed()` and `answer(..., stream=True)` emit `answer` (including `stream=True` and `closed_early=True` on early iterator closure, without logging raw tokens or prompts) when completion runs (`has_context=True`).
 - **Privacy & Failure Hygiene**: Both `JsonFormatter` and standalone `TextFormatter` strip `exc_info`/`exc_text` tracebacks. On stage failure, `stage_event()` emits an `ERROR` `stage.end` event recording only `duration_ms`, `status="error"`, and `error_type` (exception class name) before re-raising. Raw documents, chunks, questions, prompts, answers, synthetic/live PII, raw exception messages, and API credentials are never emitted at `INFO` or `DEBUG`.
 
 ```python
