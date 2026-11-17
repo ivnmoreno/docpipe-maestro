@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Mapping, Sequence
-from typing import Any, NoReturn
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, Literal, NoReturn, overload
 
 from docpipe_maestro.config import DEFAULT_GENERATION_MODEL
 from docpipe_maestro.embedder import (
@@ -15,7 +16,12 @@ from docpipe_maestro.embedder import (
     raise_litellm_error,
     validate_api_base,
 )
-from docpipe_maestro.log import correlation_id, get_logger, stage_event
+from docpipe_maestro.log import (
+    correlation_id,
+    get_correlation_id,
+    get_logger,
+    stage_event,
+)
 from docpipe_maestro.query.egress import guard_egress
 from docpipe_maestro.types import DocpipeError, GenerationResult, PiiPolicy
 
@@ -35,8 +41,25 @@ _RESERVED_MODEL_KWARGS = frozenset(
         "max_tokens",
         "timeout",
         "num_retries",
+        "stream",
     }
 )
+
+
+@dataclass(slots=True)
+class _GenerationStreamState:
+    """Mutable stream completion metadata shared with CLI ``ask --stream``."""
+
+    model: str
+    finish_reason: str | None = None
+    truncated: bool = False
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    total_tokens: int | None = None
+    saw_content: bool = False
+    saw_reasoning: bool = False
+    closed_early: bool = False
 
 
 def _validate_finite_number(value: Any, *, name: str, minimum: float, inclusive: bool) -> float:
@@ -124,6 +147,52 @@ def _opt_int(value: Any) -> int | None:
     return None
 
 
+def _prepare_generation_request(
+    prompt: str | Sequence[Mapping[str, str]],
+    *,
+    model: str,
+    api_base: str | None,
+    temperature: float | None,
+    max_tokens: int | None,
+    timeout: float,
+    model_kwargs: Mapping[str, Any] | None,
+    pii_policy: PiiPolicy | None,
+    local_only: bool,
+) -> dict[str, Any]:
+    """Run eager parameter validation and egress guards and return request kwargs."""
+    messages = _normalize_messages(prompt)
+    valid_temp, valid_max_tokens, valid_timeout, extra_kwargs = _validate_generation_params(
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout,
+        model_kwargs=model_kwargs,
+    )
+    guarded_messages = guard_egress(
+        messages,
+        model=model,
+        api_base=api_base,
+        pii_policy=pii_policy,
+        local_only=local_only,
+    )
+    validated_base = validate_api_base(api_base)
+
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": guarded_messages,
+        "timeout": valid_timeout,
+        "num_retries": 0,
+    }
+    if valid_temp is not None:
+        kwargs["temperature"] = valid_temp
+    if valid_max_tokens is not None:
+        kwargs["max_tokens"] = valid_max_tokens
+    if validated_base is not None:
+        kwargs["api_base"] = validated_base
+    if extra_kwargs:
+        kwargs.update(extra_kwargs)
+    return kwargs
+
+
 def answer_detailed(
     prompt: str | Sequence[Mapping[str, str]],
     *,
@@ -199,18 +268,14 @@ def _answer_detailed_impl(
     local_only: bool,
 ) -> GenerationResult:
     """Execute validated, egress-guarded generation inside an active correlation scope."""
-    messages = _normalize_messages(prompt)
-    valid_temp, valid_max_tokens, valid_timeout, extra_kwargs = _validate_generation_params(
+    kwargs = _prepare_generation_request(
+        prompt,
+        model=model,
+        api_base=api_base,
         temperature=temperature,
         max_tokens=max_tokens,
         timeout=timeout,
         model_kwargs=model_kwargs,
-    )
-
-    messages = guard_egress(
-        messages,
-        model=model,
-        api_base=api_base,
         pii_policy=pii_policy,
         local_only=local_only,
     )
@@ -224,23 +289,7 @@ def _answer_detailed_impl(
             elapsed_seconds=0.0,
         )
 
-    validated_base = validate_api_base(api_base)
     litellm = prepare_litellm()
-
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "timeout": valid_timeout,
-        "num_retries": 0,
-    }
-    if valid_temp is not None:
-        kwargs["temperature"] = valid_temp
-    if valid_max_tokens is not None:
-        kwargs["max_tokens"] = valid_max_tokens
-    if validated_base is not None:
-        kwargs["api_base"] = validated_base
-    if extra_kwargs:
-        kwargs.update(extra_kwargs)
 
     t0 = time.perf_counter()
     with stage_event(logger, "answer", model=model) as answer_ev:
@@ -261,10 +310,7 @@ def _answer_detailed_impl(
         answer_ev["reasoning_tokens"] = reason_tok
         answer_ev["total_tokens"] = total_tok
         if truncated and fail_on_truncation:
-            raise DocpipeError(
-                f"Generation model {model!r} output was truncated at max_tokens limit "
-                "(finish_reason='length'). Increase or omit max_tokens and retry."
-            )
+            _raise_truncation_error(model)
 
     return GenerationResult(
         text=text,
@@ -277,6 +323,171 @@ def _answer_detailed_impl(
         total_tokens=total_tok,
         elapsed_seconds=elapsed,
     )
+
+
+def _raise_truncation_error(model: str) -> NoReturn:
+    """Raise a normalized truncation error when output stops at ``max_tokens``."""
+    raise DocpipeError(
+        f"Generation model {model!r} output was truncated at max_tokens limit "
+        "(finish_reason='length'). Increase or omit max_tokens and retry."
+    )
+
+
+def _iter_answer_stream(
+    *,
+    kwargs: dict[str, Any],
+    model: str,
+    has_context: bool,
+    fail_on_truncation: bool,
+    state: _GenerationStreamState,
+    preflight_cid: str,
+) -> Iterator[str]:
+    """Yield incremental delta chunks while guaranteeing stream cleanup and telemetry."""
+    if not has_context:
+        yield EMPTY_CONTEXT_REFUSAL
+        return
+
+    litellm = prepare_litellm()
+    stream_kwargs = {**kwargs, "stream": True}
+    raw_stream: Any = None
+    active_cid = preflight_cid if get_correlation_id() is None else None
+    with (
+        correlation_id(active_cid),
+        stage_event(logger, "answer", model=model, stream=True) as answer_ev,
+    ):
+        try:
+            try:
+                raw_stream = litellm.completion(**stream_kwargs)
+            except Exception as exc:
+                raise_litellm_error(exc, operation="generation", model=model)
+
+            try:
+                for chunk in raw_stream:
+                    delta_text = _process_stream_chunk(chunk, state=state)
+                    if delta_text is not None:
+                        yield delta_text
+            except DocpipeError:
+                raise
+            except Exception as exc:
+                raise_litellm_error(exc, operation="generation", model=model)
+        except GeneratorExit:
+            state.closed_early = True
+            answer_ev["closed_early"] = True
+            return
+        finally:
+            close_fn = getattr(raw_stream, "close", None)
+            if callable(close_fn):
+                close_fn()
+
+        answer_ev["finish_reason"] = state.finish_reason
+        answer_ev["truncated"] = state.truncated
+        answer_ev["prompt_tokens"] = state.prompt_tokens
+        answer_ev["completion_tokens"] = state.completion_tokens
+        answer_ev["reasoning_tokens"] = state.reasoning_tokens
+        answer_ev["total_tokens"] = state.total_tokens
+
+        if not state.saw_content:
+            _raise_empty_response_error(
+                model=model,
+                finish_reason=state.finish_reason,
+                reasoning_tokens=state.reasoning_tokens,
+                saw_reasoning=state.saw_reasoning,
+            )
+        if state.truncated and fail_on_truncation:
+            _raise_truncation_error(model)
+
+
+def _stream_answer_with_state(
+    prompt: str | Sequence[Mapping[str, str]],
+    *,
+    model: str = DEFAULT_GENERATION_MODEL,
+    api_base: str | None = None,
+    has_context: bool = True,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT,
+    model_kwargs: Mapping[str, Any] | None = None,
+    fail_on_truncation: bool = False,
+    pii_policy: PiiPolicy | None = None,
+    local_only: bool = False,
+    state: _GenerationStreamState | None = None,
+) -> Iterator[str]:
+    """Run eager preflight/egress checks and return a pull-started chunk iterator."""
+    with correlation_id() as cid:
+        kwargs = _prepare_generation_request(
+            prompt,
+            model=model,
+            api_base=api_base,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            model_kwargs=model_kwargs,
+            pii_policy=pii_policy,
+            local_only=local_only,
+        )
+    stream_state = state if state is not None else _GenerationStreamState(model=model)
+    return _iter_answer_stream(
+        kwargs=kwargs,
+        model=model,
+        has_context=has_context,
+        fail_on_truncation=fail_on_truncation,
+        state=stream_state,
+        preflight_cid=cid,
+    )
+
+
+@overload
+def answer(
+    prompt: str | Sequence[Mapping[str, str]],
+    *,
+    model: str = DEFAULT_GENERATION_MODEL,
+    api_base: str | None = None,
+    has_context: bool = True,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT,
+    model_kwargs: Mapping[str, Any] | None = None,
+    fail_on_truncation: bool = False,
+    pii_policy: PiiPolicy | None = None,
+    local_only: bool = False,
+    stream: Literal[False] = False,
+) -> str: ...
+
+
+@overload
+def answer(
+    prompt: str | Sequence[Mapping[str, str]],
+    *,
+    model: str = DEFAULT_GENERATION_MODEL,
+    api_base: str | None = None,
+    has_context: bool = True,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT,
+    model_kwargs: Mapping[str, Any] | None = None,
+    fail_on_truncation: bool = False,
+    pii_policy: PiiPolicy | None = None,
+    local_only: bool = False,
+    stream: Literal[True],
+) -> Iterator[str]: ...
+
+
+@overload
+def answer(
+    prompt: str | Sequence[Mapping[str, str]],
+    *,
+    model: str = DEFAULT_GENERATION_MODEL,
+    api_base: str | None = None,
+    has_context: bool = True,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT,
+    model_kwargs: Mapping[str, Any] | None = None,
+    fail_on_truncation: bool = False,
+    pii_policy: PiiPolicy | None = None,
+    local_only: bool = False,
+    stream: bool = False,
+) -> str | Iterator[str]: ...
 
 
 def answer(
@@ -292,11 +503,28 @@ def answer(
     fail_on_truncation: bool = False,
     pii_policy: PiiPolicy | None = None,
     local_only: bool = False,
-) -> str:
-    """Generate a grounded answer string from a prompt or role-separated messages.
+    stream: bool = False,
+) -> str | Iterator[str]:
+    """Generate a grounded answer string or synchronous delta iterator via LiteLLM.
 
-    Thin convenience wrapper over ``answer_detailed()`` returning ``result.text``.
+    Delegates non-streaming calls (``stream=False``) to ``answer_detailed().text``.
+    When ``stream=True``, runs parameter validation, ``local_only``, and outbound
+    ``guard_egress`` checks eagerly before returning a pull-started ``Iterator[str]``.
     """
+    if stream:
+        return _stream_answer_with_state(
+            prompt,
+            model=model,
+            api_base=api_base,
+            has_context=has_context,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            model_kwargs=model_kwargs,
+            fail_on_truncation=fail_on_truncation,
+            pii_policy=pii_policy,
+            local_only=local_only,
+        )
     return answer_detailed(
         prompt,
         model=model,
@@ -328,14 +556,21 @@ def _raise_empty_response_error(
     *,
     model: str,
     finish_reason: str | None,
-    message: Any,
-    reasoning_tokens: int | None,
+    message: Any = None,
+    reasoning_tokens: int | None = None,
+    saw_reasoning: bool = False,
 ) -> NoReturn:
     """Raise an explicit truncation/reasoning or empty-response diagnostic."""
     has_reasoning = bool(
-        (reasoning_tokens is not None and reasoning_tokens > 0)
-        or _item_field(message, "reasoning_content", None)
-        or _item_field(message, "reasoning", None)
+        saw_reasoning
+        or (reasoning_tokens is not None and reasoning_tokens > 0)
+        or (
+            message is not None
+            and (
+                _item_field(message, "reasoning_content", None)
+                or _item_field(message, "reasoning", None)
+            )
+        )
     )
     reasoning_note = (
         f"; {reasoning_tokens} reasoning tokens used"
@@ -401,3 +636,67 @@ def _extract_completion_details(
         )
 
     return text, finish_reason, prompt_tokens, completion_tokens, reasoning_tokens, total_tokens
+
+
+def _process_stream_chunk(chunk: Any, *, state: _GenerationStreamState) -> str | None:
+    """Extract a verbatim text delta from one stream chunk while updating ``state``."""
+    usage = _item_field(chunk, "usage", None)
+    if usage:
+        prompt_tok = _opt_int(_item_field(usage, "prompt_tokens", None))
+        comp_tok = _opt_int(_item_field(usage, "completion_tokens", None))
+        total_tok = _opt_int(_item_field(usage, "total_tokens", None))
+        reason_tok = _extract_reasoning_tokens(usage)
+        if prompt_tok is not None:
+            state.prompt_tokens = prompt_tok
+        if comp_tok is not None:
+            state.completion_tokens = comp_tok
+        if total_tok is not None:
+            state.total_tokens = total_tok
+        if reason_tok is not None:
+            state.reasoning_tokens = reason_tok
+            if reason_tok > 0:
+                state.saw_reasoning = True
+
+    choices = _item_field(chunk, "choices", None)
+    if not choices:
+        return None
+    choice0 = choices[0]
+
+    choice_refusal = _item_field(choice0, "refusal", None)
+    if choice_refusal:
+        raise DocpipeError(
+            f"Generation model {state.model!r} refused the request: {str(choice_refusal).strip()}"
+        )
+
+    raw_finish = _item_field(choice0, "finish_reason", None)
+    if raw_finish is not None:
+        finish_str = str(raw_finish).strip()
+        if finish_str:
+            state.finish_reason = finish_str
+            state.truncated = finish_str == "length"
+
+    delta = _item_field(choice0, "delta", None)
+    if delta is None:
+        return None
+
+    delta_refusal = _item_field(delta, "refusal", None)
+    if delta_refusal:
+        raise DocpipeError(
+            f"Generation model {state.model!r} refused the request: {str(delta_refusal).strip()}"
+        )
+
+    if (
+        _item_field(delta, "reasoning_content", None)
+        or _item_field(delta, "reasoning", None)
+        or _item_field(delta, "thinking_blocks", None)
+    ):
+        state.saw_reasoning = True
+
+    content = _item_field(delta, "content", None)
+    if content is None:
+        return None
+    text = str(content)
+    if not text:
+        return None
+    state.saw_content = True
+    return text

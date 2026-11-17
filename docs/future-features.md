@@ -113,11 +113,11 @@ This document tracks all architectural suggestions, completed `v0.2.0` upgrades,
 - **Status**: Implemented in `002-online-llm-customization`.
 - **Details**: Adds `build_chat_messages()`, `answer_detailed()` returning `GenerationResult`, generation tuning (`temperature`, `max_tokens`, `timeout`, `model_kwargs`), explicit `finish_reason="length"` / `reasoning_tokens` diagnostics, HTTPS gateway validation, scoped `.env` + `./docpipe.toml` discovery, and CLI `ask` flags (`--system-prompt`, `--system-prompt-file`, `--fail-on-truncation`, `--show-context`, `--json`).
 
-### 6.2 Streaming Generation Support
+### 6.2 Streaming Generation Support — *Implemented (013-streaming-generation)*
 - **Problem**: Generation waiting for completion blocks the caller until the full answer is generated.
 - **Proposed Upgrade**:
-  - Add streaming support to `answer()` yielding text chunks (`Iterator[str]`).
-  - Add `--stream` flag to `docpipe-maestro ask` for real-time terminal output.
+  - Add synchronous pull-based streaming support to `answer(..., stream=True)` yielding non-empty text chunks (`Iterator[str]`) with eager preflight validation, `local_only` / `guard_egress` enforcement, early `.close()` cleanup, and correlated telemetry.
+  - Add `--stream` flag to `docpipe-maestro ask` (mutually exclusive with `--json`) for real-time flushed `stdout` output with truncation warnings on `stderr`.
 
 ### 6.3 Citation Extraction & Verification
 - **Problem**: LLMs can misattribute which retrieved section supported which claim in the generated text.
@@ -176,7 +176,7 @@ This document tracks all architectural suggestions, completed `v0.2.0` upgrades,
 | **Table Preservation** | Ingestion | Post-v0.2 | High (Accuracy) | Medium |
 | **`LEGAL` Profile** | Chunking | Post-v0.2 | High (Domain Safety) | Medium |
 | **Chunk-Level Differential Re-Embedding** | Ingestion | Post-v0.2 | High (Cost / Speed) | Medium |
-| **Streaming Output (`docpipe-maestro ask`)** | Generation | Post-v0.2 | High (UX) | Low |
+| **Streaming Output (`docpipe-maestro ask`)** | Generation | Post-v0.2 | High (UX) | *Implemented* (`013-streaming-generation`) |
 | **`--dry-run` for `sync`/`reindex`** | CLI / Ops | *Implemented* (`012-dry-run`) | Medium (Safety) | Low |
 | **Additional Parsers (XLSX, PPTX)** | Intake | Post-v0.2 | Medium (Coverage) | Low |
 | **Two-Collection Split** | Storage | Post-v0.2 | Medium (Scale) | High |

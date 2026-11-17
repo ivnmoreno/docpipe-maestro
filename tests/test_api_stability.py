@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import docpipe_maestro as root
@@ -164,8 +164,11 @@ def test_public_callable_signatures_and_keyword_only_selectors() -> None:
         ("pii_policy", kw_only, None),
         ("local_only", kw_only, False),
     ]
-    assert _params_info(root.answer) == expected_answer_params
     assert _params_info(root.answer_detailed) == expected_answer_params
+    assert _params_info(root.answer) == [
+        *expected_answer_params,
+        ("stream", kw_only, False),
+    ]
 
     from docpipe_maestro.eval import evaluate
 
@@ -289,6 +292,14 @@ def test_legacy_module_compatibility_reexports_intact() -> None:
     )
     assert preview_obj.dry_run is True
     assert preview_obj.to_dict()["embed_model"] == "m2"
+    from docpipe_maestro.query.answer import _RESERVED_MODEL_KWARGS, EMPTY_CONTEXT_REFUSAL
+
+    assert "stream" in _RESERVED_MODEL_KWARGS
+    assert root.answer("Q?", has_context=False) == EMPTY_CONTEXT_REFUSAL
+    stream_it = root.answer("Q?", has_context=False, stream=True)
+    assert isinstance(stream_it, Iterator)
+    assert list(stream_it) == [EMPTY_CONTEXT_REFUSAL]
+
     assert all(
         obj is not None
         for obj in [

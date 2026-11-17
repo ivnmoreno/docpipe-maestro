@@ -103,7 +103,7 @@ The following are **deliberately excluded**. Their absence is a design decision,
 | HTTP API server (FastAPI, Flask) | Belongs to the consuming application |
 | Authentication, authorization, multi-tenancy | Belongs to the consuming application |
 | Conversation state, multi-turn memory | Belongs to the consuming application |
-| Streaming responses | Belongs to the consuming application |
+| Streaming transport servers (HTTP/SSE, WebSockets, interactive web UIs) | Belongs to the consuming application; synchronous `Iterator[str]` chunking and CLI `ask --stream` are supported per Constitution `v1.4.0` |
 | Reranking, query rewriting, hybrid search | Future optional modules, not v0.1 |
 | Evaluation harness for answer quality | Separate tooling |
 | Deployment tooling (Docker, CI/CD for the app) | Belongs to the consuming application |
@@ -270,7 +270,7 @@ The system shall provide a CLI aligned with the two-phase model, offering ingest
 | `docpipe-maestro remove <path>` | Phase 1 | Delete all records and manifest entry for a specific source document |
 | `docpipe-maestro reindex --model <m>` | Phase 1 | Re-embed and re-ingest all tracked corpus sources under a new embedding model (supports `--dry-run` and `--json`) |
 | `docpipe-maestro query "<question>"` | Phase 2 (retrieval only) | Return relevant sections without generating an answer (supports `--json`, `--where`) |
-| `docpipe-maestro ask "<question>"` | Phase 2 (full RAG) | Generate an answer using retrieved sections (supports `--where`, `--pii-policy`, `--local-only`) |
+| `docpipe-maestro ask "<question>"` | Phase 2 (full RAG) | Generate an answer using retrieved sections (supports `--stream`, `--json` [mutually exclusive], `--where`, `--pii-policy`, `--local-only`) |
 | `docpipe-maestro eval --fixture <p>` | Phase 2 (evaluation) | Evaluate retrieval metrics read-only against labeled fixtures (supports `--where`, `--rerank`) |
 
 - `ingest` and `sync` shall accept a `--profile` flag selecting a chunking profile.
@@ -296,7 +296,7 @@ The library shall expose a deliberately minimal public surface (`docpipe_maestro
 | `retrieve` | function | Phase 2 retrieval: question → list of retrieved sections |
 | `build_prompt` | function | Phase 2 plain prompt construction: question + sections → prompt string |
 | `build_chat_messages` | function | Phase 2 structured prompt construction: question + sections → role-separated chat messages |
-| `answer` | function (optional call) | Phase 2 generation: prompt/messages → answer string |
+| `answer` | function (optional call) | Phase 2 generation: prompt/messages → answer string (or synchronous `Iterator[str]` with `stream=True`) |
 | `answer_detailed` | function (optional call) | Phase 2 generation with telemetry: prompt/messages → `GenerationResult` |
 | `Chunk` | type | Base chunk unit (`id`, `text`, `parent_id`, `metadata`) |
 | `EmbeddedChunk` | type | A `Chunk` paired with an embedding vector |

@@ -498,9 +498,10 @@ docpipe-maestro ask "Summarize travel policy." --model openai/my-local-model --a
 # Safe thresholding: if no retrieved content matches threshold, short-circuits with a refusal
 docpipe-maestro ask "What is the recipe for lasagna?" --threshold 0.7 --collection hr_policy
 
-# Inspect retrieved context on stderr, request JSON telemetry on stdout, or fail if truncated at max_tokens
+# Inspect retrieved context on stderr, request JSON telemetry on stdout, stream tokens live, or fail if truncated at max_tokens
 docpipe-maestro ask "Summarize travel limits." --show-context --collection hr_policy
 docpipe-maestro ask "What is the SEV-1 escalation window?" --searcher fts5_hybrid --rerank --collection hr_policy
+docpipe-maestro ask "How many days of annual leave do employees get?" --stream --collection hr_policy
 docpipe-maestro ask "Summarize travel limits." --json --fail-on-truncation --collection hr_policy
 
 # Enforce local-only execution pre-network or scrub outbound remote prompts via --pii-policy
@@ -624,7 +625,8 @@ for section in retrieved_sections:
 #    (build_prompt() also remains available for single-string prompts.)
 messages = build_chat_messages(question=question, sections=retrieved_sections)
 
-# 3. Generate a grounded answer (use answer_detailed() for finish_reason/token telemetry)
+# 3. Generate a grounded answer (pass stream=True for synchronous Iterator[str] chunks,
+#    or use answer_detailed() for finish_reason/token telemetry)
 response = answer(
     prompt=messages,
     model="ollama/llama3.2",
@@ -634,6 +636,13 @@ response = answer(
     has_context=bool(retrieved_sections),  # Short-circuits with refusal if context is empty
 )
 print("Answer:\n", response)
+
+# Incremental streaming with identical preflight/egress safety before the first pull:
+for delta in answer(
+    messages, model="ollama/llama3.2", has_context=bool(retrieved_sections), stream=True
+):
+    print(delta, end="", flush=True)
+print()
 ```
 
 ### Retrieval Evaluation (`docpipe_maestro.eval`)

@@ -291,7 +291,7 @@ docpipe-maestro query [--config CONFIG] [--no-config] [--collection COLLECTION]
 
 ### `docpipe-maestro ask "<question>"`
 
-Retrieve deduplicated parent sections, construct role-separated messages via `build_chat_messages()`, and generate an answer via `answer_detailed()`.
+Retrieve deduplicated parent sections, construct role-separated messages via `build_chat_messages()`, and generate an answer via `answer_detailed()` (or stream chunks progressively via `--stream`).
 
 ```text
 docpipe-maestro ask [--config CONFIG] [--no-config] [--collection COLLECTION]
@@ -303,7 +303,7 @@ docpipe-maestro ask [--config CONFIG] [--no-config] [--collection COLLECTION]
                     [--rerank-top-n RERANK_TOP_N] [--where KEY=VALUE ...]
                     [--api-base API_BASE] [--temperature TEMPERATURE]
                     [--max-tokens MAX_TOKENS] [--timeout TIMEOUT]
-                    [--fail-on-truncation] [--show-context] [--json] question
+                    [--fail-on-truncation] [--show-context] [--json | --stream] question
 ```
 
 - `--local-only` / `--no-local-only`: Enforces loopback/local execution preflight across both retrieval (`--embed-model`) and generation (`--model` + `--api-base`) before touching remote endpoints.
@@ -316,8 +316,9 @@ docpipe-maestro ask [--config CONFIG] [--no-config] [--collection COLLECTION]
 - `--timeout`: Request timeout in seconds (default: `120.0` or TOML `timeout`).
 - `--fail-on-truncation`: Exit non-zero (`1`) with an error if the provider stops with `finish_reason == "length"` (`truncated=True`), overriding the default behavior of printing a `Warning:` to `stderr`. Also configurable via `fail_on_truncation = true` in `docpipe.toml`.
 - `--show-context`: Print retrieved parent section scores and provenance details to `stderr` while keeping `stdout` clean for piping the answer.
-- `--json`: Emit structured JSON on `stdout` containing the generated answer, generation telemetry (`model`, `finish_reason`, `truncated`, token usage, `elapsed_seconds`), and retrieved source citations.
-- If zero sections satisfy `--threshold` (or the collection is empty), prints `Not found in the provided context.` (or JSON equivalent with `--json`) without invoking the LLM.
+- `--json`: Emit structured JSON on `stdout` containing the generated answer, generation telemetry (`model`, `finish_reason`, `truncated`, token usage, `elapsed_seconds`), and retrieved source citations (mutually exclusive with `--stream`; exit `2` if combined).
+- `--stream`: Stream non-empty generated text deltas progressively to `stdout` with immediate flushing (adding one trailing newline when any chunk was written, while leaving `stdout` empty on pre-chunk errors); strictly a CLI-only flag (ignored in `docpipe.toml`), mutually exclusive with `--json`, keeps `--show-context` and `--log-json` strictly on `stderr`, and emits truncation warnings to `stderr` (or exits `1` under `--fail-on-truncation`).
+- If zero sections satisfy `--threshold` (or the collection is empty), prints `Not found in the provided context.` (or JSON equivalent with `--json`, or single-chunk flushed output with `--stream`) without invoking the LLM.
 
 ---
 

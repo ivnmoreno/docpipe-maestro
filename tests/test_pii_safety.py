@@ -1038,3 +1038,57 @@ def test_pii_and_egress_debug_telemetry_zero_raw_leaks(
     )
     for secret in (_SYNTH_EMAIL, _SYNTH_SSN_VALID, "tel-salt-99", "sk-gate2-telemetry-secret-42"):
         assert secret not in raw_logs
+
+
+def test_answer_stream_enforces_eager_local_only_and_pii_egress(
+    mock_litellm_offline: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Eager local_only and outbound PII guards fire on answer(..., stream=True) pre-iteration."""
+    for ctx_flag in (True, False):
+        with pytest.raises(DocpipeError, match="local_only"):
+            answer(
+                f"Question about {_SYNTH_EMAIL}",
+                model="openai/gpt-4o-mini",
+                has_context=ctx_flag,
+                local_only=True,
+                stream=True,
+            )
+
+        with pytest.raises(PiiBlockedError) as blk_exc:
+            answer(
+                f"Customer SSN {_SYNTH_SSN_VALID}",
+                model="openai/gpt-4o-mini",
+                has_context=ctx_flag,
+                pii_policy={"types": {"US_SSN": "block"}},
+                stream=True,
+            )
+        assert _SYNTH_SSN_VALID not in str(blk_exc.value)
+
+    assert mock_litellm_offline["completion"] == []
+
+    # Remote egress redaction scrubs outgoing messages before streaming starts.
+    stream_calls: list[dict[str, Any]] = []
+    stream_chunks: list[dict[str, Any]] = [
+        {"choices": [{"delta": {"content": "Redacted "}}]},
+        {"choices": [{"delta": {"content": "answer."}, "finish_reason": "stop"}]},
+    ]
+
+    def fake_stream(**kwargs: Any) -> Iterator[dict[str, Any]]:
+        stream_calls.append(dict(kwargs))
+        return iter(stream_chunks)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "completion", fake_stream)
+    it = answer(
+        [{"role": "user", "content": f"Email me at {_SYNTH_EMAIL}"}],
+        model="openai/gpt-4o-mini",
+        pii_policy={"types": {"EMAIL_ADDRESS": "redact"}},
+        stream=True,
+    )
+    assert stream_calls == []
+    assert list(it) == ["Redacted ", "answer."]
+    assert len(stream_calls) == 1
+    assert stream_calls[0]["messages"][0]["content"] == "Email me at [EMAIL_ADDRESS]"
+    assert _SYNTH_EMAIL not in json.dumps(stream_calls[0]["messages"])
