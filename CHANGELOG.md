@@ -1,3 +1,14 @@
+## v0.2.1 (2026-11-17)
+
+### Fix
+
+- **store**: persist small HNSW segments eagerly (`hnsw:sync_threshold=2`) so small local collections (< 1,000 records) survive ChromaDB <= 1.5.9 Foyer cache eviction on low-file-handle platforms (Windows `512` / macOS `256`), and expose idempotent `ChromaStore.close()` and context-manager handle cleanup
+
+### Docs
+
+- **readme**: switch installation guide to PyPI and add PyPI badge
+- **roadmap**: reconcile `docs/future-features.md` and `docs/README.md` with shipped `v0.2.0` milestones
+
 ## v0.2.0 (2026-11-17)
 
 ### Feat
