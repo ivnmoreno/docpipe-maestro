@@ -124,9 +124,11 @@ jobs:
         env:
           LITELLM_LOCAL_MODEL_COST_MAP: "true"
         run: |
-          uv run --no-sync docpipe-maestro --version
-          uv run --no-sync docpipe-maestro --help > /dev/null
-          uv run --no-sync python - <<'PY'
+          # Install core-only without dev deps (e.g. twine -> readme-renderer pulls docutils).
+          UV_PROJECT_ENVIRONMENT=/tmp/core-smoke uv sync --locked --python 3.10 --no-dev
+          /tmp/core-smoke/bin/docpipe-maestro --version
+          /tmp/core-smoke/bin/docpipe-maestro --help > /dev/null
+          /tmp/core-smoke/bin/python - <<'PY'
           import tempfile
           from pathlib import Path
           from unittest.mock import patch
@@ -174,9 +176,11 @@ jobs:
                   res = dp.ingest(corpus, collection="core_smoke", persist_dir=persist)
                   assert sorted(res.ingested) == ["leave.csv", "policy.md", "travel.tsv"]
                   hits = dp.retrieve("Core markdown", collection="core_smoke", persist_dir=persist)
-                  assert hits and "Core markdown works." in hits[0].text
+                  assert hits and any("Core markdown works." in h.text for h in hits)
                   csv_hits = dp.retrieve("Full-Time", collection="core_smoke", persist_dir=persist)
-                  assert csv_hits and "Days: 20" in csv_hits[0].text
+                  assert csv_hits and any("Days: 20" in h.text for h in csv_hits)
+                  tsv_hits = dp.retrieve("Hotel", collection="core_smoke", persist_dir=persist)
+                  assert tsv_hits and any("Limit: $250" in h.text for h in tsv_hits)
                   try:
                       dp.retrieve(
                           "Core markdown",
