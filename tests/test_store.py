@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -206,3 +207,119 @@ def test_store_where_defense_in_depth_and_optional_nulls(tmp_persist_dir: Path) 
         store.query_children(qvec, top_k=5, where={"author": "alice"})
     with pytest.raises(DocpipeError, match="Unsupported filter key"):
         lexical.search("leave", top_k=5, where={"author": "alice"})
+
+
+def _active_systems_for(persist_dir: Path) -> list[str]:
+    """Return active ChromaDB SharedSystemClient keys targeting ``persist_dir``."""
+    from chromadb.api.shared_system_client import SharedSystemClient
+
+    target = persist_dir.resolve()
+    return [
+        key for key in SharedSystemClient._identifier_to_system if Path(key).resolve() == target
+    ]
+
+
+def test_store_lifecycle_close_and_context_manager(
+    tmp_persist_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with VectorStore(tmp_persist_dir, "ctx_col") as store:
+        assert _active_systems_for(tmp_persist_dir)
+        parent, child = _make_pair("ctx.md", "v1", "Context managers release Chroma handles.")
+        store.add_chunks([parent, child])
+        hits = store.query_children(deterministic_embed(["release Chroma handles"])[0], top_k=2)
+        assert [h.id for h in hits] == [child.id]
+
+    assert _active_systems_for(tmp_persist_dir) == []
+    store.close()  # Idempotent second close
+
+    # Multiple concurrent handles keep the shared system alive until the last close().
+    s1 = VectorStore(tmp_persist_dir, "shared_a")
+    s2 = VectorStore(tmp_persist_dir, "shared_b")
+    assert _active_systems_for(tmp_persist_dir)
+    s1.close()
+    assert _active_systems_for(tmp_persist_dir)
+    s2.close()
+    assert _active_systems_for(tmp_persist_dir) == []
+
+    # Failed collection initialization closes the underlying PersistentClient as well.
+    def _boom(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("corrupt metadata")
+
+    with (
+        monkeypatch.context() as mp,
+        pytest.raises(DocpipeError, match="Invalid or unusable collection"),
+    ):
+        import chromadb.api.client
+
+        mp.setattr(chromadb.api.client.Client, "get_or_create_collection", _boom)
+        VectorStore(tmp_persist_dir, "broken_col")
+    assert _active_systems_for(tmp_persist_dir) == []
+
+
+def test_store_survives_forced_low_hnsw_cache_eviction(
+    tmp_persist_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure small collections (<1000 chunks) survive Chroma HNSW LRU cache eviction."""
+    from chromadb.api.rust import RustBindingsAPI
+
+    orig_start = RustBindingsAPI.start
+
+    def _small_cache_start(self: Any) -> None:
+        self.hnsw_cache_size = 1
+        orig_start(self)
+
+    monkeypatch.setattr(RustBindingsAPI, "start", _small_cache_start)
+
+    stores: list[VectorStore] = []
+    try:
+        for col_name in ("col_alpha", "col_beta", "col_gamma", "col_delta"):
+            store = VectorStore(tmp_persist_dir, col_name)
+            p, c = _make_pair(f"{col_name}.md", "v1", f"{col_name} KMS-401 retention rule.")
+            if col_name == "col_gamma":
+                _, c_extra = _make_pair(
+                    f"{col_name}.md",
+                    "v1",
+                    f"{col_name} extra clause.",
+                    chunk_index=1,
+                )
+                c_extra = EmbeddedChunk(
+                    id=f"c_extra_{col_name}",
+                    text=c_extra.text,
+                    parent_id=p.id,
+                    metadata=c_extra.metadata,
+                    vector=c_extra.vector,
+                )
+                store.add_chunks([p, c, c_extra])
+            else:
+                store.add_chunks([p, c])
+            stores.append(store)
+
+        # Force eviction under hnsw_cache_size=1, then query 2-chunk & 3-chunk collections.
+        _ = stores[-1].query_children(deterministic_embed(["col_delta KMS-401"])[0], top_k=1)
+        alpha_hits = stores[0].query_children(
+            deterministic_embed(["col_alpha KMS-401"])[0],
+            top_k=1,
+        )
+        assert len(alpha_hits) == 1
+        assert alpha_hits[0].metadata["source"] == "col_alpha.md"
+        gamma_hits = stores[2].query_children(
+            deterministic_embed(["col_gamma extra clause"])[0],
+            top_k=2,
+        )
+        assert any(h.id == "c_extra_col_gamma" for h in gamma_hits)
+
+        # reset_collection() must preserve eager HNSW persistence too.
+        stores[0].reset_collection()
+        p2, c2 = _make_pair("col_alpha.md", "v2", "col_alpha updated KMS-401 rule.")
+        stores[0].add_chunks([p2, c2])
+        _ = stores[1].query_children(deterministic_embed(["col_beta KMS-401"])[0], top_k=1)
+        alpha_rebuilt_hits = stores[0].query_children(
+            deterministic_embed(["col_alpha updated"])[0],
+            top_k=1,
+        )
+        assert [h.id for h in alpha_rebuilt_hits] == [c2.id]
+    finally:
+        for store in stores:
+            store.close()
