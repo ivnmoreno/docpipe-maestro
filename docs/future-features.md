@@ -3,7 +3,7 @@
 > **Scope Guardrail & Alignment Principle:**  
 > In accordance with the `docpipe-maestro` Constitution (Principle I: *"The engine — not the app, not the framework"*), any feature proposed for the core library must be accessible through the public library API and CLI without turning `docpipe-maestro` into an application server or framework. Features that require long-lived servers, authentication, or GUI layers belong in companion repositories or example wrappers.
 
-This document aggregates all architectural suggestions, deferred backlog items, and future upgrade proposals identified across `PRODUCT.md`, the v0.1 specification (`specs/001-core-rag-pipeline/`), architectural research, and initial implementation.
+This document tracks all architectural suggestions, completed `v0.2.0` upgrades, and remaining post-`v0.2` backlog proposals identified across `PRODUCT.md`, feature specifications (`specs/001-core-rag-pipeline/` through `specs/011-structured-logging/`), and implementation.
 
 ---
 
@@ -31,7 +31,7 @@ This document aggregates all architectural suggestions, deferred backlog items, 
 
 ## 2. Structure-Aware Chunking & Domain Profiles
 
-### 2.1 `LEGAL` Chunking Profile (Deferred from v0.1)
+### 2.1 `LEGAL` Chunking Profile (Deferred to Post-v0.2)
 - **Problem**: Legal contracts, terms of service, and regulatory filings require stricter clause-boundary preservation and specialized exception handling than standard policy handbooks.
 - **Proposed Upgrade**:
   - Introduce `LEGAL` chunking profile with calibrated chunk and overlap sizes.
@@ -46,23 +46,25 @@ This document aggregates all architectural suggestions, deferred backlog items, 
   - Re-use vectors for unchanged chunks and only call the embedding provider for newly created or modified clauses.
   - Substantially reduces embedding latency, API token usage, and cloud provider costs during incremental sync.
 
-### 2.3 User-Defined / Runtime Chunking Profiles
-- **Problem**: Chunking profiles (`DEFAULT`, `POLICY`) are currently hardcoded Python constants to ensure determinism.
-- **Proposed Upgrade**: Support user-defined profiles via code (`ChunkingProfile(...)`) and optionally via CLI configuration (`--profile-file custom_profile.toml`) while maintaining safe defaults.
+### 2.3 User-Defined / Runtime Chunking Profiles — *Programmatic API Implemented; CLI Profile Overrides Post-v0.2*
+- **Implemented (`v0.1` / `008-enricher-stage`)**: Programmatic `ChunkingProfile(...)` construction in Python (including custom `enrichers=(...)` pipelines, chunk sizes, and overlap) passed directly to `ingest()`, `sync()`, and `reindex()`.
+- **Remaining Proposed Upgrade (Post-v0.2)**: Support CLI-only custom profile overrides (e.g., in `docpipe.toml` or CLI flags parsed strictly inside `cli.py`) while preserving Constitution Principle III (*"Chunking profiles are Python constants, not files"* in library modules).
 
 ---
 
-## 3. Cross-Reference Resolution
+## 3. Enrichment & Cross-Reference Resolution
 
-### 3.1 Inter-Document Cross-Reference Resolution
-- **Problem**: In v0.1, cross-reference resolution (`§2.1`, `Section 4`) operates intra-document only; references pointing to other documents in the corpus are logged as unresolved.
-- **Proposed Upgrade**:
-  - Maintain a corpus-wide section registry during batch ingestion.
-  - Resolve cross-document citations (e.g., *"as defined in Employee Code of Conduct §3"*) across files indexed within the same collection.
+### 3.1 Inter-Document Cross-Reference Resolution — *Phase 2 Query-Time Implemented (`002` / `008`); Phase 1 Corpus-Wide Ingest Post-v0.2*
+- **Implemented (`002-online-llm-customization` / `008-enricher-stage`)**: Phase 1 `CrossrefsEnricher` (`"crossrefs"`) resolves intra-document references per file pre-chunking, and Phase 2 `retrieve(..., follow_crossrefs=True)` resolves 1-hop cross-document section/clause citations across the collection at retrieval time (via shared helpers in `docpipe_maestro._crossrefs`).
+- **Remaining Proposed Upgrade (Post-v0.2)**: Maintain a corpus-wide section registry during Phase 1 batch ingestion so inter-document `[Crossref ...]` annotations can also be materialized directly at ingest time.
 
 ### 3.2 Multi-Hop & Nested Cross-Reference Resolution
-- **Problem**: References that chain across multiple clauses (e.g., Section 1.1 references Section 2.3, which in turn references Appendix B) may fail to include deep exceptions.
+- **Problem**: References that chain across multiple clauses (e.g., Section 1.1 references Section 2.3, which in turn references Appendix B) may fail to include deep exceptions beyond 1 hop.
 - **Proposed Upgrade**: Implement recursive reference expansion with cycle detection and a configurable maximum hop depth (e.g., depth 2).
+
+### 3.3 Pre-Chunking Enrichment Stage & PII Protection — *Implemented*
+- **Status**: Implemented in `008-enricher-stage` and `009-pii-protection`.
+- **Details**: Formalizes the post-clean, pre-chunk `Enricher` protocol (`@register_enricher` / `ENRICHERS`, `ChunkingProfile.enrichers`, `IngestContext`) with `CrossrefsEnricher` (`"crossrefs"`) and `PiiEnricher` (`"pii"`, supporting `redact`, `tokenize` with salted HMAC-SHA256 value digests, and `block` raising `PiiBlockedError` before store/manifest writes), 7 offline deterministic recognizers + `@register_pii_recognizer` + optional `[pii]` Presidio NER, owner-only zero-raw-PII `<collection>.audit.jsonl` logs, `--local-only` preflight, Phase 2 `guard_egress()`, and mandatory Release Gate #2 (`@pytest.mark.pii`).
 
 ---
 
@@ -72,9 +74,9 @@ This document aggregates all architectural suggestions, deferred backlog items, 
 - **Status**: Implemented in `005-hybrid-search` (`Fts5HybridSearcher` registered as `"fts5_hybrid"` alongside collocated `LexicalIndex` in `store/lexical.py`).
 - **Details**: Uses SQLite FTS5 (`unicode61`) BM25 fused with dense ChromaDB cosine rankings via theoretical-max normalized Reciprocal Rank Fusion (`k=60`, weights `0.5`/`0.5`), exposed via `retrieve(..., searcher="fts5_hybrid")`, `--searcher fts5_hybrid`, and TOML `searcher`.
 
-### 4.2 Pluggable Reranking Stage — *Local Reranker Implemented (`007-cross-encoder-rerank`); Cloud Adapters Post-v0.1*
+### 4.2 Pluggable Reranking Stage — *Local Reranker Implemented (`007-cross-encoder-rerank`); Cloud Adapters Post-v0.2*
 - **Implemented (`007-cross-encoder-rerank`)**: Child-first `Reranker` protocol (`@register_reranker` / `RERANKERS` registry), `validate_rerank_options()`, and lazy optional `[rerank]` `CrossEncoderReranker` (`BAAI/bge-reranker-base`, sigmoid `[0.0, 1.0]` scores, `--rerank`, `--reranker`, `--rerank-top-n`) executing prior to parent expansion.
-- **Remaining Proposed Upgrade (Post-v0.1)**: Add optional cloud reranking adapters (e.g., Cohere Rerank) implementing the same `Reranker` protocol.
+- **Remaining Proposed Upgrade (Post-v0.2)**: Add optional cloud reranking adapters (e.g., Cohere Rerank) implementing the same `Reranker` protocol.
 
 ### 4.3 Query Rewriting & Expansion
 - **Problem**: Ambiguous, brief, or poorly phrased user questions can lead to suboptimal semantic retrieval.
@@ -91,31 +93,33 @@ This document aggregates all architectural suggestions, deferred backlog items, 
 ## 5. Storage Architecture & Scale
 
 ### 5.1 Two-Collection Storage Split
-- **Problem**: In v0.1, child chunks and parent sections share a single ChromaDB collection (with parents storing zero vectors and filtered out during queries). For massive corpora (millions of chunks), zero-vector parent records add memory overhead.
+- **Problem**: Child chunks and parent sections currently share a single ChromaDB collection (with parents storing zero vectors and filtered out during similarity queries; `ChromaStore.get_all()` already skips HNSW vector loading via `include=["documents", "metadatas"]` as of `v0.2.0`). For massive corpora (millions of chunks), zero-vector parent records in the HNSW index still add storage overhead.
 - **Proposed Upgrade**:
   - Implement the planned two-collection migration: store child vectors in `<collection>_children` and parent sections in a key-value document store or separate unindexed collection `<collection>_parents`.
 
-### 5.2 Additional Vector Database Backends
-- **Problem**: Different deployment environments favor different storage engines (embedded vs. client-server vs. serverless).
-- **Proposed Upgrade**:
-  - Define an abstract `VectorStoreBase` protocol.
-  - Implement additive adapters for:
-    - **LanceDB** (zero-setup embedded storage on disk with columnar indexing).
-    - **Qdrant** (high-performance vector engine for distributed deployments).
-    - **SQLite-vec** (dependency-free pure SQLite vector extension).
-    - **pgvector** (for enterprise PostgreSQL infrastructures).
+### 5.2 Additional Vector Database Backends — *`Store` Protocol & Registry Implemented (`004`); Additional Adapters Post-v0.2*
+- **Implemented (`004-registry-refactor`)**: Runtime-checkable `Store` protocol (`docpipe_maestro.store.Store`) and `@register_store` / `STORES` registry (alongside `PARSERS`, `CLEANERS`, `ENRICHERS`, `CHUNKERS`, `EMBEDDERS`, `SEARCHERS`, and `RERANKERS`).
+- **Remaining Proposed Upgrade (Post-v0.2)**: Implement additive storage adapters for:
+  - **LanceDB** (zero-setup embedded storage on disk with columnar indexing).
+  - **Qdrant** (high-performance vector engine for distributed deployments).
+  - **SQLite-vec** (dependency-free pure SQLite vector extension).
+  - **pgvector** (for enterprise PostgreSQL infrastructures).
 
 ---
 
 ## 6. Generation & Interaction Upgrades
 
-### 6.1 Streaming Generation Support
+### 6.1 Online LLM Customization & Role-Separated Chat — *Implemented*
+- **Status**: Implemented in `002-online-llm-customization`.
+- **Details**: Adds `build_chat_messages()`, `answer_detailed()` returning `GenerationResult`, generation tuning (`temperature`, `max_tokens`, `timeout`, `model_kwargs`), explicit `finish_reason="length"` / `reasoning_tokens` diagnostics, HTTPS gateway validation, scoped `.env` + `./docpipe.toml` discovery, and CLI `ask` flags (`--system-prompt`, `--system-prompt-file`, `--fail-on-truncation`, `--show-context`, `--json`).
+
+### 6.2 Streaming Generation Support
 - **Problem**: Generation waiting for completion blocks the caller until the full answer is generated.
 - **Proposed Upgrade**:
   - Add streaming support to `answer()` yielding text chunks (`Iterator[str]`).
   - Add `--stream` flag to `docpipe-maestro ask` for real-time terminal output.
 
-### 6.2 Citation Extraction & Verification
+### 6.3 Citation Extraction & Verification
 - **Problem**: LLMs can misattribute which retrieved section supported which claim in the generated text.
 - **Proposed Upgrade**:
   - Add post-generation citation verification that programmatically checks whether asserted citations align with retrieved parent section content.
@@ -125,9 +129,9 @@ This document aggregates all architectural suggestions, deferred backlog items, 
 
 ## 7. Quality, Safety & Tooling
 
-### 7.1 Automated Retrieval & Answer Evaluation Harness — *Retrieval Implemented; Answer Judge Post-v0.1*
+### 7.1 Automated Retrieval & Answer Evaluation Harness — *Retrieval Implemented; Answer Judge Post-v0.2*
 - **Implemented (`006-eval-harness`)**: Deterministic, read-only retrieval evaluation (`docpipe_maestro.eval`, `docpipe-maestro eval`, `Precision@K`, standard IR `Recall@K`, `MRR`) with a 24-query curated policy suite (`tests/fixtures/eval_policy_corpus.json`) and offline `default` vs `fts5_hybrid` baselines (`docs/eval-baseline.{json,md}`).
-- **Remaining Proposed Upgrade (Post-v0.1)**:
+- **Remaining Proposed Upgrade (Post-v0.2)**:
   - Build optional answer-synthesis checks measuring:
     - **Faithfulness** (does the generated answer contain claims absent from retrieved context?).
     - **Negative Rejection** (does `answer()` refuse cleanly when context is insufficient?).
@@ -148,9 +152,9 @@ This document aggregates all architectural suggestions, deferred backlog items, 
   - Add `--dry-run` flag to `docpipe-maestro sync` and `docpipe-maestro reindex`.
   - Output summary report: number of new files, modified files, deleted files, estimated tokens, and estimated cost without making database or API changes.
 
-### 8.2 Progress Hooks & OpenTelemetry Tracing — *Built-In JSON Stage Logging Implemented (`011-structured-logging`); OTel Export Post-v0.1*
+### 8.2 Progress Hooks & OpenTelemetry Tracing — *Built-In JSON Stage Logging Implemented (`011-structured-logging`); OTel Export Post-v0.2*
 - **Implemented (`011-structured-logging`)**: Stdlib-only `docpipe_maestro.log` (`JsonFormatter`, `correlation_id()`, `stage_event()`, passive `NullHandler` default) plus CLI `--log-json` / `--log-level` on `stderr`.
-- **Remaining Proposed Upgrade (Post-v0.1)**:
+- **Remaining Proposed Upgrade (Post-v0.2)**:
   - Add optional progress callbacks to `ingest()` and `sync()`.
   - Add optional OpenTelemetry exporter spans bridging built-in `stage_event()` timings in production monitoring systems.
 
@@ -158,19 +162,23 @@ This document aggregates all architectural suggestions, deferred backlog items, 
 
 ## Summary Matrix
 
-| Upgrade / Feature | Domain | Proposed Phase | Impact | Complexity |
+| Upgrade / Feature | Domain | Status / Target Phase | Impact | Complexity |
 |---|---|---|---|---|
-| **Table Preservation** | Ingestion | Post-v0.1 | High (Accuracy) | Medium |
-| **`LEGAL` Profile** | Chunking | Post-v0.1 | High (Domain Safety) | Medium |
-| **Chunk-Level Differential Re-Embedding** | Ingestion | Post-v0.1 | High (Cost / Speed) | Medium |
+| **Strategy + Registry Architecture (`register_*`)** | Architecture | *Implemented* (`004-registry-refactor`) | High (Extensibility) | Medium |
+| **Online LLM Customization & `answer_detailed()`** | Generation / CLI | *Implemented* (`002-online-llm-customization`) | High (Flexibility) | Medium |
 | **Hybrid Search (BM25 + Dense)** | Retrieval | *Implemented* (`005-hybrid-search`) | High (Recall) | Medium |
-| **Streaming Output (`docpipe-maestro ask`)** | Generation | Post-v0.1 | High (UX) | Low |
-| **`--dry-run` for `sync`/`reindex`** | CLI / Ops | Post-v0.1 | Medium (Safety) | Low |
-| **Inter-Document Crossrefs** | Ingestion | Post-v0.1 | Medium (Completeness) | High |
-| **Pluggable Reranker** | Retrieval | *Local Implemented* (`007-cross-encoder-rerank`; Cloud Post-v0.1) | High (Precision) | Low |
+| **Evaluation Harness (Retrieval)** | Retrieval / QA | *Implemented* (`006-eval-harness`; Answer Eval Post-v0.2) | High (Verification) | Medium |
+| **Pluggable Reranker** | Retrieval | *Local Implemented* (`007-cross-encoder-rerank`; Cloud Post-v0.2) | High (Precision) | Low |
+| **Pre-Chunking `Enricher` Stage & PII Protection** | Ingestion / Safety | *Implemented* (`008-enricher-stage`, `009-pii-protection`) | High (Privacy / Safety) | Medium |
 | **Metadata Pre-Filtering (`where`)** | Retrieval / Eval | *Implemented* (`010-metadata-filtering`) | High (Precision / Scoping) | Medium |
-| **Structured JSON Telemetry (`docpipe_maestro.log`)** | Telemetry / CLI | *Implemented* (`011-structured-logging`; OTel Post-v0.1) | Medium (Observability) | Low |
-| **Additional Parsers (XLSX, PPTX)** | Intake | Post-v0.1 | Medium (Coverage) | Low |
-| **Two-Collection Split** | Storage | Post-v0.1 | Medium (Scale) | High |
-| **Storage Adapters (Qdrant, LanceDB)** | Storage | Post-v0.1 | Medium (Flexibility) | Medium |
-| **Evaluation Harness (Retrieval)** | Retrieval / QA | *Implemented* (`006-eval-harness`; Answer Eval Post-v0.1) | High (Verification) | Medium |
+| **Structured JSON Telemetry (`docpipe_maestro.log`)** | Telemetry / CLI | *Implemented* (`011-structured-logging`; OTel Post-v0.2) | Medium (Observability) | Low |
+| **Inter-Document Crossrefs** | Ingestion / Query | *Phase 2 Implemented* (`002`/`008`; Phase 1 Ingest Post-v0.2) | Medium (Completeness) | High |
+| **Runtime Chunking Profiles** | Chunking | *Python API Implemented*; CLI Overrides Post-v0.2 | Medium (Flexibility) | Low |
+| **Storage Adapters (Qdrant, LanceDB)** | Storage | *`Store` Protocol Implemented* (`004`); Adapters Post-v0.2 | Medium (Flexibility) | Medium |
+| **Table Preservation** | Ingestion | Post-v0.2 | High (Accuracy) | Medium |
+| **`LEGAL` Profile** | Chunking | Post-v0.2 | High (Domain Safety) | Medium |
+| **Chunk-Level Differential Re-Embedding** | Ingestion | Post-v0.2 | High (Cost / Speed) | Medium |
+| **Streaming Output (`docpipe-maestro ask`)** | Generation | Post-v0.2 | High (UX) | Low |
+| **`--dry-run` for `sync`/`reindex`** | CLI / Ops | Post-v0.2 | Medium (Safety) | Low |
+| **Additional Parsers (XLSX, PPTX)** | Intake | Post-v0.2 | Medium (Coverage) | Low |
+| **Two-Collection Split** | Storage | Post-v0.2 | Medium (Scale) | High |
