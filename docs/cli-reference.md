@@ -101,7 +101,8 @@ Ingest a single file or recursively scan a directory atomically.
 docpipe-maestro ingest [--config CONFIG] [--collection COLLECTION]
                        [--persist-dir PERSIST_DIR] [--local-only | --no-local-only]
                        [--pii-policy PII_POLICY] [--profile PROFILE]
-                       [--embed-model EMBED_MODEL] [--force] path
+                       [--embed-model EMBED_MODEL] [--force]
+                       [--html-report PATH] path
 ```
 
 - `--profile`: `"DEFAULT"` or `"POLICY"` (case-insensitive; default: `"DEFAULT"` or TOML `profile`).
@@ -109,6 +110,7 @@ docpipe-maestro ingest [--config CONFIG] [--collection COLLECTION]
 - `--force`: Re-parse, re-chunk, and re-embed even when `mtime`, `size`, and `sha256` are unchanged.
 - `--pii-policy`: Path to a JSON or TOML PII policy (`redact`, `tokenize`, `block`). Block matches fail cleanly (`exit 1`) without printing raw PII values and record a `blocked=true` entry in `<persist_dir>/manifests/<collection>.audit.jsonl`.
 - `--local-only` / `--no-local-only`: Refuse non-local embedding models prior to model initialization.
+- `--html-report PATH`: Write a self-contained single-file HTML Document Integrity & Chunk Audit Report (`report-data` JSON, 4 domain KPI cards, filter/search explorer, and print-ready A4 CSS) for committed collection state.
 - **Example output**:
   ```text
   Ingested 3 file(s), skipped 0 unchanged (42 children, 18 parents) into collection 'hr_policy'.
@@ -124,11 +126,13 @@ Three-way reconcile `<directory>` against the stored manifest (adds new files, s
 docpipe-maestro sync [--config CONFIG] [--collection COLLECTION]
                      [--persist-dir PERSIST_DIR] [--local-only | --no-local-only]
                      [--pii-policy PII_POLICY] [--profile PROFILE]
-                     [--embed-model EMBED_MODEL] [--dry-run] [--json] directory
+                     [--embed-model EMBED_MODEL] [--dry-run] [--json]
+                     [--html-report PATH] directory
 ```
 
 - Supports `--local-only` / `--no-local-only` and `--pii-policy` with atomic rollback on `PiiBlockedError` (and `--dry-run` enforces full validation/PII block checks without writing `.audit.jsonl`, creating missing `.docpipe/` dirs, updating manifest timestamps, or calling an embedder).
 - Pass `--dry-run` for a read-only preview including chunk volumes, `estimated_tokens`, and offline `estimated_cost_usd`; add `--json` (supported for both live `sync` and `--dry-run`) to emit the `SyncResult` JSON payload on `stdout`.
+- Pass `--html-report PATH` on live `sync` runs to export a self-contained offline HTML integrity & chunk audit report after reconciliation commits (incompatible with `--dry-run`).
 
 - **Example live output**:
   ```text
@@ -151,7 +155,10 @@ Inspect the collection manifest without reading source documents or calling an e
 ```text
 docpipe-maestro status [--config CONFIG] [--collection COLLECTION]
                        [--persist-dir PERSIST_DIR] [--json]
+                       [--html-report PATH]
 ```
+
+- Pass `--html-report PATH` to inspect committed child/parent chunks read-only and export a standalone single-file HTML Document Integrity & Chunk Audit Report offline without re-embedding (keeps `--json` `stdout` clean when combined with `--json`).
 
 - **Example text output**:
   ```text

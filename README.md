@@ -393,6 +393,9 @@ docpipe-maestro ingest ./company_policies --local-only --pii-policy ./pii-policy
 
 # Force re-ingestion even if files have not changed on disk
 docpipe-maestro ingest ./docs --force --collection knowledge_base
+
+# Ingest policies and export a self-contained offline HTML integrity & chunk audit report
+docpipe-maestro ingest ./company_policies --profile POLICY --collection hr_policy --html-report ./audit.html
 ```
 
 ### 2. Keep Collections in Sync (`docpipe-maestro sync`)
@@ -425,9 +428,10 @@ Collection: hr_policy | Model: ollama/nomic-embed-text (dim=768) | Sources: 2 | 
   - travel_expenses_policy.md [a8c2194ef001] (8 children, 3 parents)
 ```
 
-Use `--json` for machine-readable output:
+Use `--json` for machine-readable output or `--html-report` to export a self-contained single-file HTML Document Integrity & Chunk Audit Report:
 ```bash
 docpipe-maestro status --collection hr_policy --json
+docpipe-maestro status --collection hr_policy --html-report ./audit.html
 ```
 
 ### 4. Remove a Source Document (`docpipe-maestro remove`)
@@ -767,6 +771,7 @@ docpipe-maestro/
 │   ├── _resolve.py          # Format-to-parser key resolution helper
 │   ├── _stages.py           # Top-level stage re-exports and protocols
 │   ├── log.py               # Opt-in structured JSON/text telemetry, NullHandler logger & ContextVar correlation IDs
+│   ├── report.py            # Offline single-file HTML Document Integrity & Chunk Audit Report exporter
 │   ├── embedder/            # Batched LiteLLM embedding adapter, locality checks & registry
 │   ├── manifest.py          # Atomic sha256/mtime manifest, model lock & .audit.jsonl logger
 │   ├── store/               # ChromaDB vector store (`chroma.py`) & SQLite FTS5 (`lexical.py`)
