@@ -6,7 +6,7 @@ Security fixes are currently applied to the `main` branch.
 
 | Version | Supported |
 |---|---|
-| `main` (`0.3.x`) | Yes |
+| `main` (`0.4.x`) | Yes |
 
 ---
 

@@ -58,7 +58,7 @@ if TYPE_CHECKING:
 try:
     __version__ = version("docpipe-maestro")
 except PackageNotFoundError:
-    __version__ = "0.3.0.dev0"
+    __version__ = "0.4.0.dev0"
 
 __all__ = [
     "Chunk",
