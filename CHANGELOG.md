@@ -1,3 +1,13 @@
+## v0.4.0 (2026-11-19)
+
+### Feat
+
+- **report**: add self-contained single-file HTML Document Integrity & Chunk Audit Report exporter (`docpipe_maestro.report` and `--html-report` CLI flag on `ingest`, `sync`, and `status`): reads committed manifest and `Chunk` / `EmbeddedChunk` records without duplicating parsing or chunking, embeds safely escaped `<script id="report-data" type="application/json">` payloads, tracks 4 governance/integrity KPIs (total clauses/chunks, clause integrity rate, cross-reference resolution, and rule-exception link preservation), provides zero-network vanilla JS filtering (`ALL`, `HAS_EXCEPTION`, `HAS_CROSS_REF`, `WARNING / SPLIT`) and search, and renders `@media print` A4-ready output
+
+### Fix
+
+- **registry**: synchronize lazy built-in materialization across threads in `Registry` (`threading.Lock` + per-key `(owner_thread_id, threading.Event)` in-flight tracking) so concurrent cold-start calls (such as `retrieve()` across parallel workers) wait cleanly for in-flight module imports while running `importlib.import_module` outside the lock and preserving same-thread decorator reentrancy
+
 ## v0.3.0 (2026-11-17)
 
 ### Feat
