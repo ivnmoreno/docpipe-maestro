@@ -241,6 +241,16 @@ def _add_where_arg(subparser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_html_report_arg(subparser: argparse.ArgumentParser) -> None:
+    """Register optional ``--html-report PATH`` static HTML audit report export flag."""
+    subparser.add_argument(
+        "--html-report",
+        default=None,
+        metavar="PATH",
+        help="Write a self-contained static HTML Document Integrity & Chunk Audit Report",
+    )
+
+
 def _add_rerank_args(
     subparser: argparse.ArgumentParser,
     *,
@@ -430,6 +440,7 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     p_ingest.add_argument("--profile", default=default_profile, help="Chunking profile")
     p_ingest.add_argument("--embed-model", default=default_embed_model, help="Embedding model")
     p_ingest.add_argument("--force", action="store_true", help="Re-ingest even if hash unchanged")
+    _add_html_report_arg(p_ingest)
 
     # Phase 1: sync
     p_sync = subparsers.add_parser(
@@ -446,6 +457,7 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         help="Preview changes, tokens, and estimated cost without writing or embedding",
     )
     p_sync.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON output")
+    _add_html_report_arg(p_sync)
 
     # Phase 1/2: status
     p_status = subparsers.add_parser(
@@ -454,6 +466,7 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         help="Inspect collection manifest status",
     )
     p_status.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON output")
+    _add_html_report_arg(p_status)
 
     # Phase 1: remove
     p_remove = subparsers.add_parser(
@@ -869,6 +882,37 @@ def _handle_eval(args: argparse.Namespace, *, cfg_collection: str | None) -> int
     return 0
 
 
+def _validate_html_report_path(args: argparse.Namespace) -> Path | None:
+    """Validate optional ``--html-report`` flag eagerly prior to running mutations."""
+    raw = getattr(args, "html_report", None)
+    if raw is None:
+        return None
+    cleaned = str(raw).strip()
+    if not cleaned:
+        raise ValueError("--html-report output path must not be empty")
+    if getattr(args, "dry_run", False):
+        raise ValueError("--html-report cannot be combined with --dry-run")
+    target = Path(cleaned)
+    if target.exists() and target.is_dir():
+        raise ValueError(f"--html-report target must be a file path, not a directory: {target}")
+    return target
+
+
+def _maybe_export_html_report(args: argparse.Namespace, report_target: Path | None) -> None:
+    """Lazily export a static HTML audit report when ``--html-report`` was supplied."""
+    if report_target is None:
+        return
+    from docpipe_maestro.report import export_html_report
+
+    written = export_html_report(
+        report_target,
+        collection=args.collection,
+        persist_dir=args.persist_dir,
+    )
+    if not getattr(args, "as_json", False):
+        print(f"HTML audit report saved to: {written}")
+
+
 def _dispatch_command(
     args: argparse.Namespace,
     *,
@@ -883,6 +927,7 @@ def _dispatch_command(
     if args.command == "ingest":
         from docpipe_maestro.ingest.pipeline import ingest
 
+        report_target = _validate_html_report_path(args)
         res = ingest(
             args.path,
             profile=args.profile,
@@ -898,11 +943,13 @@ def _dispatch_command(
             f"({res.chunks_written} children, {res.parents_written} parents) "
             f"into collection '{res.collection}'."
         )
+        _maybe_export_html_report(args, report_target)
         return 0
 
     if args.command == "sync":
         from docpipe_maestro.ingest.pipeline import sync
 
+        report_target = _validate_html_report_path(args)
         sres = sync(
             args.directory,
             profile=args.profile,
@@ -913,6 +960,7 @@ def _dispatch_command(
             local_only=args.local_only,
             dry_run=args.dry_run,
         )
+        _maybe_export_html_report(args, report_target)
         if args.as_json:
             print(json.dumps(sres.to_dict(), indent=2))
             return 0
@@ -943,7 +991,9 @@ def _dispatch_command(
     if args.command == "status":
         from docpipe_maestro.ingest.pipeline import status
 
+        report_target = _validate_html_report_path(args)
         st = status(collection=args.collection, persist_dir=args.persist_dir)
+        _maybe_export_html_report(args, report_target)
         if args.as_json:
             print(
                 json.dumps(
