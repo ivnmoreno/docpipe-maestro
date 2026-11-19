@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +13,7 @@ import pytest
 from docpipe_maestro import ingest, retrieve, status
 from docpipe_maestro.manifest import load_manifest, save_manifest
 from docpipe_maestro.query.searcher.dense import DenseSearcher
-from docpipe_maestro.types import DocpipeError
+from docpipe_maestro.types import DocpipeError, EmbeddedChunk, RetrievedChunk
 
 
 def test_retrieve_parent_expansion_and_deduplication(
@@ -404,3 +407,258 @@ def test_retrieve_where_validation_reserved_type_and_bad_operands(
                 persist_dir=tmp_persist_dir,
                 where=bad,
             )
+
+
+def test_retrieve_cold_start_concurrent_subprocess(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+) -> None:
+    _ = mock_litellm_offline
+    doc1 = tmp_path / "leave.md"
+    doc1.write_text(
+        "## Section 1\n\n1.1 Annual leave allowance is twenty days per calendar year.\n",
+        encoding="utf-8",
+    )
+    doc2 = tmp_path / "travel.md"
+    doc2.write_text(
+        "## Section 2\n\n2.1 Train tickets are reimbursed in full.\n",
+        encoding="utf-8",
+    )
+    ingest(doc1, profile="POLICY", collection="cold_smoke", persist_dir=tmp_persist_dir)
+    ingest(doc2, profile="POLICY", collection="cold_smoke", persist_dir=tmp_persist_dir)
+
+    script = f"""
+import hashlib
+import math
+import os
+import re
+import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")
+import litellm
+from docpipe_maestro import retrieve
+
+_DIM = 64
+_WORD_RE = re.compile(r"[a-z0-9]+")
+
+def _stub_embed(*, model, input, **kwargs):
+    vecs = []
+    for text in input:
+        v = [0.0] * _DIM
+        tokens = _WORD_RE.findall(text.lower())
+        if not tokens:
+            v[0] = 1.0
+        for tok in tokens:
+            d = hashlib.sha256(tok.encode("utf-8")).digest()
+            idx = int.from_bytes(d[:4], "little") % _DIM
+            v[idx] += 1.0 if (d[4] & 1) == 0 else -1.0
+        norm = math.sqrt(sum(x * x for x in v))
+        if norm > 0.0:
+            v = [x / norm for x in v]
+        else:
+            v[0] = 1.0
+        vecs.append(v)
+    return {{
+        "data": [{{"index": idx, "embedding": vec}} for idx, vec in enumerate(vecs)],
+        "model": model,
+    }}
+
+litellm.embedding = _stub_embed
+assert "chromadb" not in sys.modules, "chromadb loaded eagerly before barrier"
+
+queries = [
+    "annual leave allowance",
+    "train tickets reimbursed",
+    "calendar year leave",
+    "reimbursed travel tickets",
+]
+barrier = threading.Barrier(len(queries))
+
+def _worker(q):
+    barrier.wait(timeout=15)
+    hits = retrieve(
+        q,
+        collection="cold_smoke",
+        persist_dir={str(tmp_persist_dir)!r},
+        top_k=1,
+        local_only=True,
+    )
+    assert len(hits) == 1
+    return hits[0].id
+
+with ThreadPoolExecutor(max_workers=len(queries)) as pool:
+    results = list(pool.map(_worker, queries))
+assert len(results) == len(queries)
+"""
+    for attempt in range(5):
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, (
+            f"Cold-start concurrent retrieve failed on attempt {attempt + 1}:\n"
+            f"STDOUT: {proc.stdout}\nSTDERR: {proc.stderr}"
+        )
+
+
+def test_retrieve_reuse_no_per_query_close_and_plugin_compat(
+    tmp_path: Path,
+    tmp_persist_dir: Path,
+    mock_litellm_offline: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retrieval preserves Store reuse (0 close calls) and supports plugins without close()."""
+    from docpipe_maestro.store import STORES, ChromaStore
+
+    _ = mock_litellm_offline
+    doc = tmp_path / "reuse.md"
+    doc.write_text(
+        "## Section 1: Retention\n\n1.1 Audit logs are retained for 365 days.\n",
+        encoding="utf-8",
+    )
+
+    # (a) Custom Store stage plugin lacking .close() works across ingest() and retrieve().
+    memory_records: dict[str, list[EmbeddedChunk]] = {}
+
+    class _NoCloseStore:
+        name: str = "no_close_plugin"
+
+        def __init__(self, persist_dir: Path, collection_name: str) -> None:
+            self._key = f"{persist_dir}:{collection_name}"
+            memory_records.setdefault(self._key, [])
+
+        def add_chunks(self, chunks: Sequence[EmbeddedChunk]) -> None:
+            memory_records[self._key].extend(chunks)
+
+        def query_children(
+            self,
+            query_vector: list[float],
+            *,
+            top_k: int = 5,
+            active_versions: dict[str, str] | None = None,
+            where: dict[str, object] | None = None,
+            include_embeddings: bool = False,
+        ) -> list[RetrievedChunk]:
+            _ = (query_vector, where, include_embeddings)
+            out: list[RetrievedChunk] = []
+            for ch in memory_records[self._key]:
+                if ch.metadata["type"] != "child":
+                    continue
+                if active_versions is not None:
+                    expected = active_versions.get(ch.metadata["source"])
+                    if expected != ch.metadata["doc_version"]:
+                        continue
+                out.append(
+                    RetrievedChunk(
+                        id=ch.id,
+                        text=ch.text,
+                        parent_id=ch.parent_id,
+                        metadata=ch.metadata,
+                        vector=[],
+                        score=0.95,
+                    )
+                )
+            return out[:top_k]
+
+        def get_by_ids(
+            self,
+            ids: Sequence[str],
+            *,
+            include_embeddings: bool = False,
+        ) -> list[EmbeddedChunk]:
+            _ = include_embeddings
+            wanted = set(ids)
+            return [c for c in memory_records[self._key] if c.id in wanted]
+
+        def get_parents_by_source(
+            self,
+            source: str,
+            *,
+            active_doc_version: str | None = None,
+            include_embeddings: bool = False,
+        ) -> list[EmbeddedChunk]:
+            _ = (source, active_doc_version, include_embeddings)
+            return []
+
+        def delete_by_source(self, source: str) -> None:
+            memory_records[self._key] = [
+                c for c in memory_records[self._key] if c.metadata["source"] != source
+            ]
+
+        def delete_stale_versions(self, source: str, active_doc_version: str) -> None:
+            memory_records[self._key] = [
+                c
+                for c in memory_records[self._key]
+                if not (
+                    c.metadata["source"] == source
+                    and c.metadata["doc_version"] != active_doc_version
+                )
+            ]
+
+        def sweep_uncommitted(self, active_versions: dict[str, str]) -> int:
+            before = len(memory_records[self._key])
+            memory_records[self._key] = [
+                c
+                for c in memory_records[self._key]
+                if active_versions.get(c.metadata["source"]) == c.metadata["doc_version"]
+            ]
+            return before - len(memory_records[self._key])
+
+        def get_all_children(self) -> list[EmbeddedChunk]:
+            return [c for c in memory_records[self._key] if c.metadata["type"] == "child"]
+
+        def get_all_parents(self) -> list[EmbeddedChunk]:
+            return [c for c in memory_records[self._key] if c.metadata["type"] == "parent"]
+
+        def reset_collection(self) -> None:
+            memory_records[self._key] = []
+
+    assert not hasattr(_NoCloseStore, "close")
+    monkeypatch.setitem(STORES._entries, "no_close_plugin", _NoCloseStore)
+
+    plugin_dir = tmp_path / "plugin_persist"
+    ingest(
+        doc,
+        profile="POLICY",
+        collection="plugin_col",
+        persist_dir=plugin_dir,
+        store="no_close_plugin",
+    )
+    plugin_hits = retrieve(
+        "Audit logs retention",
+        collection="plugin_col",
+        persist_dir=plugin_dir,
+        top_k=1,
+        expand_parent=True,
+        store="no_close_plugin",
+    )
+    assert len(plugin_hits) == 1
+    assert "365 days" in plugin_hits[0].text
+
+    # (b) Default ChromaStore retrieval performs zero per-query ChromaStore.close() calls.
+    ingest(doc, profile="POLICY", collection="default_reuse", persist_dir=tmp_persist_dir)
+    close_calls: list[str] = []
+    orig_close = ChromaStore.close
+
+    def _spy_close(self: ChromaStore) -> None:
+        close_calls.append(self._collection_name)
+        orig_close(self)
+
+    monkeypatch.setattr(ChromaStore, "close", _spy_close)
+    for searcher_key in ("default", "fts5_hybrid"):
+        hits = retrieve(
+            "Audit logs 365 days",
+            collection="default_reuse",
+            persist_dir=tmp_persist_dir,
+            top_k=1,
+            expand_parent=True,
+            searcher=searcher_key,
+        )
+        assert len(hits) == 1
+        assert "365 days" in hits[0].text
+    assert close_calls == []

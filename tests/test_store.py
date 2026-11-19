@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -323,3 +325,291 @@ def test_store_survives_forced_low_hnsw_cache_eviction(
     finally:
         for store in stores:
             store.close()
+
+
+def test_store_concurrent_init_same_and_distinct_dirs(tmp_path: Path) -> None:
+    """Barrier-synchronized concurrent VectorStore init succeeds for shared & distinct paths."""
+    num_workers = 4
+    shared_dir = tmp_path / "shared_cold"
+    barrier_same = threading.Barrier(num_workers)
+
+    def _open_shared(idx: int) -> VectorStore:
+        barrier_same.wait(timeout=15)
+        store = VectorStore(shared_dir, "shared_col")
+        parent, child = _make_pair(f"s_{idx}.md", "v1", f"Shared concurrency rule {idx}.")
+        store.add_chunks([parent, child])
+        return store
+
+    with ThreadPoolExecutor(max_workers=num_workers) as pool:
+        opened = list(pool.map(_open_shared, range(num_workers)))
+    try:
+        assert len(opened) == num_workers
+        hits = opened[0].query_children(
+            deterministic_embed(["Shared concurrency rule 0"])[0],
+            top_k=4,
+        )
+        assert len(hits) >= 1
+    finally:
+        for s in opened:
+            s.close()
+    assert _active_systems_for(shared_dir) == []
+
+    # Distinct persist directories initialized concurrently must remain isolated and clean.
+    distinct_dirs = [tmp_path / f"distinct_{idx}" for idx in range(num_workers)]
+    barrier_distinct = threading.Barrier(num_workers)
+
+    def _open_distinct(idx: int) -> VectorStore:
+        barrier_distinct.wait(timeout=15)
+        store = VectorStore(distinct_dirs[idx], f"col_{idx}")
+        parent, child = _make_pair(f"d_{idx}.md", "v1", f"Isolated dir rule {idx}.")
+        store.add_chunks([parent, child])
+        return store
+
+    with ThreadPoolExecutor(max_workers=num_workers) as pool:
+        distinct_stores = list(pool.map(_open_distinct, range(num_workers)))
+    try:
+        for idx, s in enumerate(distinct_stores):
+            hits = s.query_children(
+                deterministic_embed([f"Isolated dir rule {idx}"])[0],
+                top_k=1,
+            )
+            assert [h.metadata["source"] for h in hits] == [f"d_{idx}.md"]
+    finally:
+        for s in distinct_stores:
+            s.close()
+    for d in distinct_dirs:
+        assert _active_systems_for(d) == []
+
+
+def test_store_concurrent_lifecycle_close_reopen_and_reset(tmp_path: Path) -> None:
+    """Concurrent close, reopen-after-close, and reset_collection preserve refcounts."""
+    persist_dir = tmp_path / "lifecycle"
+
+    # 1. Concurrent close() on one handle stays idempotent and keeps sibling handle live.
+    s1 = VectorStore(persist_dir, "col_one")
+    s2 = VectorStore(persist_dir, "col_two")
+    close_barrier = threading.Barrier(4)
+
+    def _close_s1(_: int) -> None:
+        close_barrier.wait(timeout=15)
+        s1.close()
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(_close_s1, range(4)))
+    assert _active_systems_for(persist_dir)
+    p2, c2 = _make_pair("two.md", "v1", "Sibling survives concurrent s1.close().")
+    s2.add_chunks([p2, c2])
+    assert len(s2.query_children(deterministic_embed(["Sibling survives"])[0], top_k=1)) == 1
+    s2.close()
+    assert _active_systems_for(persist_dir) == []
+
+    # 2. Final close overlapping concurrent reopen leaves reopened store functional and clean.
+    for cycle in range(3):
+        closing_store = VectorStore(persist_dir, f"cycle_{cycle}")
+        cycle_barrier = threading.Barrier(2)
+
+        def _do_close(
+            target: VectorStore = closing_store, b: threading.Barrier = cycle_barrier
+        ) -> None:
+            b.wait(timeout=15)
+            target.close()
+
+        def _do_reopen(idx: int = cycle, b: threading.Barrier = cycle_barrier) -> VectorStore:
+            b.wait(timeout=15)
+            reopened = VectorStore(persist_dir, f"reopened_{idx}")
+            parent, child = _make_pair(f"r_{idx}.md", "v1", f"Reopened cycle {idx} rule.")
+            reopened.add_chunks([parent, child])
+            return reopened
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_close = pool.submit(_do_close)
+            f_open = pool.submit(_do_reopen)
+            f_close.result()
+            reopened = f_open.result()
+        try:
+            hits = reopened.query_children(
+                deterministic_embed([f"Reopened cycle {cycle}"])[0],
+                top_k=1,
+            )
+            assert len(hits) == 1
+        finally:
+            reopened.close()
+        assert _active_systems_for(persist_dir) == []
+
+    # 3. Overlapping reset_collection(), context-manager exit, and concurrent open/close.
+    reset_store = VectorStore(persist_dir, "reset_col")
+    ctx_hold = VectorStore(persist_dir, "hold_col")
+    p_old, c_old = _make_pair("old.md", "v1", "Old pre-reset policy clause.")
+    reset_store.add_chunks([p_old, c_old])
+    overlap_barrier = threading.Barrier(3)
+
+    def _run_reset() -> None:
+        overlap_barrier.wait(timeout=15)
+        reset_store.reset_collection()
+
+    def _run_ctx_open() -> None:
+        overlap_barrier.wait(timeout=15)
+        with VectorStore(persist_dir, "ctx_ephemeral") as tmp_store:
+            assert tmp_store is not None
+
+    def _run_close_hold() -> None:
+        overlap_barrier.wait(timeout=15)
+        ctx_hold.close()
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        f1 = pool.submit(_run_reset)
+        f2 = pool.submit(_run_ctx_open)
+        f3 = pool.submit(_run_close_hold)
+        f1.result()
+        f2.result()
+        f3.result()
+
+    assert reset_store.get_all_children() == []
+    p_new, c_new = _make_pair("new.md", "v2", "Fresh post-reset policy clause.")
+    reset_store.add_chunks([p_new, c_new])
+    hits = reset_store.query_children(deterministic_embed(["Fresh post-reset"])[0], top_k=1)
+    assert [h.id for h in hits] == [c_new.id]
+    reset_store.close()
+    assert _active_systems_for(persist_dir) == []
+
+
+def test_store_fault_injection_init_rollback_and_docpipe_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Client/collection startup failures roll back cleanly without masking errors."""
+    import chromadb
+    import chromadb.api.client
+
+    # (a) PersistentClient startup failure skips close() and wraps cause in DocpipeError.
+    dir_a = tmp_path / "fail_client"
+    close_calls: list[str] = []
+    orig_store_close = VectorStore.close
+
+    def _spy_close(self: VectorStore) -> None:
+        close_calls.append(self._collection_name)
+        orig_store_close(self)
+
+    def _client_boom(*args: Any, **kwargs: Any) -> Any:
+        raise OSError("disk locked")
+
+    with monkeypatch.context() as mp:
+        mp.setattr(VectorStore, "close", _spy_close)
+        mp.setattr(chromadb, "PersistentClient", _client_boom)
+        with pytest.raises(DocpipeError, match="Invalid or unusable collection") as exc_a:
+            VectorStore(dir_a, "broken_startup")
+    assert isinstance(exc_a.value.__cause__, OSError)
+    assert close_calls == []
+    assert _active_systems_for(dir_a) == []
+
+    # (b) Pre-existing DocpipeError re-raises directly without double wrapping.
+    dir_b = tmp_path / "fail_docpipe_passthrough"
+
+    def _col_docpipe_boom(*args: Any, **kwargs: Any) -> Any:
+        raise DocpipeError("custom docpipe failure")
+
+    with monkeypatch.context() as mp:
+        mp.setattr(chromadb.api.client.Client, "get_or_create_collection", _col_docpipe_boom)
+        with pytest.raises(DocpipeError, match=r"^custom docpipe failure$") as exc_b:
+            VectorStore(dir_b, "docpipe_col")
+    assert "Invalid or unusable collection" not in str(exc_b.value)
+    assert _active_systems_for(dir_b) == []
+
+    # (c) Concurrent collection failure rolls back cleanly without hurting healthy sibling.
+    dir_c = tmp_path / "fail_concurrent"
+    orig_get_or_create = chromadb.api.client.Client.get_or_create_collection
+    both_ready = threading.Barrier(2)
+
+    def _selective_col_boom(self: Any, *args: Any, **kwargs: Any) -> Any:
+        name = kwargs.get("name") if "name" in kwargs else (args[0] if args else None)
+        if name == "broken_col":
+            raise RuntimeError("corrupt metadata")
+        return orig_get_or_create(self, *args, **kwargs)
+
+    def _failing_open() -> BaseException | None:
+        both_ready.wait(timeout=15)
+        try:
+            VectorStore(dir_c, "broken_col")
+        except DocpipeError as err:
+            return err
+        return None
+
+    def _healthy_open() -> VectorStore:
+        both_ready.wait(timeout=15)
+        return VectorStore(dir_c, "healthy_col")
+
+    with monkeypatch.context() as mp:
+        mp.setattr(chromadb.api.client.Client, "get_or_create_collection", _selective_col_boom)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_fail = pool.submit(_failing_open)
+            f_ok = pool.submit(_healthy_open)
+            caught = f_fail.result()
+            healthy = f_ok.result()
+    try:
+        assert isinstance(caught, DocpipeError)
+        assert "Invalid or unusable collection" in str(caught)
+        assert _active_systems_for(dir_c)
+        p_ok, c_ok = _make_pair("ok.md", "v1", "Healthy sibling remains operational.")
+        healthy.add_chunks([p_ok, c_ok])
+        assert (
+            len(healthy.query_children(deterministic_embed(["Healthy sibling"])[0], top_k=1)) == 1
+        )
+    finally:
+        healthy.close()
+    assert _active_systems_for(dir_c) == []
+
+    # (d) Secondary teardown failure during rollback does not mask the primary DocpipeError.
+    dir_d = tmp_path / "fail_secondary_close"
+
+    def _col_primary_boom(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("primary collection failure")
+
+    def _secondary_close_boom(self: Any) -> None:
+        raise KeyError("secondary teardown boom")
+
+    with monkeypatch.context() as mp:
+        mp.setattr(chromadb.api.client.Client, "get_or_create_collection", _col_primary_boom)
+        mp.setattr(chromadb.api.client.Client, "close", _secondary_close_boom)
+        with pytest.raises(DocpipeError, match="primary collection failure") as exc_d:
+            VectorStore(dir_d, "secondary_col")
+    assert isinstance(exc_d.value.__cause__, RuntimeError)
+
+
+def test_store_steady_state_reads_do_not_block_on_lifecycle_lock(tmp_path: Path) -> None:
+    """Open-store reads execute concurrently even while _CHROMA_CLIENT_LOCK is held."""
+    from docpipe_maestro.store.chroma import _CHROMA_CLIENT_LOCK
+
+    persist_dir = tmp_path / "nonblocking_reads"
+    store = VectorStore(persist_dir, "read_col")
+    parent, child = _make_pair("read.md", "v1", "Steady-state reads never wait on lifecycle lock.")
+    store.add_chunks([parent, child])
+
+    lock_acquired = threading.Event()
+    release_lock = threading.Event()
+
+    def _hold_lifecycle_lock() -> None:
+        with _CHROMA_CLIENT_LOCK:
+            lock_acquired.set()
+            assert release_lock.wait(timeout=10)
+
+    holder = threading.Thread(target=_hold_lifecycle_lock)
+    holder.start()
+    try:
+        assert lock_acquired.wait(timeout=5)
+        qvec = deterministic_embed(["Steady-state reads"])[0]
+        read_barrier = threading.Barrier(4)
+
+        def _concurrent_read(_: int) -> tuple[list[str], list[str]]:
+            read_barrier.wait(timeout=5)
+            hits = store.query_children(qvec, top_k=1)
+            parents = store.get_by_ids([parent.id])
+            return [h.id for h in hits], [p.id for p in parents]
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(_concurrent_read, range(4)))
+        assert results == [([child.id], [parent.id])] * 4
+    finally:
+        release_lock.set()
+        holder.join(timeout=10)
+        store.close()
+    assert _active_systems_for(persist_dir) == []
