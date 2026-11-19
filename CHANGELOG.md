@@ -1,3 +1,9 @@
+## v0.4.1 (2026-11-19)
+
+### Fix
+
+- **store**: synchronize `ChromaStore` client lifecycle transitions (`__init__`, `close`, and `reset_collection`) under a module-level reentrant lock (`_CHROMA_CLIENT_LOCK = threading.RLock()`) to prevent cold-start multithreaded `chromadb.PersistentClient` / `SharedSystemClient` race crashes (`KeyError` / `AttributeError`) during parallel retrieval while leaving steady-state reads and writes unserialized, wrap backend startup and collection validation errors uniformly in `DocpipeError` with safe secondary-error-suppressed rollback, and add isolated fresh-subprocess cold-start concurrency, lifecycle, and fault-injection regression tests (`015-thread-safe-store-lifecycle`)
+
 ## v0.4.0 (2026-11-19)
 
 ### Feat
