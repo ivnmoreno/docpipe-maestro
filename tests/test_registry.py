@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import importlib
+import threading
+import time
+import types
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -56,18 +61,26 @@ from docpipe_maestro.types import (
 @contextmanager
 def _restore_registry(registry: Registry[Any]) -> Iterator[Registry[Any]]:
     """Snapshot and restore internal registry mappings for leak-free test isolation."""
-    entries = dict(registry._entries)
-    lazy = dict(registry._lazy_builtins)
-    materializing = set(registry._materializing)
+    with registry._lock:
+        entries = dict(registry._entries)
+        lazy = dict(registry._lazy_builtins)
+        in_flight = dict(registry._in_flight)
+        materializing = set(registry._materializing)
     try:
         yield registry
     finally:
-        registry._entries.clear()
-        registry._entries.update(entries)
-        registry._lazy_builtins.clear()
-        registry._lazy_builtins.update(lazy)
-        registry._materializing.clear()
-        registry._materializing.update(materializing)
+        with registry._lock:
+            registry._entries.clear()
+            registry._entries.update(entries)
+            registry._lazy_builtins.clear()
+            registry._lazy_builtins.update(lazy)
+            pending_events = [ev for _, ev in registry._in_flight.values()]
+            registry._in_flight.clear()
+            registry._in_flight.update(in_flight)
+            registry._materializing.clear()
+            registry._materializing.update(materializing)
+        for ev in pending_events:
+            ev.set()
 
 
 def test_registry_register_resolve_sorted_keys_and_clear() -> None:
@@ -814,3 +827,334 @@ def test_enricher_execution_order_duplicates_context_upfront_lookup_and_default_
             profile="DEFAULT",
         )
         assert resolve_calls == []
+
+
+def test_registry_concurrent_cold_start_resolve_waits_for_in_flight_materializer() -> None:
+    """Concurrent threads resolving an unmaterialized key wait and share the single import."""
+    reg: Registry[Any] = Registry("searcher")
+    reg.register_lazy("default", "fake.concurrent.searcher", "ConcurrentSearcher")
+    reg.register_lazy("fts5_hybrid", "fake.concurrent.hybrid", "ConcurrentHybridSearcher")
+
+    entered_import = threading.Event()
+    allow_finish = threading.Event()
+    import_calls: list[str] = []
+    calls_lock = threading.Lock()
+
+    class ConcurrentSearcher:
+        pass
+
+    class ConcurrentHybridSearcher:
+        pass
+
+    fake_mod = types.ModuleType("fake.concurrent.searcher")
+    fake_hybrid = types.ModuleType("fake.concurrent.hybrid")
+    fake_hybrid.ConcurrentHybridSearcher = ConcurrentHybridSearcher  # type: ignore[attr-defined]
+    real_import = importlib.import_module
+
+    def fake_import(name: str, package: str | None = None) -> Any:
+        if name == "fake.concurrent.searcher":
+            with calls_lock:
+                import_calls.append(name)
+            entered_import.set()
+            assert allow_finish.wait(timeout=5.0)
+            # Trigger decorator registration inside the owner thread during lazy import.
+            reg.register("default")(ConcurrentSearcher)
+            fake_mod.ConcurrentSearcher = ConcurrentSearcher  # type: ignore[attr-defined]
+            return fake_mod
+        if name == "fake.concurrent.hybrid":
+            with calls_lock:
+                import_calls.append(name)
+            return fake_hybrid
+        return real_import(name, package)
+
+    waiter_count = 5
+    start_barrier = threading.Barrier(waiter_count)
+    results: list[tuple[str, Any]] = []
+    errors: list[BaseException] = []
+    out_lock = threading.Lock()
+
+    def run_owner() -> None:
+        try:
+            cls = reg.resolve("default")
+            with out_lock:
+                results.append(("owner", cls))
+        except BaseException as exc:  # pragma: no cover - diagnostic capture
+            with out_lock:
+                errors.append(exc)
+
+    def run_waiter(idx: int) -> None:
+        try:
+            start_barrier.wait(timeout=5.0)
+            assert "default" in reg
+            cls = reg.resolve("default")
+            with out_lock:
+                results.append((f"waiter-{idx}", cls))
+        except BaseException as exc:  # pragma: no cover - diagnostic capture
+            with out_lock:
+                errors.append(exc)
+
+    with patch.object(importlib, "import_module", side_effect=fake_import):
+        t_owner = threading.Thread(target=run_owner)
+        t_owner.start()
+        assert entered_import.wait(timeout=5.0)
+
+        waiters = [threading.Thread(target=run_waiter, args=(i,)) for i in range(waiter_count)]
+        for wt in waiters:
+            wt.start()
+        # Allow waiters to enter event.wait() while the owner is still paused inside import.
+        time.sleep(0.05)
+        assert "default" in reg._in_flight
+        allow_finish.set()
+
+        t_owner.join(timeout=5.0)
+        for wt in waiters:
+            wt.join(timeout=5.0)
+            assert not wt.is_alive()
+        assert not t_owner.is_alive()
+
+        assert errors == []
+        assert len(results) == 1 + waiter_count
+        assert all(cls is ConcurrentSearcher for _, cls in results)
+        assert import_calls == ["fake.concurrent.searcher"]
+        assert reg._in_flight == {}
+        assert reg._materializing == set()
+        assert reg.keys() == ["default", "fts5_hybrid"]
+
+
+def test_registry_same_thread_reentrancy_during_lazy_import() -> None:
+    """Same-thread decorator registration and reentrant checks succeed during lazy import."""
+    reg: Registry[Any] = Registry("parser")
+    reg.register_lazy("reentrant", "fake.reentrant.parser", "ReentrantParser")
+
+    class ReentrantParser:
+        pass
+
+    fake_mod = types.ModuleType("fake.reentrant.parser")
+    other_thread_errors: list[RegistryError] = []
+    real_import = importlib.import_module
+
+    def fake_import(name: str, package: str | None = None) -> Any:
+        if name == "fake.reentrant.parser":
+            # Same-thread reentrant _materialize_key() / __contains__ must not deadlock.
+            reg._materialize_key("reentrant")
+            assert ("reentrant" in reg) is False
+
+            # Another thread attempting to hijack the in-flight lazy key must still be rejected.
+            def hijack() -> None:
+                try:
+
+                    @reg.register("reentrant")
+                    class HijackParser:
+                        pass
+                except RegistryError as exc:
+                    other_thread_errors.append(exc)
+
+            t_hijack = threading.Thread(target=hijack)
+            t_hijack.start()
+            t_hijack.join(timeout=5.0)
+
+            reg.register("reentrant")(ReentrantParser)
+            fake_mod.ReentrantParser = ReentrantParser  # type: ignore[attr-defined]
+            return fake_mod
+        return real_import(name, package)
+
+    with patch.object(importlib, "import_module", side_effect=fake_import):
+        resolved = reg.resolve("reentrant")
+
+    assert resolved is ReentrantParser
+    assert len(other_thread_errors) == 1
+    assert "already has entry 'reentrant'" in str(other_thread_errors[0])
+    assert reg._in_flight == {}
+    assert reg._materializing == set()
+
+
+def test_registry_lazy_import_exception_cleans_up_and_wakes_waiters() -> None:
+    """Failed lazy import wakes waiting threads, clears in-flight state, and allows clean retry."""
+    reg: Registry[Any] = Registry("embedder")
+    reg.register_lazy("flaky", "fake.flaky.embedder", "FlakyEmbedder")
+
+    entered_first = threading.Event()
+    allow_fail = threading.Event()
+    attempts = 0
+    attempt_lock = threading.Lock()
+
+    class FlakyEmbedder:
+        pass
+
+    fake_mod = types.ModuleType("fake.flaky.embedder")
+    fake_mod.FlakyEmbedder = FlakyEmbedder  # type: ignore[attr-defined]
+    real_import = importlib.import_module
+
+    def fake_import(name: str, package: str | None = None) -> Any:
+        nonlocal attempts
+        if name == "fake.flaky.embedder":
+            with attempt_lock:
+                attempts += 1
+                current_attempt = attempts
+            if current_attempt == 1:
+                entered_first.set()
+                assert allow_fail.wait(timeout=5.0)
+                raise RuntimeError("transient lazy import failure")
+            return fake_mod
+        return real_import(name, package)
+
+    first_exc: list[BaseException] = []
+    second_cls: list[Any] = []
+    second_exc: list[BaseException] = []
+
+    def thread_one() -> None:
+        try:
+            reg.resolve("flaky")
+        except BaseException as exc:
+            first_exc.append(exc)
+
+    def thread_two() -> None:
+        try:
+            second_cls.append(reg.resolve("flaky"))
+        except BaseException as exc:  # pragma: no cover - diagnostic capture
+            second_exc.append(exc)
+
+    with patch.object(importlib, "import_module", side_effect=fake_import):
+        t1 = threading.Thread(target=thread_one)
+        t1.start()
+        assert entered_first.wait(timeout=5.0)
+
+        t2 = threading.Thread(target=thread_two)
+        t2.start()
+        time.sleep(0.05)
+        allow_fail.set()
+
+        t1.join(timeout=5.0)
+        t2.join(timeout=5.0)
+        assert not t1.is_alive()
+        assert not t2.is_alive()
+
+    assert len(first_exc) == 1
+    assert isinstance(first_exc[0], RuntimeError)
+    assert second_exc == []
+    assert second_cls == [FlakyEmbedder]
+    assert attempts == 2
+    assert reg._in_flight == {}
+    assert reg._materializing == set()
+
+
+def test_fresh_process_concurrent_cold_start_retrieve_reproduction(
+    tmp_persist_dir: Path,
+) -> None:
+    """Reproduce concurrent retrieve(max_concurrency=4) and store resolution cleanly."""
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent(f"""
+        import concurrent.futures, threading, unittest.mock
+        from pathlib import Path
+        import litellm
+        from docpipe_maestro import register_store, retrieve
+        from docpipe_maestro.config import DEFAULT_EMBED_MODEL
+        from docpipe_maestro.manifest import save_manifest
+        from docpipe_maestro.store import STORES
+        from docpipe_maestro.types import (
+            EmbeddedChunk, Manifest, RetrievedChunk, SourceRecord, make_chunk_id,
+        )
+
+        persist = Path({str(tmp_persist_dir)!r})
+        doc_ver = "0123456789ab"
+        parent_text = "1.1 Leave is 20 days, except probationary hires."
+        pid = make_chunk_id(
+            source="policy.md", doc_version=doc_ver, chunk_type="parent",
+            section="Section 1", clause=None, chunk_index=0, text=parent_text,
+        )
+        cid = make_chunk_id(
+            source="policy.md", doc_version=doc_ver, chunk_type="child",
+            section="Section 1", clause="1.1", chunk_index=0,
+            text=parent_text, parent_id=pid,
+        )
+        meta_parent = {{
+            "type": "parent", "source": "policy.md", "doc_version": doc_ver,
+            "section": "Section 1", "clause": None, "page": None,
+            "chunk_index": 0, "embed_model": DEFAULT_EMBED_MODEL,
+        }}
+        meta_child = {{
+            "type": "child", "source": "policy.md", "doc_version": doc_ver,
+            "section": "Section 1", "clause": "1.1", "page": None,
+            "chunk_index": 0, "embed_model": DEFAULT_EMBED_MODEL,
+        }}
+        save_manifest(persist, Manifest(
+            collection="race_repro",
+            embed_model=DEFAULT_EMBED_MODEL,
+            embed_dim=64,
+            sources={{"policy.md": SourceRecord(
+                source="policy.md", content_hash="sha256:" + doc_ver + "0" * 52,
+                doc_version=doc_ver, size=48, mtime=1.0,
+                ingested_at="2026-11-19T00:00:00+00:00",
+                embed_model=DEFAULT_EMBED_MODEL, profile="POLICY",
+                chunk_ids=[cid], parent_ids=[pid],
+            )}},
+        ))
+
+        @register_store("mem")
+        class MemStore:
+            name = "mem"
+            def __init__(self, persist_dir, collection_name):
+                pass
+            def add_chunks(self, chunks):
+                pass
+            def query_children(self, query_vector, *, top_k=5, active_versions=None,
+                               where=None, include_embeddings=False):
+                return [RetrievedChunk(
+                    id=cid, text=parent_text, parent_id=pid,
+                    metadata=meta_child, vector=[], score=0.9,
+                )]
+            def get_by_ids(self, ids, *, include_embeddings=False):
+                return [EmbeddedChunk(
+                    id=pid, text=parent_text, parent_id=None,
+                    metadata=meta_parent, vector=[],
+                )]
+            def get_parents_by_source(self, source, *, active_doc_version=None,
+                                      include_embeddings=False):
+                return []
+            def delete_by_source(self, source):
+                pass
+            def delete_stale_versions(self, source, active_doc_version):
+                pass
+            def sweep_uncommitted(self, active_versions):
+                return 0
+            def get_all_children(self):
+                return []
+            def get_all_parents(self):
+                return []
+            def reset_collection(self):
+                pass
+
+        barrier = threading.Barrier(4)
+        fake_emb = lambda input, **kw: {{
+            "data": [{{"index": i, "embedding": [0.1] * 64}} for i, _ in enumerate(input)]
+        }}
+
+        def worker():
+            barrier.wait(timeout=10.0)
+            return retrieve(
+                "annual leave", collection="race_repro",
+                persist_dir=persist, store="mem",
+            )
+
+        with unittest.mock.patch.object(litellm, "embedding", side_effect=fake_emb):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+                results = [f.result(timeout=15.0) for f in [pool.submit(worker) for _ in range(4)]]
+        assert all(len(r) == 1 and "probationary" in r[0].text for r in results)
+
+        store_barrier = threading.Barrier(8)
+        def resolve_default_store():
+            store_barrier.wait(timeout=10.0)
+            return STORES.resolve("default")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            futs = [pool.submit(resolve_default_store) for _ in range(8)]
+            classes = [f.result(timeout=15.0) for f in futs]
+        assert len(set(classes)) == 1
+    """).strip()
+    proc = subprocess.run(
+        [sys.executable, "-c", script], check=False, capture_output=True, text=True
+    )
+    assert proc.returncode == 0, proc.stderr
