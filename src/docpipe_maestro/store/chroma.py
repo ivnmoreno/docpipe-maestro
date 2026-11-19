@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import threading
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -68,6 +70,11 @@ _COLLECTION_METADATA: dict[str, str | int] = {
     "hnsw:sync_threshold": 2,
 }
 
+# Serialize ChromaDB SharedSystemClient lifecycle transitions (client creation,
+# collection acquisition/reset, close) without blocking steady-state reads or writes.
+# Reentrant because __init__ failure rollback calls close() on the same thread.
+_CHROMA_CLIENT_LOCK = threading.RLock()
+
 
 @STORES.register("default")
 class ChromaStore:
@@ -81,30 +88,51 @@ class ChromaStore:
         self._collection_name = validate_collection_name(collection_name)
         ensure_private_dir(self._persist_dir)
         self._closed = False
-        self._client = chromadb.PersistentClient(path=str(self._persist_dir))
-        try:
-            self._collection = self._get_or_create_collection()
-        except Exception as exc:
+        self._client: Any = None
+        with _CHROMA_CLIENT_LOCK:
+            try:
+                self._client = chromadb.PersistentClient(path=str(self._persist_dir))
+                self._collection = self._get_or_create_collection()
+            except DocpipeError:
+                self._safe_rollback_close()
+                raise
+            except Exception as exc:
+                self._safe_rollback_close()
+                raise DocpipeError(
+                    f"Invalid or unusable collection {self._collection_name!r}: {exc}"
+                ) from exc
+
+    def _safe_rollback_close(self) -> None:
+        """Roll back partial __init__ client state without masking the root error."""
+        if self._client is None:
+            self._closed = True
+            return
+        with contextlib.suppress(Exception):
             self.close()
-            raise DocpipeError(
-                f"Invalid or unusable collection {self._collection_name!r}: {exc}"
-            ) from exc
+        self._closed = True
 
     def _get_or_create_collection(self) -> chromadb.Collection:
         """Create or reopen the backing Chroma collection with durable HNSW settings."""
-        return self._client.get_or_create_collection(
-            name=self._collection_name,
-            metadata=cast(Any, dict(_COLLECTION_METADATA)),
+        return cast(
+            chromadb.Collection,
+            self._client.get_or_create_collection(
+                name=self._collection_name,
+                metadata=cast(Any, dict(_COLLECTION_METADATA)),
+            ),
         )
 
     def close(self) -> None:
         """Release the underlying ChromaDB client handle and SQLite locks idempotently."""
-        if self._closed:
-            return
-        self._closed = True
-        close_fn = getattr(self._client, "close", None)
-        if callable(close_fn):
-            close_fn()
+        with _CHROMA_CLIENT_LOCK:
+            if self._closed:
+                return
+            self._closed = True
+            client = self._client
+            if client is None:
+                return
+            close_fn = getattr(client, "close", None)
+            if callable(close_fn):
+                close_fn()
 
     def __enter__(self) -> ChromaStore:
         """Enter context manager returning this ``ChromaStore`` instance."""
@@ -278,8 +306,9 @@ class ChromaStore:
 
     def reset_collection(self) -> None:
         """Drop and recreate the collection cleanly (used by reindex)."""
-        self._client.delete_collection(name=self._collection_name)
-        self._collection = self._get_or_create_collection()
+        with _CHROMA_CLIENT_LOCK:
+            self._client.delete_collection(name=self._collection_name)
+            self._collection = self._get_or_create_collection()
 
     def sweep_uncommitted(self, active_versions: dict[str, str]) -> int:
         """Purge uncommitted staging records and return the number of removed items."""
