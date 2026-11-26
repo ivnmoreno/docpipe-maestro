@@ -46,10 +46,8 @@ def _load_cli_dotenv(config_path: str | None) -> None:
 
 def _parse_toml_file(path: Path) -> dict[str, Any]:
     """Parse a TOML file into a top-level dictionary (CLI boundary only)."""
-    if sys.version_info >= (3, 11):
-        import tomllib
-    else:
-        import tomli as tomllib  # type: ignore[import-not-found,unused-ignore]
+    import tomllib
+
     with path.open("rb") as fh:
         data = tomllib.load(fh)
     return dict(data)

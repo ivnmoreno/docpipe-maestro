@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import sys
+import tomllib
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -12,11 +12,6 @@ from typing import Any
 import pytest
 
 from tests.conftest import deterministic_embed as conftest_deterministic_embed
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover - Python 3.10 compatibility
-    import tomli as tomllib  # type: ignore[import-not-found,unused-ignore]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EVALFORGE_DIR = REPO_ROOT / "evalforge"

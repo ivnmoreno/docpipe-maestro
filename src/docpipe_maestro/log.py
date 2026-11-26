@@ -10,7 +10,7 @@ import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 LOGGER_NAME = "docpipe_maestro"
@@ -74,7 +74,7 @@ class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         """Render ``record`` as a single-line JSON object string."""
         payload = {
-            "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "ts": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "msg": record.getMessage(),
@@ -93,7 +93,7 @@ class TextFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         """Render ``record`` as a single-line human-readable stderr string."""
-        ts = datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat()
+        ts = datetime.fromtimestamp(record.created, tz=UTC).isoformat()
         cid = _extract_correlation_id(record) or "-"
         base = f"{ts} {record.levelname} [{cid}] {record.name}: {record.getMessage()}"
         fields = _extract_fields(record)

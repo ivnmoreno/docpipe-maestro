@@ -10,7 +10,7 @@ import re
 import tempfile
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -518,7 +518,7 @@ def build_audit_report(
     resolved_model = embed_model or (
         source_entries[0]["embed_model"] if source_entries else "unknown"
     )
-    ts = generated_at or datetime.now(timezone.utc).isoformat()
+    ts = generated_at or datetime.now(UTC).isoformat()
 
     if len(source_entries) == 1:
         doc_summary = source_entries[0]["source"]
