@@ -1,3 +1,18 @@
+## v0.5.0 (2026-11-26)
+
+### BREAKING CHANGE
+
+- **python**: raise minimum supported Python version to `>=3.11.5` (Python 3.10 reached end-of-life in October 2026), remove the `tomli` runtime backport dependency in favor of stdlib `tomllib`, update CI quality/core matrices to Python `3.11`–`3.13`, and modernize UTC timestamp helpers to `datetime.UTC`
+
+### Fix
+
+- **deps**: raise vulnerable direct dependency lower bounds (`python-dotenv>=1.2.2`, `langchain-text-splitters>=1.1.2`, `pypdf>=6.21.4`, `sentence-transformers>=5.6.0`, `pytest>=9.0.3`) and regenerate `uv.lock`, eliminating all `63` Python 3.10 fallback GHSAs (`pillow`, `filelock`, `soupsieve`) and all fixable direct lower-bound advisories
+- **evalforge**: propagate `--config` and optional `--judge-timeout` to `evalforge-maestro calibrate` in `evalforge/run_gate.py`, add `--disable-ollama-thinking` (`think=False` on `ollama_chat/` completions only), and update live evaluation defaults to `ollama_chat/qwen3.5:4b` with `timeout_seconds = 120.0` and `max_concurrency = 1`
+
+### CI
+
+- **evalforge**: integrate pinned `evalforge-maestro==0.4.0` deterministic offline retrieval (`DocpipeAdapter`, `fts5_hybrid`, 24 curated policy queries, `0`-byte Phase 2 drift check) and judge-calibration (`6` policy-grounded samples) quality gates in `.github/workflows/evalforge.yml` (plus opt-in `workflow_dispatch` live-model runs) and `.github/workflows/release.yml` (`evalforge-gate` gating TestPyPI/PyPI/GitHub Releases) in an isolated `uv` venv without altering core dependencies or the `36`-symbol public API surface
+
 ## v0.4.1 (2026-11-19)
 
 ### Fix
