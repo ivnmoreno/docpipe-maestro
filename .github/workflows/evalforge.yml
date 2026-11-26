@@ -36,7 +36,7 @@ on:
       docpipe_answer_model:
         description: "Answer generation model when docpipe_mode is answer_detailed"
         type: string
-        default: "ollama/llama3.2"
+        default: "ollama_chat/qwen3.5:4b"
       docpipe_api_base:
         description: "Optional OpenAI-compatible or local API base URL for docpipe answer generation"
         type: string
@@ -44,7 +44,7 @@ on:
       judge_model:
         description: "Judge model for answer_detailed metrics and optional calibration"
         type: string
-        default: "ollama/llama3.2"
+        default: "ollama_chat/qwen3.5:4b"
       judge_api_base:
         description: "Optional API base URL for judge model"
         type: string

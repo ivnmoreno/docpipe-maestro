@@ -95,6 +95,40 @@ def offline_deterministic_embeddings() -> Iterator[None]:
         litellm.embedding = original_embedding
 
 
+@contextlib.contextmanager
+def ollama_thinking_disabled(*, enabled: bool) -> Iterator[None]:
+    """Forward ``think=False`` only on ``ollama_chat/`` completion calls when enabled."""
+    if not enabled:
+        yield
+        return
+
+    os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")
+    import litellm
+
+    original_completion = litellm.completion
+    original_acompletion = litellm.acompletion
+
+    def _wrapped_completion(*args: Any, **kwargs: Any) -> Any:
+        model = str(kwargs.get("model") or (args[0] if args else ""))
+        if model.lower().startswith("ollama_chat/") and "think" not in kwargs:
+            kwargs["think"] = False
+        return original_completion(*args, **kwargs)
+
+    async def _wrapped_acompletion(*args: Any, **kwargs: Any) -> Any:
+        model = str(kwargs.get("model") or (args[0] if args else ""))
+        if model.lower().startswith("ollama_chat/") and "think" not in kwargs:
+            kwargs["think"] = False
+        return await original_acompletion(*args, **kwargs)
+
+    litellm.completion = _wrapped_completion
+    litellm.acompletion = _wrapped_acompletion
+    try:
+        yield
+    finally:
+        litellm.completion = original_completion
+        litellm.acompletion = original_acompletion
+
+
 def export_docpipe_fixture_to_jsonl(
     fixture_path: Path,
     output_jsonl: Path,
@@ -369,48 +403,55 @@ def _run_live_gate(args: argparse.Namespace) -> int:
                 run_argv.extend(["--judge-model", args.judge_model])
             if args.judge_api_base:
                 run_argv.extend(["--judge-api-base", args.judge_api_base])
+            if args.judge_timeout is not None:
+                run_argv.extend(["--judge-timeout", str(args.judge_timeout)])
 
         env_overrides = {"EVALFORGE_LOCAL_ONLY": "true" if args.local_only else "false"}
         if args.local_only:
             run_argv.append("--local-only")
 
-        rc = _invoke_evalforge(run_argv, env_overrides=env_overrides)
-        if rc != 0:
-            print(f"[evalforge-live] Live evaluation gate failed (exit={rc})", file=sys.stderr)
-            return rc
+        with ollama_thinking_disabled(enabled=args.disable_ollama_thinking):
+            rc = _invoke_evalforge(run_argv, env_overrides=env_overrides)
+            if rc != 0:
+                print(f"[evalforge-live] Live evaluation gate failed (exit={rc})", file=sys.stderr)
+                return rc
 
-        if args.run_calibration:
-            cal_argv: list[str] = [
-                "calibrate",
-                "--samples",
-                str(calibration_samples),
-                "--metric",
-                "groundedness",
-                "--min-agreement",
-                str(args.min_agreement),
-                "--strict",
-                "--quiet",
-                "--storage-dir",
-                str(storage_dir),
-                "--json-out",
-                str(output_dir / "live-calibration-report.json"),
-                "--markdown-out",
-                str(output_dir / "live-calibration-report.md"),
-            ]
-            if args.judge_model:
-                cal_argv.extend(["--judge-model", args.judge_model])
-            if args.judge_api_base:
-                cal_argv.extend(["--judge-api-base", args.judge_api_base])
-            if args.local_only:
-                cal_argv.append("--local-only")
+            if args.run_calibration:
+                cal_argv: list[str] = [
+                    "calibrate",
+                    "--config",
+                    str(live_config),
+                    "--samples",
+                    str(calibration_samples),
+                    "--metric",
+                    "groundedness",
+                    "--min-agreement",
+                    str(args.min_agreement),
+                    "--strict",
+                    "--quiet",
+                    "--storage-dir",
+                    str(storage_dir),
+                    "--json-out",
+                    str(output_dir / "live-calibration-report.json"),
+                    "--markdown-out",
+                    str(output_dir / "live-calibration-report.md"),
+                ]
+                if args.judge_model:
+                    cal_argv.extend(["--judge-model", args.judge_model])
+                if args.judge_api_base:
+                    cal_argv.extend(["--judge-api-base", args.judge_api_base])
+                if args.judge_timeout is not None:
+                    cal_argv.extend(["--judge-timeout", str(args.judge_timeout)])
+                if args.local_only:
+                    cal_argv.append("--local-only")
 
-            cal_rc = _invoke_evalforge(cal_argv, env_overrides=env_overrides)
-            if cal_rc != 0:
-                print(
-                    f"[evalforge-live] Live calibration gate failed (exit={cal_rc})",
-                    file=sys.stderr,
-                )
-                return cal_rc
+                cal_rc = _invoke_evalforge(cal_argv, env_overrides=env_overrides)
+                if cal_rc != 0:
+                    print(
+                        f"[evalforge-live] Live calibration gate failed (exit={cal_rc})",
+                        file=sys.stderr,
+                    )
+                    return cal_rc
 
     return 0
 
@@ -446,10 +487,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_live.add_argument("--docpipe-rerank", action="store_true")
     p_live.add_argument("--docpipe-embed-model", default="ollama/nomic-embed-text")
-    p_live.add_argument("--docpipe-answer-model", default="ollama/llama3.2")
+    p_live.add_argument("--docpipe-answer-model", default="ollama_chat/qwen3.5:4b")
     p_live.add_argument("--docpipe-api-base", default=None)
-    p_live.add_argument("--judge-model", default="ollama/llama3.2")
+    p_live.add_argument("--judge-model", default="ollama_chat/qwen3.5:4b")
     p_live.add_argument("--judge-api-base", default=None)
+    p_live.add_argument("--judge-timeout", type=float, default=None)
+    p_live.add_argument(
+        "--disable-ollama-thinking",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     p_live.add_argument(
         "--local-only",
         action=argparse.BooleanOptionalAction,
