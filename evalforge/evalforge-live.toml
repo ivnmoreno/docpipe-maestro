@@ -1,0 +1,74 @@
+# Live RAG & retrieval quality gate template for manual workflow_dispatch or local Ollama runs.
+# Zero hardcoded credentials: supply provider keys strictly through environment variables
+# or GitHub Actions secrets (e.g., EVALFORGE_JUDGE_API_KEY, OPENAI_API_KEY, GROQ_API_KEY).
+
+[run]
+dataset_id = "docpipe-eval-policy-live"
+dataset_version = "1.0.0"
+max_concurrency = 2
+strict = true
+
+[target]
+type = "docpipe"
+docpipe_mode = "answer_detailed"
+docpipe_collection = "eval_policy"
+docpipe_persist_dir = ".docpipe"
+docpipe_top_k = 5
+docpipe_embed_model = "ollama/nomic-embed-text"
+docpipe_answer_model = "ollama/llama3.2"
+docpipe_searcher = "fts5_hybrid"
+docpipe_rerank = false
+
+[metrics]
+enabled = [
+  "precision_at_k",
+  "recall_at_k",
+  "mrr",
+  "ndcg_at_k",
+  "groundedness",
+  "answer_relevance",
+  "context_relevance",
+]
+
+[metrics.precision_at_k]
+k = 1
+threshold = 0.5
+
+[metrics.recall_at_k]
+k = 3
+threshold = 0.5
+
+[metrics.mrr]
+threshold = 0.5
+
+[metrics.ndcg_at_k]
+k = 3
+threshold = 0.5
+
+[metrics.groundedness]
+threshold = 0.70
+
+[metrics.answer_relevance]
+threshold = 0.65
+
+[metrics.context_relevance]
+threshold = 0.65
+
+[judge]
+model = "ollama/llama3.2"
+temperature = 0.0
+pass_threshold = 0.70
+local_only = true
+
+[security]
+local_only = true
+block_pii = true
+
+[gate]
+min_score = 0.70
+min_metric_scores = { precision_at_k = 0.80, recall_at_k = 0.90, mrr = 0.85, ndcg_at_k = 0.85 }
+max_regression_drop = 0.05
+max_inconclusive_rate = 0.05
+disagreement_threshold = 1.0
+fail_on_drift = false
+fail_on_anomaly = false

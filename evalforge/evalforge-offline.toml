@@ -1,0 +1,57 @@
+# Offline deterministic retrieval quality gate for docpipe-maestro.
+# Evaluates the 24-query policy corpus (tests/fixtures/eval_policy_corpus.json)
+# against real docpipe-maestro ingest() + DocpipeAdapter(mode="retrieve")
+# using docpipe-maestro's deterministic offline embedder (docs/eval-baseline.md).
+
+[run]
+dataset_id = "docpipe-eval-policy"
+dataset_version = "1.0.0"
+max_concurrency = 4
+strict = true
+
+[target]
+type = "docpipe"
+docpipe_mode = "retrieve"
+docpipe_collection = "eval_policy"
+docpipe_persist_dir = ".docpipe"
+docpipe_top_k = 10
+docpipe_searcher = "fts5_hybrid"
+docpipe_rerank = false
+
+[metrics]
+enabled = [
+  "precision_at_k",
+  "recall_at_k",
+  "mrr",
+  "ndcg_at_k",
+]
+
+[metrics.precision_at_k]
+k = 1
+threshold = 0.5
+
+[metrics.recall_at_k]
+k = 3
+threshold = 0.5
+
+[metrics.mrr]
+threshold = 0.5
+
+[metrics.ndcg_at_k]
+k = 3
+threshold = 0.5
+
+[security]
+local_only = true
+block_pii = false
+
+[gate]
+# Offline fts5_hybrid reference baseline (docs/eval-baseline.md):
+# P@1 = 0.8333, Recall@3 = 0.9583, MRR = 0.9005 (dense default: P@1 = 0.6250, MRR = 0.7303).
+min_score = 0.80
+min_metric_scores = { precision_at_k = 0.80, recall_at_k = 0.92, mrr = 0.88, ndcg_at_k = 0.88 }
+max_regression_drop = 0.05
+max_inconclusive_rate = 0.0
+disagreement_threshold = 1.0
+fail_on_drift = false
+fail_on_anomaly = false

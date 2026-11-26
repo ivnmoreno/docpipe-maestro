@@ -1,0 +1,214 @@
+name: EvalForge Quality Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_live:
+        description: "Run optional live-model evaluation job (requires reachable Ollama or provider secrets)"
+        type: boolean
+        default: false
+      docpipe_mode:
+        description: "DocpipeAdapter mode for live evaluation"
+        type: choice
+        options:
+          - retrieve
+          - answer_detailed
+        default: retrieve
+      docpipe_searcher:
+        description: "Retrieval searcher strategy for live evaluation"
+        type: choice
+        options:
+          - fts5_hybrid
+          - default
+        default: fts5_hybrid
+      docpipe_rerank:
+        description: "Enable cross-encoder reranking (installs .[rerank])"
+        type: boolean
+        default: false
+      docpipe_embed_model:
+        description: "Embedding model for live ingestion and retrieval"
+        type: string
+        default: "ollama/nomic-embed-text"
+      docpipe_answer_model:
+        description: "Answer generation model when docpipe_mode is answer_detailed"
+        type: string
+        default: "ollama/llama3.2"
+      docpipe_api_base:
+        description: "Optional OpenAI-compatible or local API base URL for docpipe answer generation"
+        type: string
+        default: ""
+      judge_model:
+        description: "Judge model for answer_detailed metrics and optional calibration"
+        type: string
+        default: "ollama/llama3.2"
+      judge_api_base:
+        description: "Optional API base URL for judge model"
+        type: string
+        default: ""
+      local_only:
+        description: "Block outbound non-loopback network calls pre-network"
+        type: boolean
+        default: true
+      run_calibration:
+        description: "Also run live judge calibration against evalforge/calibration-samples.jsonl"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  evalforge-offline-gate:
+    name: EvalForge Offline Gate (evalforge-maestro 0.4.0)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install docpipe-maestro and evalforge-maestro==0.4.0 in isolated venv
+        run: |
+          uv venv /tmp/evalforge-venv --python 3.12
+          uv pip install --python /tmp/evalforge-venv/bin/python -e . "evalforge-maestro==0.4.0"
+
+      - name: Verify installed versions and public API surface
+        run: |
+          /tmp/evalforge-venv/bin/evalforge-maestro --version
+          /tmp/evalforge-venv/bin/python -c "import docpipe_maestro as dp; assert len(dp.__all__) == 36, len(dp.__all__)"
+
+      - name: Run deterministic offline retrieval & calibration quality gate
+        env:
+          LITELLM_LOCAL_MODEL_COST_MAP: "true"
+        run: |
+          /tmp/evalforge-venv/bin/python evalforge/run_gate.py offline \
+            --output-dir evalforge-artifacts
+
+      - name: Publish EvalForge Markdown reports to Job Summary
+        if: always()
+        run: |
+          if [ -f evalforge-artifacts/retrieval-report.md ]; then
+            cat evalforge-artifacts/retrieval-report.md >> "$GITHUB_STEP_SUMMARY"
+            printf '\n---\n\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f evalforge-artifacts/calibration-report.md ]; then
+            cat evalforge-artifacts/calibration-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload EvalForge offline artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evalforge-offline-artifacts
+          path: evalforge-artifacts/
+          if-no-files-found: ignore
+
+  evalforge-live-gate:
+    name: EvalForge Live Gate (Manual Dispatch)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_live }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install docpipe-maestro and evalforge-maestro==0.4.0 in isolated venv
+        env:
+          DOCPIPE_RERANK: ${{ inputs.docpipe_rerank }}
+        run: |
+          uv venv /tmp/evalforge-live-venv --python 3.12
+          if [ "${DOCPIPE_RERANK}" = "true" ]; then
+            uv pip install --python /tmp/evalforge-live-venv/bin/python -e ".[rerank]" "evalforge-maestro==0.4.0"
+          else
+            uv pip install --python /tmp/evalforge-live-venv/bin/python -e . "evalforge-maestro==0.4.0"
+          fi
+
+      - name: Run live-model EvalForge evaluation gate
+        env:
+          LITELLM_LOCAL_MODEL_COST_MAP: "true"
+          DOCPIPE_MODE: ${{ inputs.docpipe_mode }}
+          DOCPIPE_SEARCHER: ${{ inputs.docpipe_searcher }}
+          DOCPIPE_RERANK: ${{ inputs.docpipe_rerank }}
+          DOCPIPE_EMBED_MODEL: ${{ inputs.docpipe_embed_model }}
+          DOCPIPE_ANSWER_MODEL: ${{ inputs.docpipe_answer_model }}
+          DOCPIPE_API_BASE: ${{ inputs.docpipe_api_base }}
+          JUDGE_MODEL: ${{ inputs.judge_model }}
+          JUDGE_API_BASE: ${{ inputs.judge_api_base }}
+          LOCAL_ONLY: ${{ inputs.local_only }}
+          RUN_CALIBRATION: ${{ inputs.run_calibration }}
+          EVALFORGE_JUDGE_API_KEY: ${{ secrets.EVALFORGE_JUDGE_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          args=(
+            evalforge/run_gate.py live
+            --docpipe-mode "${DOCPIPE_MODE}"
+            --docpipe-searcher "${DOCPIPE_SEARCHER}"
+            --docpipe-embed-model "${DOCPIPE_EMBED_MODEL}"
+            --docpipe-answer-model "${DOCPIPE_ANSWER_MODEL}"
+            --judge-model "${JUDGE_MODEL}"
+            --output-dir evalforge-live-artifacts
+          )
+          if [ "${DOCPIPE_RERANK}" = "true" ]; then
+            args+=(--docpipe-rerank)
+          fi
+          if [ -n "${DOCPIPE_API_BASE}" ]; then
+            args+=(--docpipe-api-base "${DOCPIPE_API_BASE}")
+          fi
+          if [ -n "${JUDGE_API_BASE}" ]; then
+            args+=(--judge-api-base "${JUDGE_API_BASE}")
+          fi
+          if [ "${LOCAL_ONLY}" = "true" ]; then
+            args+=(--local-only)
+          else
+            args+=(--no-local-only)
+          fi
+          if [ "${RUN_CALIBRATION}" = "true" ]; then
+            args+=(--run-calibration)
+          fi
+          /tmp/evalforge-live-venv/bin/python "${args[@]}"
+
+      - name: Publish Live EvalForge Markdown reports to Job Summary
+        if: always()
+        run: |
+          if [ -f evalforge-live-artifacts/live-report.md ]; then
+            cat evalforge-live-artifacts/live-report.md >> "$GITHUB_STEP_SUMMARY"
+            printf '\n---\n\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f evalforge-live-artifacts/live-calibration-report.md ]; then
+            cat evalforge-live-artifacts/live-calibration-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload EvalForge live artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evalforge-live-artifacts
+          path: evalforge-live-artifacts/
+          if-no-files-found: ignore

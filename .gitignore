@@ -74,6 +74,8 @@ venv.bak/
 
 # Local vector databases & transient storage (e.g., ChromaDB, local document stores)
 .docpipe/
+.evalforge/
+evalforge-artifacts/
 docpipe.toml
 documents/test.pdf
 .chroma/
