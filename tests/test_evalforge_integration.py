@@ -75,6 +75,10 @@ def test_evalforge_configs_parse_cleanly_without_hardcoded_secrets() -> None:
     }
 
     assert live["target"]["docpipe_mode"] == "answer_detailed"
+    assert live["target"]["docpipe_answer_model"] == "ollama_chat/qwen3.5:4b"
+    assert live["judge"]["model"] == "ollama_chat/qwen3.5:4b"
+    assert live["judge"]["pass_threshold"] == 0.7
+    assert live["judge"]["timeout_seconds"] >= 120.0
     assert live["security"]["block_pii"] is True
     assert set(live["gate"]["min_metric_scores"]) == {
         "precision_at_k",
@@ -193,3 +197,80 @@ def test_evalforge_offline_gate_end_to_end(tmp_path: Path) -> None:
 
     assert calibration_report["calibration"]["exact_agreement_rate"] >= 80.0
     assert calibration_report["calibration_gate"]["passed"] is True
+
+
+def test_evalforge_live_gate_propagates_config_and_env_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_gate = _load_run_gate_module()
+    invocations: list[tuple[list[str], dict[str, str] | None]] = []
+
+    def _fake_export(
+        fixture_path: Path,
+        output_jsonl: Path,
+        *,
+        dataset_id: str,
+        dataset_version: str = "1.0.0",
+    ) -> int:
+        del fixture_path, dataset_id, dataset_version
+        output_jsonl.write_text('{"id": "case-1", "input": "q"}\n', encoding="utf-8")
+        return 1
+
+    def _fake_ingest(
+        persist_dir: Path,
+        *,
+        collection: str = "eval_policy",
+        embed_model: str | None = None,
+        local_only: bool = True,
+    ) -> None:
+        del collection, embed_model, local_only
+        persist_dir.mkdir(parents=True, exist_ok=True)
+
+    def _fake_invoke(
+        argv: list[str],
+        *,
+        env_overrides: dict[str, str] | None = None,
+    ) -> int:
+        invocations.append((list(argv), dict(env_overrides) if env_overrides else None))
+        return 0
+
+    monkeypatch.setattr(run_gate, "export_docpipe_fixture_to_jsonl", _fake_export)
+    monkeypatch.setattr(run_gate, "_ingest_policy_corpus", _fake_ingest)
+    monkeypatch.setattr(run_gate, "_invoke_evalforge", _fake_invoke)
+
+    rc = run_gate.main(
+        [
+            "live",
+            "--docpipe-mode",
+            "retrieve",
+            "--no-local-only",
+            "--run-calibration",
+            "--judge-timeout",
+            "150",
+            "--output-dir",
+            str(tmp_path / "live-out"),
+        ]
+    )
+    assert rc == 0
+    assert len(invocations) == 3
+
+    validate_argv, _ = invocations[0]
+    run_argv, run_env = invocations[1]
+    cal_argv, cal_env = invocations[2]
+
+    assert validate_argv[:3] == ["config", "validate", "--config"]
+    assert run_argv[0] == "run"
+    assert "--config" in run_argv
+    assert "--local-only" not in run_argv
+    assert run_env == {"EVALFORGE_LOCAL_ONLY": "false"}
+
+    assert cal_argv[0] == "calibrate"
+    assert "--config" in cal_argv
+    assert str(LIVE_CONFIG) in cal_argv
+    assert "--judge-model" in cal_argv
+    assert "ollama_chat/qwen3.5:4b" in cal_argv
+    assert "--judge-timeout" in cal_argv
+    assert "150.0" in cal_argv
+    assert "--local-only" not in cal_argv
+    assert cal_env == {"EVALFORGE_LOCAL_ONLY": "false"}

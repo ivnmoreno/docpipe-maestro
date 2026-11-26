@@ -5,7 +5,7 @@
 [run]
 dataset_id = "docpipe-eval-policy-live"
 dataset_version = "1.0.0"
-max_concurrency = 2
+max_concurrency = 1
 strict = true
 
 [target]
@@ -15,7 +15,7 @@ docpipe_collection = "eval_policy"
 docpipe_persist_dir = ".docpipe"
 docpipe_top_k = 5
 docpipe_embed_model = "ollama/nomic-embed-text"
-docpipe_answer_model = "ollama/llama3.2"
+docpipe_answer_model = "ollama_chat/qwen3.5:4b"
 docpipe_searcher = "fts5_hybrid"
 docpipe_rerank = false
 
@@ -55,9 +55,10 @@ threshold = 0.65
 threshold = 0.65
 
 [judge]
-model = "ollama/llama3.2"
+model = "ollama_chat/qwen3.5:4b"
 temperature = 0.0
 pass_threshold = 0.70
+timeout_seconds = 120.0
 local_only = true
 
 [security]
