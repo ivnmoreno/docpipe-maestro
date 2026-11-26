@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Any, TypeGuard
 
 from docpipe_maestro.types import DocpipeError, Manifest
@@ -80,7 +80,7 @@ def _parse_iso_timestamp(raw: object, *, end_of_day_if_date: bool = False, field
                 59,
                 59,
                 999999,
-                tzinfo=timezone.utc,
+                tzinfo=UTC,
             )
         return datetime(
             parsed_date.year,
@@ -90,7 +90,7 @@ def _parse_iso_timestamp(raw: object, *, end_of_day_if_date: bool = False, field
             0,
             0,
             0,
-            tzinfo=timezone.utc,
+            tzinfo=UTC,
         )
 
     normalized = f"{text[:-1]}+00:00" if text[-1] in {"Z", "z"} else text
@@ -99,8 +99,8 @@ def _parse_iso_timestamp(raw: object, *, end_of_day_if_date: bool = False, field
     except ValueError as exc:
         raise DocpipeError(f"Invalid ISO-8601 timestamp for {field!r}: {raw!r} ({exc}).") from exc
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 def _validate_chunk_scalar(field: str, value: object, *, context: str) -> str | int:

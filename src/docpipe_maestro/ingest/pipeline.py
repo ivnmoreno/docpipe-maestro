@@ -6,7 +6,7 @@ import logging
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 
@@ -242,7 +242,7 @@ def _build_pii_audit_record(
 ) -> PiiAuditRecord:
     """Build a structured zero-raw-PII audit record for JSONL persistence."""
     return {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "collection": collection,
         "source": source_key,
         "doc_version": doc_version,
@@ -678,7 +678,7 @@ def _ingest_impl(
                 doc_version=doc_version,
                 size=size,
                 mtime=mtime,
-                ingested_at=datetime.now(timezone.utc).isoformat(),
+                ingested_at=datetime.now(UTC).isoformat(),
                 embed_model=embed_model,
                 profile=prof.name,
                 chunk_ids=child_ids,
@@ -975,7 +975,7 @@ def _sync_impl(
                 doc_version=doc_version,
                 size=size,
                 mtime=mtime,
-                ingested_at=datetime.now(timezone.utc).isoformat(),
+                ingested_at=datetime.now(UTC).isoformat(),
                 embed_model=embed_model,
                 profile=prof.name,
                 chunk_ids=child_ids,
@@ -1393,7 +1393,7 @@ def _reindex_impl(
 
         manifest.embed_model = embed_model
         manifest.embed_dim = new_dim
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.now(UTC).isoformat()
         for rec in manifest.sources.values():
             rec.embed_model = embed_model
             rec.ingested_at = now_iso

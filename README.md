@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/docpipe-maestro.svg)](https://pypi.org/project/docpipe-maestro/)
 [![CI](https://github.com/ivnmoreno/docpipe-maestro/actions/workflows/ci.yml/badge.svg)](https://github.com/ivnmoreno/docpipe-maestro/actions/workflows/ci.yml)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11.5+](https://img.shields.io/badge/python-3.11.5%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Type Checked: mypy](https://img.shields.io/badge/type%20checked-mypy-blue.svg)](https://mypy-lang.org/)
@@ -157,7 +157,7 @@ flowchart LR
 
 ## Installation Guide
 
-`docpipe-maestro` requires **Python 3.10+**.
+`docpipe-maestro` requires **Python 3.11.5+**.
 
 ### Core Install
 

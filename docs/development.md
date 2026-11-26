@@ -31,7 +31,7 @@ pre-commit install
 All checks treat warnings strictly (`filterwarnings = ["error"]` in `pyproject.toml`), enforce `mypy --strict`, and require branch coverage $\ge 80\%$.
 
 ```bash
-# 1. Lint, formatting, and Bandit security checks (Ruff target py310, line-length 100)
+# 1. Lint, formatting, and Bandit security checks (Ruff target py311, line-length 100)
 uv run ruff check .
 uv run ruff check --select S src/
 uv run ruff format --check .
@@ -121,9 +121,9 @@ uv run twine check --strict dist/*
 ### Automated CI & Trusted Publishing Workflows
 
 - **Continuous Integration ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)):** Runs on pushes and pull requests to `main`:
-  - `quality`: Ubuntu matrix across Python `3.10`–`3.13` (`uv lock --check`, Ruff format/lint/security `S`, strict `mypy`, `@pytest.mark.reverse`, `@pytest.mark.pii`, and full `pytest --cov` branch coverage >= 80%).
+  - `quality`: Ubuntu matrix across Python `3.11`–`3.13` (`uv lock --check`, Ruff format/lint/security `S`, strict `mypy`, `@pytest.mark.reverse`, `@pytest.mark.pii`, and full `pytest --cov` branch coverage >= 80%).
   - `commits`: Pull-request Commitizen check across PR commits.
-  - `minimal-core`: Python `3.10` core-only install without optional extras (`--group dev` for core tests, plus an isolated `--no-dev` sync for CLI entrypoint, core intake, and fail-loud `MissingExtraError` guards).
+  - `minimal-core`: Python `3.11` core-only install without optional extras (`--group dev` for core tests, plus an isolated `--no-dev` sync for CLI entrypoint, core intake, and fail-loud `MissingExtraError` guards).
   - `packaging`: `uv build`, `twine check --strict`, and isolated clean-venv wheel + sdist installation smoke tests.
   - `dependency-audit`: `pip-audit` against exported locked dependencies.
   - `os-smoke`: Cross-OS offline test matrix on `macos-latest` and `windows-latest`.
