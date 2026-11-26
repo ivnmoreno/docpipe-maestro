@@ -96,3 +96,24 @@ uv run docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --s
 uv run docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --searcher fts5_hybrid --no-rerank
 uv run docpipe-maestro eval --fixture tests/fixtures/eval_policy_corpus.json --searcher fts5_hybrid --rerank
 ```
+
+---
+
+## 6. Automated EvalForge Maestro Quality Gate (CI & Release)
+
+Pull requests, `main` pushes, and versioned releases are automatically gated by **`evalforge-maestro==0.4.0`** in an isolated virtual environment (keeping `docpipe-maestro`'s core `pyproject.toml` dependencies and public API surface unchanged):
+
+- **CI Workflow**: [`.github/workflows/evalforge.yml`](../.github/workflows/evalforge.yml)
+- **Release Gate**: `evalforge-gate` in [`.github/workflows/release.yml`](../.github/workflows/release.yml) (blocks TestPyPI/PyPI publication on regression)
+- **Gate Configs & Runner**:
+  - [`evalforge/evalforge-offline.toml`](../evalforge/evalforge-offline.toml) — strict retrieval floors (`P@1 >= 0.80`, `Recall@3 >= 0.92`, `MRR >= 0.88`, `NDCG@3 >= 0.88`, `max_inconclusive_rate = 0.0`) over live `DocpipeAdapter(mode="retrieve", searcher="fts5_hybrid")` against all 24 queries in `tests/fixtures/eval_policy_corpus.json`, plus a `0`-byte Phase 2 persistence drift check.
+  - [`evalforge/calibration-samples.jsonl`](../evalforge/calibration-samples.jsonl) — 6 policy-grounded human-labeled samples validating `evalforge-maestro calibrate --min-agreement 80.0 --mock --local-only --strict`.
+  - [`evalforge/evalforge-live.toml`](../evalforge/evalforge-live.toml) — manual `workflow_dispatch` live-LLM / `[rerank]` evaluation template configured solely via workflow inputs and GitHub Secrets (zero hardcoded credentials).
+
+### Reproducing the EvalForge Offline Gate Locally
+
+```bash
+uv venv /tmp/evalforge-venv --python 3.12
+uv pip install --python /tmp/evalforge-venv/bin/python -e . "evalforge-maestro==0.4.0"
+/tmp/evalforge-venv/bin/python evalforge/run_gate.py offline --output-dir evalforge-artifacts
+```

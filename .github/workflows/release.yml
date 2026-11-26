@@ -78,8 +78,59 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  evalforge-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout tag with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install docpipe-maestro and evalforge-maestro==0.4.0 in isolated venv
+        run: |
+          uv venv /tmp/evalforge-venv --python 3.12
+          uv pip install --python /tmp/evalforge-venv/bin/python . "evalforge-maestro==0.4.0"
+
+      - name: Run deterministic EvalForge release quality gate
+        env:
+          LITELLM_LOCAL_MODEL_COST_MAP: "true"
+        run: |
+          /tmp/evalforge-venv/bin/evalforge-maestro --version
+          /tmp/evalforge-venv/bin/python evalforge/run_gate.py offline \
+            --output-dir evalforge-artifacts
+
+      - name: Publish EvalForge release gate summary
+        if: always()
+        run: |
+          if [ -f evalforge-artifacts/retrieval-report.md ]; then
+            cat evalforge-artifacts/retrieval-report.md >> "$GITHUB_STEP_SUMMARY"
+            printf '\n---\n\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f evalforge-artifacts/calibration-report.md ]; then
+            cat evalforge-artifacts/calibration-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload EvalForge release artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evalforge-artifacts
+          path: evalforge-artifacts/
+          if-no-files-found: ignore
+
   publish-testpypi:
-    needs: verify-and-build
+    needs: [verify-and-build, evalforge-gate]
     runs-on: ubuntu-latest
     environment:
       name: testpypi
@@ -155,7 +206,7 @@ jobs:
           /tmp/testpypi-smoke/bin/python -c "import docpipe_maestro as dp; assert dp.__version__ == '${EXPECTED_VERSION}' and len(dp.__all__) == 36"
 
   publish-pypi:
-    needs: [verify-and-build, verify-testpypi]
+    needs: [verify-and-build, evalforge-gate, verify-testpypi]
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -175,7 +226,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
 
   github-release:
-    needs: [verify-and-build, publish-pypi]
+    needs: [verify-and-build, evalforge-gate, publish-pypi]
     runs-on: ubuntu-latest
     permissions:
       contents: write
